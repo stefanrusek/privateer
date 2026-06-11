@@ -1,0 +1,81 @@
+# p9r test fixtures — Strimzi Kafka (opt-in: `bun run fixtures:up kafka`)
+# Single-node KRaft cluster with the built-in kafka-exporter, sized as small
+# as Strimzi allows (~500MB). Lights up p9r's Kafka surface: CRD detection,
+# the KFK health rules, the Kafka/KafkaTopic sidebar entries, and (with the
+# 20-prometheus fixture) consumer-lag charts.
+#
+# Requires the Strimzi operator, which scripts/fixtures.sh installs from the
+# pinned release manifest before applying this file.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: fixture
+spec:
+  replicas: 1
+  roles:
+    - controller
+    - broker
+  storage:
+    type: ephemeral
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: fixture
+  namespace: kafka
+  annotations:
+    strimzi.io/kraft: enabled
+    strimzi.io/node-pools: enabled
+spec:
+  kafka:
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      default.replication.factor: 1
+      min.insync.replicas: 1
+    resources:
+      requests:
+        memory: 384Mi
+        cpu: 100m
+      limits:
+        memory: 640Mi
+    jvmOptions:
+      -Xms: 256m
+      -Xmx: 256m
+  entityOperator:
+    topicOperator:
+      resources:
+        requests:
+          memory: 64Mi
+        limits:
+          memory: 256Mi
+  kafkaExporter:
+    groupRegex: '.*'
+    topicRegex: '.*'
+    resources:
+      requests:
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: orders
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: fixture
+spec:
+  partitions: 3
+  replicas: 1
+  config:
+    retention.ms: 3600000

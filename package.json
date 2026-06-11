@@ -23,7 +23,9 @@
     "test:envtest": "vitest run -c vitest.envtest.config.ts",
     "envtest:setup": "bash scripts/setup-envtest.sh",
     "bdd": "bun --bun cucumber-js",
-    "gate": "bun run format:check && bun run lint && bun run lint:grep && bun run typecheck && bun run test && bun run bdd"
+    "gate": "bun run format:check && bun run lint && bun run lint:grep && bun run typecheck && bun run test && bun run bdd",
+    "fixtures:up": "bash scripts/fixtures.sh up",
+    "fixtures:down": "bash scripts/fixtures.sh down"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",

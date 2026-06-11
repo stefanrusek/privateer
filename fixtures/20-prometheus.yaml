@@ -1,0 +1,267 @@
+# p9r test fixtures — minimal Prometheus + kube-state-metrics
+# Sized for a small Docker Desktop VM (~250MB total). Scrapes exactly the
+# exporters p9r's metric charts gate on (Spec 06 §2.2.1):
+#   - cAdvisor (kubelet)      → container_cpu_usage_seconds_total
+#   - kube-state-metrics      → kube_pod_container_status_restarts_total
+#   - Strimzi/kafka-exporter  → kafka_consumergroup_lag (when 30-kafka is up)
+# The service is named `prometheus` in namespace `monitoring` to match p9r's
+# standard-namespace discovery probe (Spec 01 §5).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+# ── kube-state-metrics ──────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-state-metrics
+rules:
+  - apiGroups: ['']
+    resources:
+      - configmaps
+      - secrets
+      - nodes
+      - pods
+      - services
+      - resourcequotas
+      - replicationcontrollers
+      - limitranges
+      - persistentvolumeclaims
+      - persistentvolumes
+      - namespaces
+      - endpoints
+    verbs: [list, watch]
+  - apiGroups: [apps]
+    resources: [statefulsets, daemonsets, deployments, replicasets]
+    verbs: [list, watch]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingresses]
+    verbs: [list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses, volumeattachments]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-state-metrics
+subjects:
+  - kind: ServiceAccount
+    name: kube-state-metrics
+    namespace: monitoring
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+  labels:
+    app: kube-state-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app: kube-state-metrics
+    spec:
+      serviceAccountName: kube-state-metrics
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+          ports:
+            - name: http-metrics
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+  labels:
+    app: kube-state-metrics
+spec:
+  selector:
+    app: kube-state-metrics
+  ports:
+    - name: http-metrics
+      port: 8080
+      targetPort: 8080
+---
+# ── Prometheus ──────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: ['']
+    resources: [nodes, nodes/metrics, nodes/proxy, services, endpoints, pods]
+    verbs: [get, list, watch]
+  - nonResourceURLs: [/metrics]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+      evaluation_interval: 30s
+    scrape_configs:
+      - job_name: prometheus
+        static_configs:
+          - targets: ['localhost:9090']
+
+      # kubelet cAdvisor — container CPU/memory/network series
+      - job_name: kubernetes-cadvisor
+        scheme: https
+        metrics_path: /metrics/cadvisor
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          insecure_skip_verify: true
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+
+      # kube-state-metrics — restart counts, replica counts
+      - job_name: kube-state-metrics
+        static_configs:
+          - targets: ['kube-state-metrics.monitoring.svc:8080']
+
+      # Strimzi metrics ports (Kafka brokers + kafka-exporter) when the
+      # 30-kafka fixture is applied. Strimzi names its metrics ports
+      # `tcp-prometheus`.
+      - job_name: strimzi
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_strimzi_io_kind]
+            regex: .+
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            regex: tcp-prometheus
+            action: keep
+
+      # Generic prometheus.io/scrape pod annotations
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            regex: 'true'
+            action: keep
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            regex: '([^:]+)(?::\d+)?;(\d+)'
+            replacement: '$1:$2'
+            target_label: __address__
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.53.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=6h
+            - --storage.tsdb.retention.size=256MB
+          ports:
+            - name: http
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 320Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
