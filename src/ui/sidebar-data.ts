@@ -128,3 +128,30 @@ export const SIDEBAR_CATEGORIES: readonly SidebarCategory[] = [
 export function buildSidebarTree(): readonly SidebarCategory[] {
   return SIDEBAR_CATEGORIES;
 }
+
+/** A single keyboard-navigable sidebar row. */
+export type SidebarNavEntry =
+  | { readonly type: 'overview' }
+  | { readonly type: 'category'; readonly id: string }
+  | { readonly type: 'leaf'; readonly resourceKind: string };
+
+/**
+ * Flatten the sidebar tree into the ordered list of keyboard-navigable rows:
+ * Overview first, then each category header followed by its leaves
+ * (leaves are omitted when the category id is in `collapsed`).
+ */
+export function flattenSidebarNav(
+  items: readonly SidebarCategory[],
+  collapsed: ReadonlySet<string>,
+): SidebarNavEntry[] {
+  const entries: SidebarNavEntry[] = [{ type: 'overview' }];
+  for (const cat of items) {
+    entries.push({ type: 'category', id: cat.id });
+    if (!collapsed.has(cat.id)) {
+      for (const leaf of cat.children) {
+        entries.push({ type: 'leaf', resourceKind: leaf.resourceKind });
+      }
+    }
+  }
+  return entries;
+}

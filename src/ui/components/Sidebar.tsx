@@ -17,6 +17,8 @@ export interface SidebarProps {
   onSelect: (kind: string) => void;
   onToggleCategory: (cat: string) => void;
   collapsedCategories: ReadonlySet<string>;
+  /** Keyboard cursor target: 'Overview', a category id, or a leaf resourceKind. */
+  cursorKind?: string | null;
 }
 
 export function Sidebar({
@@ -29,10 +31,15 @@ export function Sidebar({
   onSelect: _onSelect,
   onToggleCategory: _onToggleCategory,
   collapsedCategories,
+  cursorKind,
 }: SidebarProps): React.ReactElement {
   return (
     <Box flexDirection="column">
-      {focusActive ? (
+      {cursorKind === 'Overview' ? (
+        <Text inverse={focusActive} bold={!focusActive}>
+          {'  '}Overview
+        </Text>
+      ) : focusActive ? (
         <Text bold color="cyan">
           {'  '}Overview
         </Text>
@@ -42,9 +49,10 @@ export function Sidebar({
       {items.map((cat) => {
         const collapsed = collapsedCategories.has(cat.id);
         const indicator = collapsed ? '▶' : '▼';
+        const catIsCursor = cursorKind === cat.id;
         return (
           <Box key={cat.id} flexDirection="column">
-            <Text bold>
+            <Text bold inverse={catIsCursor && focusActive}>
               {indicator} {cat.label}
             </Text>
             {!collapsed &&
@@ -53,15 +61,23 @@ export function Sidebar({
                 const count = badgeCounts.get(leaf.resourceKind);
                 const isDimmed = dimmedKinds.has(leaf.resourceKind);
                 const isForbidden = forbiddenKinds.has(leaf.resourceKind);
+                const isCursor = cursorKind === leaf.resourceKind;
                 return (
                   <Box key={leaf.resourceKind} flexDirection="row">
                     {isActive ? (
-                      <Text color="green">
+                      <Text
+                        color="green"
+                        inverse={isCursor && focusActive}
+                        bold={isCursor && !focusActive}
+                      >
                         {'> '}
                         {leaf.label}
                       </Text>
                     ) : (
-                      <Text>
+                      <Text
+                        inverse={isCursor && focusActive}
+                        bold={isCursor && !focusActive}
+                      >
                         {'  '}
                         {leaf.label}
                       </Text>

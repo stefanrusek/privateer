@@ -31,12 +31,24 @@ export interface AppRootProps {
   callbacks: AppRootCallbacks;
   /** Context switcher filter text (managed externally). */
   contextFilter: string;
+  /** Renders the list pane content. */
+  renderList?: () => React.ReactNode;
+  /** Renders the detail pane content. */
+  renderDetail?: () => React.ReactNode;
+  /** Keyboard cursor target passed through to the sidebar. */
+  cursorKind?: string | null;
+  /** Command bar input text (rendered while the bar is focused). */
+  inputText?: string;
 }
 
 export function AppRoot({
   state,
   callbacks,
   contextFilter,
+  renderList,
+  renderDetail,
+  cursorKind = null,
+  inputText = '',
 }: AppRootProps): React.ReactElement {
   const sidebarWidthCols = Math.round(state.sidebarRatio * 80);
 
@@ -67,10 +79,11 @@ export function AppRoot({
             onSelect={callbacks.onSelectKind}
             onToggleCategory={callbacks.onToggleCategory}
             collapsedCategories={state.collapsedCategories}
+            cursorKind={cursorKind}
           />
         )}
-        renderList={() => null}
-        renderDetail={() => null}
+        renderList={renderList ?? ((): null => null)}
+        renderDetail={renderDetail ?? ((): null => null)}
         renderCommandBar={() => (
           <CommandBar
             context={state.context}
@@ -79,6 +92,7 @@ export function AppRoot({
             mode={state.mode}
             focused={state.focus === 'commandbar'}
             hints={[...state.hints]}
+            inputText={inputText}
           />
         )}
       />

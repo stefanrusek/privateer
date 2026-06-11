@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { SIDEBAR_CATEGORIES, buildSidebarTree } from './sidebar-data.js';
+import {
+  SIDEBAR_CATEGORIES,
+  buildSidebarTree,
+  flattenSidebarNav,
+} from './sidebar-data.js';
 
 describe('SIDEBAR_CATEGORIES', () => {
   it('has exactly 8 category groups', () => {
@@ -101,5 +105,57 @@ describe('SIDEBAR_CATEGORIES', () => {
 describe('buildSidebarTree', () => {
   it('returns the same categories as SIDEBAR_CATEGORIES', () => {
     expect(buildSidebarTree()).toBe(SIDEBAR_CATEGORIES);
+  });
+});
+
+describe('flattenSidebarNav', () => {
+  it('starts with the overview entry', () => {
+    const entries = flattenSidebarNav(SIDEBAR_CATEGORIES, new Set());
+    expect(entries[0]).toEqual({ type: 'overview' });
+  });
+
+  it('lists each category followed by its leaves when expanded', () => {
+    const entries = flattenSidebarNav(SIDEBAR_CATEGORIES, new Set());
+    const workloadsIdx = entries.findIndex(
+      (e) => e.type === 'category' && e.id === 'workloads',
+    );
+    expect(workloadsIdx).toBeGreaterThan(0);
+    expect(entries[workloadsIdx + 1]).toEqual({
+      type: 'leaf',
+      resourceKind: 'Deployments',
+    });
+  });
+
+  it('includes overview, all categories, and all leaves when nothing is collapsed', () => {
+    const entries = flattenSidebarNav(SIDEBAR_CATEGORIES, new Set());
+    const leafCount = SIDEBAR_CATEGORIES.reduce(
+      (sum, cat) => sum + cat.children.length,
+      0,
+    );
+    expect(entries).toHaveLength(1 + SIDEBAR_CATEGORIES.length + leafCount);
+  });
+
+  it('omits leaves of collapsed categories but keeps the category entry', () => {
+    const entries = flattenSidebarNav(
+      SIDEBAR_CATEGORIES,
+      new Set(['workloads']),
+    );
+    expect(
+      entries.some((e) => e.type === 'category' && e.id === 'workloads'),
+    ).toBe(true);
+    expect(
+      entries.some((e) => e.type === 'leaf' && e.resourceKind === 'Pods'),
+    ).toBe(false);
+    // Leaves of other categories remain
+    expect(
+      entries.some((e) => e.type === 'leaf' && e.resourceKind === 'Services'),
+    ).toBe(true);
+  });
+
+  it('returns only overview and category entries when everything is collapsed', () => {
+    const allIds = new Set(SIDEBAR_CATEGORIES.map((c) => c.id));
+    const entries = flattenSidebarNav(SIDEBAR_CATEGORIES, allIds);
+    expect(entries).toHaveLength(1 + SIDEBAR_CATEGORIES.length);
+    expect(entries.every((e) => e.type !== 'leaf')).toBe(true);
   });
 });

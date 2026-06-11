@@ -431,6 +431,109 @@ describe('ResourceTable default row state', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Selected row
+// ---------------------------------------------------------------------------
+
+describe('ResourceTable selected row', () => {
+  it('renders the row at selectedIndex', () => {
+    let model = createTableModel('Deployment');
+    model = applyResourceEvent(
+      model,
+      { type: 'ADDED', resource: makeResource('api', 'uid-1') },
+      0,
+    );
+    const cols = getColumns(model.kind);
+    const { lastFrame } = render(
+      React.createElement(ResourceTable, {
+        ...DEFAULT_PROPS,
+        model,
+        columns: cols,
+        selectedIndex: 0,
+      }),
+    );
+    expect(lastFrame() ?? '').toContain('api');
+  });
+
+  it('uses absolute index against the full list (scrollOffset applied)', () => {
+    let model = createTableModel('Pod');
+    for (let i = 0; i < 10; i++) {
+      const r = makeResource(`pod-${String(i)}`, `uid-${String(i)}`);
+      model = applyResourceEvent(model, { type: 'ADDED', resource: r }, 0);
+    }
+    model = { ...model, scrollOffset: 3 };
+    const cols = getColumns(model.kind);
+    const { lastFrame } = render(
+      React.createElement(ResourceTable, {
+        ...DEFAULT_PROPS,
+        visibleHeight: 5,
+        model,
+        columns: cols,
+        selectedIndex: 4,
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    // Row at absolute index 4 is visible (slice starts at offset 3)
+    expect(frame).toContain('pod-4');
+    expect(frame).not.toContain('pod-0');
+  });
+
+  it('selection takes precedence over deleted-dim treatment', () => {
+    let model = createTableModel('Deployment');
+    const resource = makeResource('dying', 'uid-1');
+    model = applyResourceEvent(model, { type: 'ADDED', resource }, 0);
+    model = applyResourceEvent(model, { type: 'DELETED', resource }, 100);
+    const cols = getColumns(model.kind);
+    const { lastFrame } = render(
+      React.createElement(ResourceTable, {
+        ...DEFAULT_PROPS,
+        model,
+        columns: cols,
+        selectedIndex: 0,
+      }),
+    );
+    expect(lastFrame() ?? '').toContain('dying');
+  });
+
+  it('selection takes precedence over new-row color treatment', () => {
+    let model = createTableModel('Deployment');
+    model = applyResourceEvent(
+      model,
+      { type: 'ADDED', resource: makeResource('fresh', 'uid-1') },
+      0,
+    );
+    const cols = getColumns(model.kind);
+    const { lastFrame } = render(
+      React.createElement(ResourceTable, {
+        ...DEFAULT_PROPS,
+        model,
+        columns: cols,
+        selectedIndex: 0,
+      }),
+    );
+    expect(lastFrame() ?? '').toContain('fresh');
+  });
+
+  it('does not select any row when selectedIndex points elsewhere', () => {
+    let model = createTableModel('Deployment');
+    model = applyResourceEvent(
+      model,
+      { type: 'ADDED', resource: makeResource('api', 'uid-1') },
+      0,
+    );
+    const cols = getColumns(model.kind);
+    const { lastFrame } = render(
+      React.createElement(ResourceTable, {
+        ...DEFAULT_PROPS,
+        model,
+        columns: cols,
+        selectedIndex: 5,
+      }),
+    );
+    expect(lastFrame() ?? '').toContain('api');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // padLeft overflow branch
 // ---------------------------------------------------------------------------
 

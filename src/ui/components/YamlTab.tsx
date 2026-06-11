@@ -28,6 +28,8 @@ export interface YamlTabProps {
   kubeClient: KubeClient;
   clock: Clock;
   onSave?: () => void;
+  /** Called on every internal mode transition with the new mode's kind. */
+  onModeChange?: (mode: 'read' | 'edit' | 'discard-confirm' | 'diff') => void;
   /**
    * For testing only: override the initial mode.
    * When provided, starts the component in the given mode with a buffer
@@ -59,6 +61,7 @@ export function YamlTab({
   kubeClient,
   clock: _clock,
   onSave,
+  onModeChange,
   _testInitialContent,
 }: YamlTabProps): React.ReactElement {
   const initialMode: TabMode = ((): TabMode => {
@@ -71,6 +74,12 @@ export function YamlTab({
   })();
   const [mode, setMode] = useState<TabMode>(initialMode);
 
+  /** Apply a mode transition and notify the optional observer. */
+  function transition(next: TabMode): void {
+    setMode(next);
+    onModeChange?.(next.kind);
+  }
+
   // Keyboard handling
   useInput((input, key) => {
     if (mode.kind === 'read') {
@@ -81,7 +90,7 @@ export function YamlTab({
         resource.kind === 'Secret' &&
         !mode.revealed
       ) {
-        setMode({ kind: 'read', revealed: true });
+        transition({ kind: 'read', revealed: true });
       }
     } else if (mode.kind === 'edit') {
       if (key.ctrl && input === 's') {
@@ -91,9 +100,13 @@ export function YamlTab({
       }
     } else if (mode.kind === 'discard-confirm') {
       if (input === 'y' || input === 'Y') {
-        setMode({ kind: 'read', revealed: false });
+        transition({ kind: 'read', revealed: false });
       } else if (input === 'n' || input === 'N' || key.escape) {
-        setMode({ kind: 'edit', buffer: mode.buffer, validationError: null });
+        transition({
+          kind: 'edit',
+          buffer: mode.buffer,
+          validationError: null,
+        });
       }
     }
   });
@@ -101,7 +114,7 @@ export function YamlTab({
   function enterEditMode(): void {
     const yaml = resourceToYaml(resource);
     const buffer = createEditBuffer(yaml);
-    setMode({ kind: 'edit', buffer, validationError: null });
+    transition({ kind: 'edit', buffer, validationError: null });
   }
 
   function handleCtrlS(
@@ -110,18 +123,18 @@ export function YamlTab({
   ): void {
     const error = validateYaml(buffer.content);
     if (error !== null) {
-      setMode({ kind: 'edit', buffer, validationError: error });
+      transition({ kind: 'edit', buffer, validationError: error });
       return;
     }
     void validationError; // not used after validation
-    setMode({ kind: 'diff', buffer });
+    transition({ kind: 'diff', buffer });
   }
 
   function handleEscape(buffer: EditBufferHandle): void {
     if (buffer.isDirty) {
-      setMode({ kind: 'discard-confirm', buffer });
+      transition({ kind: 'discard-confirm', buffer });
     } else {
-      setMode({ kind: 'read', revealed: false });
+      transition({ kind: 'read', revealed: false });
     }
   }
 
@@ -224,16 +237,20 @@ export function YamlTab({
       editedYaml={editedYaml}
       kubeClient={kubeClient}
       onApplied={(): void => {
-        setMode({ kind: 'read', revealed: false });
+        transition({ kind: 'read', revealed: false });
         onSave?.();
       }}
       onCancel={(): void => {
-        setMode({ kind: 'edit', buffer: mode.buffer, validationError: null });
+        transition({
+          kind: 'edit',
+          buffer: mode.buffer,
+          validationError: null,
+        });
       }}
       onReloadAndRedit={(fresh): void => {
         const freshYaml = resourceToYaml(fresh);
         const newBuffer = createEditBuffer(freshYaml);
-        setMode({ kind: 'edit', buffer: newBuffer, validationError: null });
+        transition({ kind: 'edit', buffer: newBuffer, validationError: null });
       }}
     />
   );

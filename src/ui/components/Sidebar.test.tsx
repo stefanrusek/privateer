@@ -116,4 +116,80 @@ describe('Sidebar', () => {
     const { lastFrame } = render(React.createElement(Sidebar, props));
     expect(lastFrame()).toContain('Overview');
   });
+
+  it('renders cursor on Overview row when focusActive is true', () => {
+    const props = {
+      ...defaultProps,
+      focusActive: true,
+      cursorKind: 'Overview',
+    };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    expect(lastFrame()).toContain('Overview');
+  });
+
+  it('renders cursor on Overview row when focusActive is false', () => {
+    const props = { ...defaultProps, cursorKind: 'Overview' };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    expect(lastFrame()).toContain('Overview');
+  });
+
+  it('renders cursor on a category header when focusActive is true', () => {
+    const props = {
+      ...defaultProps,
+      focusActive: true,
+      cursorKind: 'workloads',
+    };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    expect(lastFrame()).toContain('Workloads');
+  });
+
+  it('renders cursor on a category header when focusActive is false', () => {
+    const props = { ...defaultProps, cursorKind: 'workloads' };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    expect(lastFrame()).toContain('Workloads');
+  });
+
+  it('renders cursor on a leaf row when focusActive is true', () => {
+    const props = { ...defaultProps, focusActive: true, cursorKind: 'Pods' };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    expect(lastFrame()).toContain('Pods');
+  });
+
+  it('renders cursor on a leaf row when focusActive is false', () => {
+    const props = { ...defaultProps, cursorKind: 'Pods' };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    expect(lastFrame()).toContain('Pods');
+  });
+
+  it('renders a row that is both active and cursor (focusActive true)', () => {
+    const props = {
+      ...defaultProps,
+      focusActive: true,
+      activeKind: 'Deployments',
+      cursorKind: 'Deployments',
+    };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('>');
+    expect(frame).toContain('Deployments');
+  });
+
+  it('renders a row that is both active and cursor (focusActive false)', () => {
+    const props = {
+      ...defaultProps,
+      activeKind: 'Deployments',
+      cursorKind: 'Deployments',
+    };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('>');
+    expect(frame).toContain('Deployments');
+  });
+
+  it('renders identically with cursorKind null', () => {
+    const props = { ...defaultProps, cursorKind: null };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    const baseline = render(React.createElement(Sidebar, defaultProps));
+    expect(lastFrame()).toBe(baseline.lastFrame());
+  });
 });

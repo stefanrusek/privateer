@@ -814,3 +814,86 @@ describe('YamlTab dirty buffer', () => {
     expect(lastFrame()).toContain('[Edit]');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests — onModeChange notifications
+// ---------------------------------------------------------------------------
+
+describe('YamlTab onModeChange', () => {
+  it('reports edit then diff then read across the save flow', async () => {
+    const resource = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
+    const fake = new FakeKubeClient();
+    fake.seed(resource);
+    const clock = new FakeClock(0);
+
+    const modes: string[] = [];
+    const { stdin } = render(
+      React.createElement(YamlTab, {
+        resource,
+        kubeClient: fake,
+        clock,
+        onModeChange: (m): void => {
+          modes.push(m);
+        },
+      }),
+    );
+    await tick();
+    stdin.write('e'); // read → edit
+    await tick();
+    stdin.write('\x13'); // Ctrl+S → diff
+    await tick();
+    stdin.write('\r'); // Enter → apply → read
+    await ticks(5);
+    expect(modes).toEqual(['edit', 'diff', 'read']);
+  });
+
+  it('reports read when a Secret is revealed', async () => {
+    const resource = makeSecret('db-creds', 'default', {
+      password: 'c2VjcmV0',
+    });
+    const fake = new FakeKubeClient();
+    const clock = new FakeClock(0);
+
+    const modes: string[] = [];
+    const { stdin } = render(
+      React.createElement(YamlTab, {
+        resource,
+        kubeClient: fake,
+        clock,
+        onModeChange: (m): void => {
+          modes.push(m);
+        },
+      }),
+    );
+    await tick();
+    stdin.write('v'); // reveal — still read mode
+    await tick();
+    expect(modes).toEqual(['read']);
+  });
+
+  it('reports discard-confirm and edit when escaping a dirty buffer then declining', async () => {
+    const resource = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
+    const fake = new FakeKubeClient();
+    const clock = new FakeClock(0);
+
+    const modifiedContent = 'apiVersion: v1\ndata:\n  env: DIFFERENT\n';
+    const modes: string[] = [];
+    const { stdin } = render(
+      React.createElement(YamlTab, {
+        resource,
+        kubeClient: fake,
+        clock,
+        _testInitialContent: modifiedContent,
+        onModeChange: (m): void => {
+          modes.push(m);
+        },
+      }),
+    );
+    await tick();
+    stdin.write('\x1B'); // Escape → discard-confirm
+    await tick();
+    stdin.write('n'); // n → back to edit
+    await tick();
+    expect(modes).toEqual(['discard-confirm', 'edit']);
+  });
+});

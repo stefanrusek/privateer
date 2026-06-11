@@ -14,6 +14,8 @@ export interface CommandBarProps {
   mode: Mode;
   focused: boolean;
   hints: readonly string[];
+  /** Text typed into the bar while focused (rendered with a block cursor). */
+  inputText?: string;
 }
 
 interface ModeDisplay {
@@ -41,6 +43,7 @@ export function CommandBar({
   mode,
   focused,
   hints,
+  inputText,
 }: CommandBarProps): React.ReactElement {
   const md = modeDisplay(mode);
   return (
@@ -51,6 +54,12 @@ export function CommandBar({
       <Text color={md.color} bold={focused}>
         [{md.label}]
       </Text>
+      {focused && (
+        <>
+          <Text>{inputText ?? ''}</Text>
+          <Text inverse> </Text>
+        </>
+      )}
       {!focused &&
         hints.map((hint, i) => (
           <Text key={i} dimColor>

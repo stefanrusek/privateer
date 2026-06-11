@@ -8,7 +8,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK response bodies lack precise types */
 
 import https from 'node:https';
-import { KubeConfig, ApiextensionsV1Api, Watch } from '@kubernetes/client-node';
+import { KubeConfig, ApiextensionsV1Api } from '@kubernetes/client-node';
 import type { V1CustomResourceDefinition } from '@kubernetes/client-node';
 import type {
   KubeClient,
@@ -74,72 +74,153 @@ export class KubeClientAdapter implements KubeClient {
     return this.kc.getCurrentContext();
   }
 
+  /**
+   * Streaming watch implemented over node:https directly. The SDK's Watch
+   * class drops the TLS agent under Bun's fetch, so we reuse the same
+   * request-option plumbing as doRequest and parse the chunked
+   * newline-delimited JSON event stream ourselves.
+   *
+   * With no resourceVersion the API server sends synthetic ADDED events for
+   * all existing objects first ("get state and start at most recent"), which
+   * is exactly what the StateStore needs to build initial state.
+   */
   watch(
     kind: string,
     options: WatchOptions,
     handler: WatchHandler,
   ): WatchSubscription {
     const watchPath = this.watchPath(kind, options.namespace);
-    const params: Record<string, string> = {};
+    const params = new URLSearchParams();
+    params.set('watch', 'true');
     if (options.fieldSelector !== undefined) {
-      params.fieldSelector = options.fieldSelector;
+      params.set('fieldSelector', options.fieldSelector);
     }
     if (options.resourceVersion !== undefined) {
-      params.resourceVersion = options.resourceVersion;
+      params.set('resourceVersion', options.resourceVersion);
     }
 
-    const watcher = new Watch(this.kc);
-    // abortController holds the request once the async watch resolves.
-    const abortController: { fn: (() => void) | null } = { fn: null };
     const errorHandlers: ((e: KubeError) => void)[] = [];
     let closed = false;
+    const isClosed = (): boolean => closed;
+    let destroyRequest: (() => void) | null = null;
+
+    const emitError = (e: KubeError): void => {
+      if (isClosed()) {
+        return;
+      }
+      for (const h of errorHandlers) {
+        h(e);
+      }
+    };
 
     void (async () => {
       try {
-        const req = await watcher.watch(
-          watchPath,
-          params,
-          (type: string, obj: unknown) => {
-            const kubeObj = obj as KubernetesObject;
-            const meta = kubeObj.metadata ?? {};
-            handler({
-              type: type as 'ADDED' | 'MODIFIED' | 'DELETED',
-              apiVersion: kubeObj.apiVersion ?? '',
-              kind: kubeObj.kind ?? kind,
-              namespace: meta.namespace ?? null,
-              name: meta.name ?? '',
-              object: kubeObj,
-              receivedAt: 0,
+        const server = this.kc.getCurrentCluster()?.server ?? '';
+        const url = `${server}${watchPath}?${params.toString()}`;
+        const reqOpts = await this.buildRequestOptions('GET', url);
+
+        const req = https.request(reqOpts, (res) => {
+          if (res.statusCode !== undefined && res.statusCode >= 300) {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => {
+              let message = `watch failed with status ${String(res.statusCode)}`;
+              try {
+                const parsed = JSON.parse(Buffer.concat(chunks).toString()) as {
+                  message?: string;
+                };
+                message = parsed.message ?? message;
+              } catch {
+                // keep default message
+              }
+              emitError(
+                mapError({ statusCode: res.statusCode, body: { message } }),
+              );
             });
-          },
-          (err2: unknown) => {
-            if (closed) {
-              return;
+            return;
+          }
+
+          let buffer = '';
+          res.on('data', (chunk: Buffer) => {
+            buffer += chunk.toString();
+            let newline = buffer.indexOf('\n');
+            while (newline >= 0) {
+              const line = buffer.slice(0, newline).trim();
+              buffer = buffer.slice(newline + 1);
+              newline = buffer.indexOf('\n');
+              if (line.length === 0) {
+                continue;
+              }
+              let parsed: { type?: string; object?: KubernetesObject };
+              try {
+                parsed = JSON.parse(line) as typeof parsed;
+              } catch {
+                continue;
+              }
+              const type = parsed.type;
+              const kubeObj = parsed.object;
+              if (kubeObj === undefined || type === undefined) {
+                continue;
+              }
+              if (type === 'ERROR') {
+                const status = kubeObj as unknown as {
+                  code?: number;
+                  message?: string;
+                };
+                emitError(
+                  mapError({
+                    statusCode: status.code ?? 0,
+                    body: { message: status.message },
+                  }),
+                );
+                continue;
+              }
+              if (
+                type !== 'ADDED' &&
+                type !== 'MODIFIED' &&
+                type !== 'DELETED'
+              ) {
+                continue; // BOOKMARK etc.
+              }
+              const meta = kubeObj.metadata ?? {};
+              handler({
+                type,
+                apiVersion: kubeObj.apiVersion ?? '',
+                kind: kubeObj.kind ?? kind,
+                namespace: meta.namespace ?? null,
+                name: meta.name ?? '',
+                object: kubeObj,
+                receivedAt: Date.now(),
+              });
             }
-            const ke =
-              err2 === null
-                ? { kind: 'streamDropped' as const, message: 'stream ended' }
-                : mapError(err2);
-            for (const h of errorHandlers) {
-              h(ke);
-            }
-          },
-        );
-        abortController.fn = (): void => {
-          (req as unknown as { abort(): void }).abort();
+          });
+          res.on('end', () => {
+            emitError({ kind: 'streamDropped', message: 'stream ended' });
+          });
+          res.on('error', (e: Error) => {
+            emitError(mapError(e));
+          });
+        });
+
+        req.on('error', (e: Error) => {
+          emitError(mapError(e));
+        });
+        req.end();
+        destroyRequest = (): void => {
+          req.destroy();
         };
-      } catch (e) {
-        const ke = mapError(e);
-        for (const h of errorHandlers) {
-          h(ke);
+        if (isClosed()) {
+          req.destroy();
         }
+      } catch (e) {
+        emitError(mapError(e));
       }
     })();
 
     return {
       close: (): void => {
         closed = true;
-        abortController.fn?.();
+        destroyRequest?.();
       },
       onError: (h): void => {
         errorHandlers.push(h);
@@ -334,11 +415,11 @@ export class KubeClientAdapter implements KubeClient {
    * from the kubeconfig, including skipTLSVerify and client certs).
    * Returns { status, body }.
    */
-  private async doRequest(
+  private async buildRequestOptions(
     method: string,
     url: string,
     body?: string,
-  ): Promise<{ status: number; body: string }> {
+  ): Promise<https.RequestOptions> {
     // applyToHTTPSOptions populates: agent (TLS), ca, cert, key, auth, headers.Authorization
     const httpOpts: https.RequestOptions & {
       headers?: Record<string, string>;
@@ -362,7 +443,7 @@ export class KubeClientAdapter implements KubeClient {
       reqHeaders['Content-Length'] = Buffer.byteLength(body);
     }
 
-    const reqOpts: https.RequestOptions = {
+    return {
       agent: httpOpts.agent,
       ca: httpOpts.ca,
       cert: httpOpts.cert,
@@ -373,6 +454,14 @@ export class KubeClientAdapter implements KubeClient {
       method,
       headers: reqHeaders,
     };
+  }
+
+  private async doRequest(
+    method: string,
+    url: string,
+    body?: string,
+  ): Promise<{ status: number; body: string }> {
+    const reqOpts = await this.buildRequestOptions(method, url, body);
 
     return new Promise((resolve, reject) => {
       const req = https.request(reqOpts, (res) => {
@@ -432,6 +521,9 @@ export class KubeClientAdapter implements KubeClient {
       'Service',
       'ServiceAccount',
       'Event',
+      'Endpoints',
+      'ResourceQuota',
+      'LimitRange',
       'PersistentVolume',
       'PersistentVolumeClaim',
     ]);
@@ -453,6 +545,7 @@ export class KubeClientAdapter implements KubeClient {
       Role: 'rbac.authorization.k8s.io/v1',
       RoleBinding: 'rbac.authorization.k8s.io/v1',
       StorageClass: 'storage.k8s.io/v1',
+      CustomResourceDefinition: 'apiextensions.k8s.io/v1',
     };
     const group = apiGroups[kind] ?? 'apps/v1';
     return `/apis/${group}`;
@@ -467,6 +560,8 @@ export class KubeClientAdapter implements KubeClient {
       RoleBinding: 'rolebindings',
       StorageClass: 'storageclasses',
       Ingress: 'ingresses',
+      Endpoints: 'endpoints',
+      CustomResourceDefinition: 'customresourcedefinitions',
     };
     const override = overrides[kind];
     if (override !== undefined) {

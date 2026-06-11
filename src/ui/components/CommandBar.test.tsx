@@ -73,4 +73,27 @@ describe('CommandBar', () => {
     const { lastFrame } = render(React.createElement(CommandBar, defaultProps));
     expect(lastFrame()).toContain('ctx:');
   });
+
+  it('shows inputText with block cursor when focused', () => {
+    const props = {
+      ...defaultProps,
+      focused: true,
+      mode: 'search' as Mode,
+      inputText: 'nginx',
+    };
+    const { lastFrame } = render(React.createElement(CommandBar, props));
+    expect(lastFrame()).toContain('nginx');
+  });
+
+  it('renders block cursor with empty input when focused without inputText', () => {
+    const props = { ...defaultProps, focused: true };
+    const { lastFrame } = render(React.createElement(CommandBar, props));
+    expect(lastFrame()).toContain('[·]');
+  });
+
+  it('does not show inputText when not focused', () => {
+    const props = { ...defaultProps, inputText: 'nginx' };
+    const { lastFrame } = render(React.createElement(CommandBar, props));
+    expect(lastFrame()).not.toContain('nginx');
+  });
 });

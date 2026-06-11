@@ -24,6 +24,8 @@ export interface ResourceTableProps {
   onScrollToEnd: () => void;
   onPageDown: () => void;
   onPageUp: () => void;
+  /** Absolute index (into the full sorted/filtered row list) of the selected row. */
+  selectedIndex?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +140,8 @@ function rowColor(row: TableRow): InkColor | undefined {
 const TOTAL_WIDTH = 120;
 
 export function ResourceTable(props: ResourceTableProps): React.ReactElement {
-  const { model, columns, visibleHeight, nowMs, namespace } = props;
+  const { model, columns, visibleHeight, nowMs, namespace, selectedIndex } =
+    props;
 
   const colsWithWidths = columns.map((col) => ({
     col,
@@ -211,29 +214,36 @@ export function ResourceTable(props: ResourceTableProps): React.ReactElement {
   // Visible rows
   const visible = getVisibleRows(model, model.scrollOffset, visibleHeight);
 
-  const rowElements = visible.map((row) => {
+  const rowElements = visible.map((row, vi) => {
     const cells = colsWithWidths.map(({ col, width: colWidth }) => {
       return renderCell(col, row, colWidth, nowMs);
     });
 
     const color = rowColor(row);
     const isDimmed = row.state === 'deleted';
+    const isSelected = model.scrollOffset + vi === selectedIndex;
 
     return (
       <Box key={row.resource.uid} flexDirection="row">
-        {isDimmed
+        {isSelected
           ? cells.map((cell, ci) => (
-              <Text key={String(ci)} dimColor>
+              <Text key={String(ci)} inverse>
                 {cell}
               </Text>
             ))
-          : color !== undefined
+          : isDimmed
             ? cells.map((cell, ci) => (
-                <Text key={String(ci)} color={color}>
+                <Text key={String(ci)} dimColor>
                   {cell}
                 </Text>
               ))
-            : cells}
+            : color !== undefined
+              ? cells.map((cell, ci) => (
+                  <Text key={String(ci)} color={color}>
+                    {cell}
+                  </Text>
+                ))
+              : cells}
       </Box>
     );
   });

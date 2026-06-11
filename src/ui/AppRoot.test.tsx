@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
+import { Text } from 'ink';
 import { AppRoot } from './AppRoot.js';
 import type { AppState } from './types.js';
 
@@ -142,5 +143,55 @@ describe('AppRoot', () => {
       }),
     );
     expect(lastFrame()).toContain('Workloads');
+  });
+
+  it('renders list pane content via renderList', () => {
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state: defaultState,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        renderList: () => React.createElement(Text, null, 'LIST-CONTENT'),
+      }),
+    );
+    expect(lastFrame()).toContain('LIST-CONTENT');
+  });
+
+  it('renders detail pane content via renderDetail when showDetail is true', () => {
+    const state = { ...defaultState, showDetail: true };
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        renderDetail: () => React.createElement(Text, null, 'DETAIL-CONTENT'),
+      }),
+    );
+    expect(lastFrame()).toContain('DETAIL-CONTENT');
+  });
+
+  it('passes cursorKind through to the sidebar', () => {
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state: defaultState,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        cursorKind: 'Pods',
+      }),
+    );
+    expect(lastFrame()).toContain('Pods');
+  });
+
+  it('passes inputText through to the command bar when focused', () => {
+    const state = { ...defaultState, focus: 'commandbar' as const };
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        inputText: 'get pods',
+      }),
+    );
+    expect(lastFrame()).toContain('get pods');
   });
 });
