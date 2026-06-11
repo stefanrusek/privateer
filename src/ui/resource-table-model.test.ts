@@ -359,6 +359,36 @@ describe('getSortedFilteredRows', () => {
     expect(rows.length).toBe(0);
   });
 
+  it('search "error" matches red-status rows regardless of name (Spec 07 §8)', () => {
+    let model = createTableModel('Pod');
+    model = applyResourceEvent(
+      model,
+      { type: 'ADDED', resource: makeResource('healthy', 'uid-g', 'green') },
+      0,
+    );
+    model = applyResourceEvent(
+      model,
+      { type: 'ADDED', resource: makeResource('crasher', 'uid-r', 'red') },
+      0,
+    );
+    model = applySearch(model, 'error');
+    const rows = getSortedFilteredRows(model);
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.resource.name).toBe('crasher');
+  });
+
+  it('search "ERROR" is case-insensitive for the status token', () => {
+    let model = createTableModel('Pod');
+    model = applyResourceEvent(
+      model,
+      { type: 'ADDED', resource: makeResource('crasher', 'uid-r', 'red') },
+      0,
+    );
+    model = applySearch(model, 'ERROR');
+    const rows = getSortedFilteredRows(model);
+    expect(rows.length).toBe(1);
+  });
+
   it('handles grey status in sort order', () => {
     let model = createTableModel('Pod');
     model = applyResourceEvent(

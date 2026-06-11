@@ -32,7 +32,8 @@
     "date-fns": "^4.1.0",
     "ink": "^5.1.0",
     "js-yaml": "^4.1.0",
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "sharp": "file:./stubs/sharp"
   },
   "devDependencies": {
     "@cucumber/cucumber": "^11.2.0",
@@ -50,5 +51,8 @@
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.19.1",
     "vitest": "^2.1.8"
+  },
+  "overrides": {
+    "sharp": "file:./stubs/sharp"
   }
 }

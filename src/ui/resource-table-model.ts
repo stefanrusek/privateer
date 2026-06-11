@@ -146,15 +146,24 @@ export function tickAnimations(model: TableModel, nowMs: number): TableModel {
 // Sorting & filtering
 // ---------------------------------------------------------------------------
 
+/**
+ * Search match: name substring, with one special token — `error` matches rows
+ * whose status is red (Spec 07 §8 "(erroring|crashing|failing) pods" navigates
+ * to Pods filtered to error status via search="error").
+ */
+function matchesSearch(row: TableRow, searchLower: string): boolean {
+  if (searchLower === 'error') {
+    return row.resource.status.color === 'red';
+  }
+  return row.resource.name.toLowerCase().includes(searchLower);
+}
+
 export function getSortedFilteredRows(model: TableModel): TableRow[] {
   const searchLower = model.search.toLowerCase();
   const rows: TableRow[] = [];
 
   for (const row of model.rows.values()) {
-    if (
-      searchLower.length > 0 &&
-      !row.resource.name.toLowerCase().includes(searchLower)
-    ) {
+    if (searchLower.length > 0 && !matchesSearch(row, searchLower)) {
       continue;
     }
     rows.push(row);

@@ -72,6 +72,42 @@ describe('runLoop', () => {
     }
   });
 
+  it('passes a custom tool subset to the engine when provided', async () => {
+    const seen: InferenceRequest[] = [];
+    const engine: InferenceEngine = {
+      generate(request: InferenceRequest) {
+        seen.push(request);
+        const result: Awaited<ReturnType<InferenceEngine['generate']>> = {
+          ok: true,
+          value: {
+            toolCalls: [],
+            content: '{"action":"navigate","resource":"Pod"}',
+          },
+        };
+        return Promise.resolve(result);
+      },
+    };
+
+    const tools = [
+      {
+        name: 'list_resources',
+        description: 'subset',
+        parameters: {},
+      },
+    ];
+    const result = await runLoop({
+      engine,
+      dispatcher: makeDispatcher(),
+      clock: new FakeClock(),
+      messages: makeMessages(),
+      thinking: false,
+      tools,
+    });
+
+    expect(result.kind).toBe('action');
+    expect(seen[0]?.tools).toEqual(tools);
+  });
+
   it('returns parseError when model emits invalid JSON', async () => {
     const engine = new FixtureEngine();
     engine.pushAnswer('not valid json at all');
@@ -247,6 +283,41 @@ describe('runLoop', () => {
     if (result.kind === 'error') {
       expect(result.message).toContain('Maximum tool call rounds exceeded');
     }
+  });
+
+  it('honors a custom timeoutMs override', async () => {
+    const clock = new FakeClock(0);
+    const pending: { resolve: (() => void) | null } = { resolve: null };
+    const slowEngine: InferenceEngine = {
+      generate(_req: InferenceRequest): Promise<Result<never, never>> {
+        return new Promise<Result<never, never>>((res) => {
+          pending.resolve = () => {
+            res({
+              ok: false,
+              error: { kind: 'cancelled', message: 'done' } as never,
+            });
+          };
+        });
+      },
+    };
+
+    const loopPromise = runLoop({
+      engine: slowEngine,
+      dispatcher: makeDispatcher(),
+      clock,
+      messages: makeMessages(),
+      thinking: false,
+      timeoutMs: 45_000,
+    });
+
+    // The default 15s mark must NOT fire with the longer budget…
+    clock.advance(15_001);
+    // …but the custom 45s mark must.
+    clock.advance(30_000);
+
+    const result = await loopPromise;
+    expect(result.kind).toBe('timeout');
+    pending.resolve?.();
   });
 
   it('returns timeout when clock fires at 15s', async () => {

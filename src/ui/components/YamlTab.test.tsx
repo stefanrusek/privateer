@@ -816,6 +816,235 @@ describe('YamlTab dirty buffer', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — Cursor-based editing (Spec 04 §6.2)
+// ---------------------------------------------------------------------------
+
+const RIGHT = '\x1B[C';
+const LEFT = '\x1B[D';
+const UP = '\x1B[A';
+const DOWN = '\x1B[B';
+const BACKSPACE = '\b';
+const FORWARD_DELETE = '\x1B[3~';
+
+type RenderResult = ReturnType<typeof render>;
+
+/** Write each input as its own keypress, yielding between writes. */
+async function press(
+  stdin: RenderResult['stdin'],
+  ...inputs: string[]
+): Promise<void> {
+  for (const input of inputs) {
+    stdin.write(input);
+    await tick();
+  }
+}
+
+/** Render a YamlTab directly in edit mode with the given buffer content. */
+async function renderEdit(content: string): Promise<RenderResult> {
+  const resource = makeConfigMap('cfg', 'default', { env: 'x' }, '1');
+  const fake = new FakeKubeClient();
+  const clock = new FakeClock(0);
+  const result = render(
+    React.createElement(YamlTab, {
+      resource,
+      kubeClient: fake,
+      clock,
+      _testInitialContent: content,
+    }),
+  );
+  await tick();
+  return result;
+}
+
+describe('YamlTab cursor editing', () => {
+  it('starts with the cursor at 0,0: typing inserts at line start', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\ndef\n');
+    await press(stdin, 'X');
+    expect(lastFrame()).toContain('Xabc');
+  });
+
+  it('typing advances the cursor', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, 'X', 'Y');
+    expect(lastFrame()).toContain('XYabc');
+  });
+
+  it('inserts pasted multi-character input wholesale', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, 'hello');
+    expect(lastFrame()).toContain('helloabc');
+  });
+
+  it('right arrow moves the cursor right', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, RIGHT, 'X');
+    expect(lastFrame()).toContain('aXbc');
+  });
+
+  it('right arrow clamps at end of line', async () => {
+    const { lastFrame, stdin } = await renderEdit('ab\n');
+    await press(stdin, RIGHT, RIGHT, RIGHT, 'X');
+    expect(lastFrame()).toContain('abX');
+  });
+
+  it('left arrow moves the cursor left', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, RIGHT, RIGHT, LEFT, 'X');
+    expect(lastFrame()).toContain('aXbc');
+  });
+
+  it('left arrow clamps at column 0', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, LEFT, 'X');
+    expect(lastFrame()).toContain('Xabc');
+  });
+
+  it('down arrow moves to the next line, clamping to its length', async () => {
+    const { lastFrame, stdin } = await renderEdit('abcd\nef\nghij\n');
+    await press(stdin, RIGHT, RIGHT, RIGHT, DOWN, 'X');
+    expect(lastFrame()).toContain('efX');
+  });
+
+  it('down past a short line restores the desired column', async () => {
+    const { lastFrame, stdin } = await renderEdit('abcd\nef\nghij\n');
+    await press(stdin, RIGHT, RIGHT, RIGHT, DOWN, DOWN, 'X');
+    expect(lastFrame()).toContain('ghiXj');
+  });
+
+  it('up arrow moves up, clamping to the shorter line', async () => {
+    const { lastFrame, stdin } = await renderEdit('ab\ncdef\n');
+    await press(stdin, DOWN, RIGHT, RIGHT, RIGHT, UP, 'X');
+    expect(lastFrame()).toContain('abX');
+  });
+
+  it('up arrow clamps at the first row', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\ndef\n');
+    await press(stdin, UP, 'X');
+    expect(lastFrame()).toContain('Xabc');
+  });
+
+  it('down arrow clamps at the last row', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, DOWN, 'X');
+    expect(lastFrame()).toContain('Xabc');
+  });
+
+  it('return splits the line at the cursor and moves to the new line start', async () => {
+    const { lastFrame, stdin } = await renderEdit('abcd\n');
+    await press(stdin, RIGHT, RIGHT, '\r', 'X');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('1 ab');
+    expect(frame).toContain('2 Xcd');
+  });
+
+  it('backspace deletes the character before the cursor', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, RIGHT, RIGHT, BACKSPACE, 'X');
+    expect(lastFrame()).toContain('aXc');
+  });
+
+  it('backspace at column 0 joins with the previous line', async () => {
+    const { lastFrame, stdin } = await renderEdit('ab\ncd\n');
+    await press(stdin, DOWN, BACKSPACE, 'X');
+    expect(lastFrame()).toContain('abXcd');
+  });
+
+  it('backspace at 0,0 is a no-op', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, BACKSPACE);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('EDITING');
+    expect(frame).toContain('1 abc');
+  });
+
+  it('delete removes the character at the cursor', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, FORWARD_DELETE);
+    expect(lastFrame()).toContain('1 bc');
+  });
+
+  it('delete at end of line joins the next line up', async () => {
+    const { lastFrame, stdin } = await renderEdit('ab\ncd\n');
+    await press(stdin, RIGHT, RIGHT, FORWARD_DELETE);
+    expect(lastFrame()).toContain('1 abcd');
+  });
+
+  it('delete at the very end of the buffer is a no-op', async () => {
+    const { lastFrame, stdin } = await renderEdit('ab\n');
+    const before = lastFrame() ?? '';
+    await press(stdin, RIGHT, RIGHT, FORWARD_DELETE);
+    const after = lastFrame() ?? '';
+    expect(after).toContain('1 ab');
+    expect(after.split('\n').length).toBe(before.split('\n').length);
+  });
+
+  it('renders the cursor as an inverse space at end of line', async () => {
+    const { lastFrame, stdin } = await renderEdit('ab\n');
+    await press(stdin, RIGHT, RIGHT);
+    // Cursor is past the last character; the line itself is unchanged.
+    expect(lastFrame()).toContain('1 ab');
+  });
+
+  it('ctrl+letter (other than s) does not insert text', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, '\x01'); // Ctrl+A
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('1 abc');
+    expect(frame).not.toContain('aabc');
+  });
+
+  it('meta+character does not insert text', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, '\x1Bx'); // Meta+X
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('1 abc');
+    expect(frame).not.toContain('xabc');
+  });
+
+  it('tab does not insert text', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, '\t', 'X');
+    // Cursor did not move and no tab was inserted.
+    expect(lastFrame()).toContain('Xabc');
+  });
+
+  it('keys with no printable input are ignored', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, '\x1B[5~'); // PageUp
+    expect(lastFrame()).toContain('1 abc');
+  });
+
+  it('preserves the cursor position when declining discard-confirm', async () => {
+    const { lastFrame, stdin } = await renderEdit('abc\n');
+    await press(stdin, RIGHT, '\x1B'); // dirty buffer → discard-confirm
+    expect(lastFrame()).toContain('Discard changes?');
+    await press(stdin, 'n', 'X');
+    expect(lastFrame()).toContain('aXbc');
+  });
+
+  it('preserves the cursor position when cancelling the diff view', async () => {
+    const resource = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
+    const fake = new FakeKubeClient();
+    fake.seed(resource);
+    const clock = new FakeClock(0);
+
+    const { lastFrame, stdin } = render(
+      React.createElement(YamlTab, {
+        resource,
+        kubeClient: fake,
+        clock,
+      }),
+    );
+    await tick();
+    await press(stdin, 'e', RIGHT, '\x13'); // edit → move right → Ctrl+S → diff
+    expect(lastFrame()).toContain('[Cancel]');
+    await press(stdin, '\x1B'); // cancel → back to edit, cursor at col 1
+    await press(stdin, 'X');
+    expect(lastFrame()).toContain('aXpiVersion');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — onModeChange notifications
 // ---------------------------------------------------------------------------
 

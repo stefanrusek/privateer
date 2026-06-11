@@ -99,6 +99,13 @@ export class EditBufferHandle implements EditBuffer {
   }
 
   /**
+   * Get the line at the given index (0-based), or '' when out of range.
+   */
+  lineAt(index: number): string {
+    return this.state.currentLines[index] ?? '';
+  }
+
+  /**
    * Replace a single line by index (0-based).
    * If the index is beyond the current buffer length, the buffer is extended.
    */

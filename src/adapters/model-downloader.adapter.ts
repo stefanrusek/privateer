@@ -1,9 +1,11 @@
 /**
- * Real ModelDownloader adapter — resolves the Gemma ONNX model files via
+ * Real ModelDownloader adapter — resolves the local agent model files via
  * `@huggingface/transformers` model resolution, forwarding the library's
- * progress callbacks as {@link ProgressSample}s (Spec 07 §11.2). Thin
- * translation only; the percent/speed/ETA state machine lives behind the
- * boundary in src/model/download.ts.
+ * progress callbacks as {@link ProgressSample}s (Spec 07 §11.2). Files are
+ * cached under `~/.config/p9r/models/<model-id>/`; a later run with the files
+ * present resolves from disk without network. Thin translation only; the
+ * percent/speed/ETA state machine lives behind the boundary in
+ * src/model/download.ts.
  *
  * Covered by @envtest, not unit tests (src/adapters/** excluded in vitest).
  */
@@ -11,7 +13,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK lacks precise progress types */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment -- SDK progress_callback option is untyped */
 
-import { AutoModelForCausalLM, AutoTokenizer } from '@huggingface/transformers';
+import {
+  AutoModelForCausalLM,
+  AutoTokenizer,
+  env,
+} from '@huggingface/transformers';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { ok, err } from '../core/result.js';
 import type {
   ModelDownloader,
@@ -20,10 +29,31 @@ import type {
   ModelDownloaderError,
 } from '../model/download.js';
 
-const DEFAULT_MODEL_ID = 'onnx-community/gemma-4-E2B-it-ONNX';
+/** Must match the inference adapter so the downloaded files are the ones used. */
+const DEFAULT_MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
+const DTYPE = 'q4f16';
+
+/** Display name for the first-run screen (Spec 04 §13). */
+export const AGENT_MODEL_DISPLAY_NAME = 'Qwen3 (quantized)';
+
+/** Approximate download size in bytes for the first-run progress bar. */
+export const AGENT_MODEL_TOTAL_BYTES = 580_000_000;
+
+/**
+ * Whether the agent model files are already cached on disk (Spec 07 §11.2 —
+ * decides whether the first-run download screen is shown).
+ */
+export function isModelCached(modelId: string = DEFAULT_MODEL_ID): boolean {
+  const dir = join(homedir(), '.config', 'p9r', 'models', modelId);
+  return (
+    existsSync(join(dir, 'tokenizer.json')) &&
+    existsSync(join(dir, 'onnx', `model_${DTYPE}.onnx`))
+  );
+}
 
 interface ProgressEvent {
   status?: string;
+  file?: string;
   loaded?: number;
   total?: number;
 }
@@ -35,12 +65,28 @@ export class TransformersModelDownloader implements ModelDownloader {
   ) {}
 
   start(onProgress: (sample: ProgressSample) => void): DownloadHandle {
+    (env as { cacheDir: string | null }).cacheDir = join(
+      homedir(),
+      '.config',
+      'p9r',
+      'models',
+    );
+
     const controller = new AbortController();
 
+    // The library reports per-file progress for several files (tokenizer,
+    // config, ONNX weights) — aggregate into one cumulative byte count.
+    const perFile = new Map<string, number>();
     const progressCallback = (event: ProgressEvent): void => {
-      if (event.status === 'progress' && typeof event.loaded === 'number') {
-        onProgress({ downloadedBytes: event.loaded, atMs: this.now() });
+      if (event.status !== 'progress' || typeof event.loaded !== 'number') {
+        return;
       }
+      perFile.set(event.file ?? '', event.loaded);
+      let totalLoaded = 0;
+      for (const bytes of perFile.values()) {
+        totalLoaded += bytes;
+      }
+      onProgress({ downloadedBytes: totalLoaded, atMs: this.now() });
     };
 
     const done = (async () => {
@@ -50,6 +96,7 @@ export class TransformersModelDownloader implements ModelDownloader {
             progress_callback: progressCallback as any,
           }),
           AutoModelForCausalLM.from_pretrained(this.modelId, {
+            dtype: DTYPE,
             progress_callback: progressCallback as any,
           }),
         ]);

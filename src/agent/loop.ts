@@ -9,6 +9,7 @@
 import type {
   InferenceEngine,
   ChatMessage,
+  ToolDefinition,
 } from '../boundaries/inference-engine.js';
 import type { Clock } from '../boundaries/clock.js';
 import type { AgentAction } from '../command/action.js';
@@ -53,6 +54,17 @@ export interface RunLoopOptions {
   messages: ChatMessage[];
   thinking: boolean;
   onToolCall?: OnToolCall;
+  /**
+   * Tool subset to expose to the model. Defaults to the full catalog;
+   * constrained hardware passes a trimmed set to keep the prompt small
+   * enough for the 15s budget (Spec 07 §9).
+   */
+  tools?: ToolDefinition[];
+  /**
+   * Inference timeout in ms. Defaults to the Spec 07 §9 15s budget;
+   * overridable via config (`agent.timeoutSeconds`) for slow hardware.
+   */
+  timeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +73,7 @@ export interface RunLoopOptions {
 
 export async function runLoop(options: RunLoopOptions): Promise<LoopResult> {
   const { engine, dispatcher, clock, onToolCall } = options;
-  const tools = buildToolDefinitions();
+  const tools = options.tools ?? buildToolDefinitions();
 
   // Set up timeout via Clock — use object so TypeScript does not narrow the flag
   const timeoutState = { timedOut: false };
@@ -71,7 +83,7 @@ export async function runLoop(options: RunLoopOptions): Promise<LoopResult> {
     const cancel = clock.setTimeout(() => {
       timeoutState.timedOut = true;
       resolve({ kind: 'timeout' });
-    }, TIMEOUT_MS);
+    }, options.timeoutMs ?? TIMEOUT_MS);
     cancelHandles.push(cancel);
   });
 

@@ -48,6 +48,54 @@ function mapError(e: unknown): KubeError {
   return { kind: 'network', message };
 }
 
+/**
+ * Build node:https request options for a kube-apiserver request, carrying the
+ * kubeconfig's TLS material (CA, client certs) and auth header. Shared by the
+ * KubeClientAdapter and the streaming adapters (logs), since Bun's fetch
+ * cannot carry a node TLS agent.
+ */
+export async function buildKubeRequestOptions(
+  kc: KubeConfig,
+  method: string,
+  url: string,
+  body?: string,
+): Promise<https.RequestOptions> {
+  // applyToHTTPSOptions populates: agent (TLS), ca, cert, key, auth, headers.Authorization
+  const httpOpts: https.RequestOptions & {
+    headers?: Record<string, string>;
+  } = {};
+  await kc.applyToHTTPSOptions(httpOpts);
+
+  // applyToHTTPSOptions sets opts.headers.Authorization for token-based auth
+  // and opts.auth for basic auth (handled by applyToFetchOptions conversion).
+  // We call applyToFetchOptions to get the final Authorization header value.
+  const fetchOptsRaw = await kc.applyToFetchOptions({});
+  const fetchHeaders = fetchOptsRaw.headers as unknown as Headers;
+  const authHeader = fetchHeaders.get('Authorization');
+
+  const parsed = new URL(url);
+  const reqHeaders: Record<string, string | number> = {};
+  if (authHeader !== null) {
+    reqHeaders.Authorization = authHeader;
+  }
+  if (body !== undefined) {
+    reqHeaders['Content-Type'] = 'application/json';
+    reqHeaders['Content-Length'] = Buffer.byteLength(body);
+  }
+
+  return {
+    agent: httpOpts.agent,
+    ca: httpOpts.ca,
+    cert: httpOpts.cert,
+    key: httpOpts.key,
+    hostname: parsed.hostname,
+    port: parsed.port,
+    path: `${parsed.pathname}${parsed.search}`,
+    method,
+    headers: reqHeaders,
+  };
+}
+
 export class KubeClientAdapter implements KubeClient {
   private readonly kc: KubeConfig;
 
@@ -415,45 +463,12 @@ export class KubeClientAdapter implements KubeClient {
    * from the kubeconfig, including skipTLSVerify and client certs).
    * Returns { status, body }.
    */
-  private async buildRequestOptions(
+  private buildRequestOptions(
     method: string,
     url: string,
     body?: string,
   ): Promise<https.RequestOptions> {
-    // applyToHTTPSOptions populates: agent (TLS), ca, cert, key, auth, headers.Authorization
-    const httpOpts: https.RequestOptions & {
-      headers?: Record<string, string>;
-    } = {};
-    await this.kc.applyToHTTPSOptions(httpOpts);
-
-    // applyToHTTPSOptions sets opts.headers.Authorization for token-based auth
-    // and opts.auth for basic auth (handled by applyToFetchOptions conversion).
-    // We call applyToFetchOptions to get the final Authorization header value.
-    const fetchOptsRaw = await this.kc.applyToFetchOptions({});
-    const fetchHeaders = fetchOptsRaw.headers as unknown as Headers;
-    const authHeader = fetchHeaders.get('Authorization');
-
-    const parsed = new URL(url);
-    const reqHeaders: Record<string, string | number> = {};
-    if (authHeader !== null) {
-      reqHeaders.Authorization = authHeader;
-    }
-    if (body !== undefined) {
-      reqHeaders['Content-Type'] = 'application/json';
-      reqHeaders['Content-Length'] = Buffer.byteLength(body);
-    }
-
-    return {
-      agent: httpOpts.agent,
-      ca: httpOpts.ca,
-      cert: httpOpts.cert,
-      key: httpOpts.key,
-      hostname: parsed.hostname,
-      port: parsed.port,
-      path: `${parsed.pathname}${parsed.search}`,
-      method,
-      headers: reqHeaders,
-    };
+    return buildKubeRequestOptions(this.kc, method, url, body);
   }
 
   private async doRequest(

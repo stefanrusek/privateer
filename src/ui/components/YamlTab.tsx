@@ -6,6 +6,7 @@
 
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
+import type { Key as InkKey } from 'ink';
 import type { KubernetesObject } from '../../core/types.js';
 import type { KubeClient } from '../../boundaries/kube-client.js';
 import type { Clock } from '../../boundaries/clock.js';
@@ -42,15 +43,32 @@ export interface YamlTabProps {
 // Mode
 // ---------------------------------------------------------------------------
 
+/**
+ * Cursor position within the edit buffer.
+ * `desired` is the column the user last set explicitly (by horizontal
+ * movement or typing); vertical movement clamps to the line length but
+ * restores `desired` when a long-enough line is reached again.
+ */
+interface CursorState {
+  row: number;
+  col: number;
+  desired: number;
+}
+
+const CURSOR_ORIGIN: CursorState = { row: 0, col: 0, desired: 0 };
+
+interface EditMode {
+  kind: 'edit';
+  buffer: EditBufferHandle;
+  validationError: YamlValidationError | null;
+  cursor: CursorState;
+}
+
 type TabMode =
   | { kind: 'read'; revealed: boolean }
-  | {
-      kind: 'edit';
-      buffer: EditBufferHandle;
-      validationError: YamlValidationError | null;
-    }
-  | { kind: 'discard-confirm'; buffer: EditBufferHandle }
-  | { kind: 'diff'; buffer: EditBufferHandle };
+  | EditMode
+  | { kind: 'discard-confirm'; buffer: EditBufferHandle; cursor: CursorState }
+  | { kind: 'diff'; buffer: EditBufferHandle; cursor: CursorState };
 
 // ---------------------------------------------------------------------------
 // YamlTab component
@@ -68,7 +86,12 @@ export function YamlTab({
     if (_testInitialContent !== undefined) {
       const buf = createEditBuffer(resourceToYaml(resource));
       const dirtyBuf = buf.setContent(_testInitialContent);
-      return { kind: 'edit', buffer: dirtyBuf, validationError: null };
+      return {
+        kind: 'edit',
+        buffer: dirtyBuf,
+        validationError: null,
+        cursor: CURSOR_ORIGIN,
+      };
     }
     return { kind: 'read', revealed: false };
   })();
@@ -94,9 +117,11 @@ export function YamlTab({
       }
     } else if (mode.kind === 'edit') {
       if (key.ctrl && input === 's') {
-        handleCtrlS(mode.buffer, mode.validationError);
+        handleCtrlS(mode);
       } else if (key.escape) {
-        handleEscape(mode.buffer);
+        handleEscape(mode);
+      } else {
+        handleEditKey(mode, input, key);
       }
     } else if (mode.kind === 'discard-confirm') {
       if (input === 'y' || input === 'Y') {
@@ -106,6 +131,7 @@ export function YamlTab({
           kind: 'edit',
           buffer: mode.buffer,
           validationError: null,
+          cursor: mode.cursor,
         });
       }
     }
@@ -114,27 +140,111 @@ export function YamlTab({
   function enterEditMode(): void {
     const yaml = resourceToYaml(resource);
     const buffer = createEditBuffer(yaml);
-    transition({ kind: 'edit', buffer, validationError: null });
+    transition({
+      kind: 'edit',
+      buffer,
+      validationError: null,
+      cursor: CURSOR_ORIGIN,
+    });
   }
 
-  function handleCtrlS(
-    buffer: EditBufferHandle,
-    validationError: YamlValidationError | null,
-  ): void {
-    const error = validateYaml(buffer.content);
+  function handleCtrlS(current: EditMode): void {
+    const error = validateYaml(current.buffer.content);
     if (error !== null) {
-      transition({ kind: 'edit', buffer, validationError: error });
+      transition({ ...current, validationError: error });
       return;
     }
-    void validationError; // not used after validation
-    transition({ kind: 'diff', buffer });
+    transition({
+      kind: 'diff',
+      buffer: current.buffer,
+      cursor: current.cursor,
+    });
   }
 
-  function handleEscape(buffer: EditBufferHandle): void {
-    if (buffer.isDirty) {
-      transition({ kind: 'discard-confirm', buffer });
+  function handleEscape(current: EditMode): void {
+    if (current.buffer.isDirty) {
+      transition({
+        kind: 'discard-confirm',
+        buffer: current.buffer,
+        cursor: current.cursor,
+      });
     } else {
       transition({ kind: 'read', revealed: false });
+    }
+  }
+
+  /**
+   * Cursor-based editing (Spec 04 §6.2). Intra-edit updates (cursor moves,
+   * text changes) use setMode directly — the mode *kind* does not change, so
+   * onModeChange is not notified.
+   */
+  function handleEditKey(current: EditMode, input: string, key: InkKey): void {
+    const { buffer, cursor } = current;
+    const line = buffer.lineAt(cursor.row);
+
+    const update = (nextBuffer: EditBufferHandle, next: CursorState): void => {
+      setMode({ ...current, buffer: nextBuffer, cursor: next });
+    };
+
+    if (key.leftArrow) {
+      const col = Math.max(0, cursor.col - 1);
+      update(buffer, { row: cursor.row, col, desired: col });
+    } else if (key.rightArrow) {
+      const col = Math.min(line.length, cursor.col + 1);
+      update(buffer, { row: cursor.row, col, desired: col });
+    } else if (key.upArrow) {
+      const row = Math.max(0, cursor.row - 1);
+      const col = Math.min(cursor.desired, buffer.lineAt(row).length);
+      update(buffer, { row, col, desired: cursor.desired });
+    } else if (key.downArrow) {
+      const row = Math.min(buffer.lines.length - 1, cursor.row + 1);
+      const col = Math.min(cursor.desired, buffer.lineAt(row).length);
+      update(buffer, { row, col, desired: cursor.desired });
+    } else if (key.return) {
+      const next = buffer
+        .setLine(cursor.row, line.slice(0, cursor.col))
+        .insertLine(cursor.row + 1, line.slice(cursor.col));
+      update(next, { row: cursor.row + 1, col: 0, desired: 0 });
+    } else if (key.backspace) {
+      if (cursor.col > 0) {
+        const next = buffer.setLine(
+          cursor.row,
+          line.slice(0, cursor.col - 1) + line.slice(cursor.col),
+        );
+        const col = cursor.col - 1;
+        update(next, { row: cursor.row, col, desired: col });
+      } else if (cursor.row > 0) {
+        const prev = buffer.lineAt(cursor.row - 1);
+        const next = buffer
+          .setLine(cursor.row - 1, prev + line)
+          .deleteLine(cursor.row);
+        update(next, {
+          row: cursor.row - 1,
+          col: prev.length,
+          desired: prev.length,
+        });
+      }
+    } else if (key.delete) {
+      if (cursor.col < line.length) {
+        const next = buffer.setLine(
+          cursor.row,
+          line.slice(0, cursor.col) + line.slice(cursor.col + 1),
+        );
+        update(next, cursor);
+      } else if (cursor.row < buffer.lines.length - 1) {
+        const next = buffer
+          .setLine(cursor.row, line + buffer.lineAt(cursor.row + 1))
+          .deleteLine(cursor.row + 1);
+        update(next, cursor);
+      }
+    } else if (input.length > 0 && !key.ctrl && !key.meta && !key.tab) {
+      // Printable input — may be multi-character when pasted.
+      const next = buffer.setLine(
+        cursor.row,
+        line.slice(0, cursor.col) + input + line.slice(cursor.col),
+      );
+      const col = cursor.col + input.length;
+      update(next, { row: cursor.row, col, desired: col });
     }
   }
 
@@ -199,7 +309,15 @@ export function YamlTab({
             return (
               <Box key={i} flexDirection="row">
                 {isModified ? <Text color="yellow">│</Text> : <Text> </Text>}
-                <HighlightedLine lineNum={i + 1} line={line} />
+                {i === mode.cursor.row ? (
+                  <CursorLine
+                    lineNum={i + 1}
+                    line={line}
+                    col={mode.cursor.col}
+                  />
+                ) : (
+                  <HighlightedLine lineNum={i + 1} line={line} />
+                )}
               </Box>
             );
           })}
@@ -245,14 +363,54 @@ export function YamlTab({
           kind: 'edit',
           buffer: mode.buffer,
           validationError: null,
+          cursor: mode.cursor,
         });
       }}
       onReloadAndRedit={(fresh): void => {
         const freshYaml = resourceToYaml(fresh);
         const newBuffer = createEditBuffer(freshYaml);
-        transition({ kind: 'edit', buffer: newBuffer, validationError: null });
+        transition({
+          kind: 'edit',
+          buffer: newBuffer,
+          validationError: null,
+          cursor: CURSOR_ORIGIN,
+        });
       }}
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CursorLine
+// ---------------------------------------------------------------------------
+
+interface CursorLineProps {
+  lineNum: number;
+  line: string;
+  col: number;
+}
+
+/**
+ * The line the cursor is on, rendered without syntax highlighting so the
+ * cursor cell can be shown with `inverse`. At end of line the cursor is an
+ * inverse space (block-style).
+ */
+function CursorLine({
+  lineNum,
+  line,
+  col,
+}: CursorLineProps): React.ReactElement {
+  const lineNumStr = String(lineNum).padStart(4, ' ');
+  const before = line.slice(0, col);
+  const at = line.slice(col, col + 1) || ' ';
+  const after = line.slice(col + 1);
+  return (
+    <Box flexDirection="row">
+      <Text dimColor>{lineNumStr} </Text>
+      <Text>{before}</Text>
+      <Text inverse>{at}</Text>
+      <Text>{after}</Text>
+    </Box>
   );
 }
 

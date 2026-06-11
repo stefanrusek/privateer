@@ -84,6 +84,18 @@ describe('EditBuffer', () => {
     });
   });
 
+  describe('lineAt', () => {
+    it('returns the line at a valid index', () => {
+      const buf = createEditBuffer('a\nb\nc\n');
+      expect(buf.lineAt(1)).toBe('b');
+    });
+
+    it('returns an empty string for an out-of-range index', () => {
+      const buf = createEditBuffer('a\n');
+      expect(buf.lineAt(99)).toBe('');
+    });
+  });
+
   describe('setLine', () => {
     it('replaces a specific line', () => {
       const buf = createEditBuffer('a\nb\nc\n');

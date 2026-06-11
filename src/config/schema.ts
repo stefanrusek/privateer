@@ -14,6 +14,8 @@ export interface P9rConfig {
   hiddenResources: string[];
   lagThresholds: { warning: number; critical: number };
   agentModel: string;
+  /** Inference timeout in seconds (Spec 07 §9 default: 15). */
+  agentTimeoutSeconds: number;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -64,6 +66,7 @@ export function parseConfig(raw: RawConfig): P9rConfig {
       critical: asNumber(lag.critical, 10_000),
     },
     agentModel: asString(agent.model, 'gemma-4-E2B-it-onnx'),
+    agentTimeoutSeconds: asNumber(agent.timeoutSeconds, 15),
   };
 
   const activeContext = raw.activeContext;

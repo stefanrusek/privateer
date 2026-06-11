@@ -12,6 +12,9 @@ import { EventsTab } from '../../ui/components/EventsTab.js';
 import { AgentTab } from '../../ui/components/AgentTab.js';
 import { HealthDashboard } from '../../ui/components/HealthDashboard.js';
 import { ConfirmDialog } from '../../ui/components/ConfirmDialog.js';
+import { LogsTab } from '../../ui/components/LogsTab.js';
+import { PortForwardManager } from '../../ui/components/PortForwardManager.js';
+import { MetricsTab } from '../../ui/components/MetricsTab.js';
 import { LiveController } from './controller.js';
 
 export function LiveApp({
@@ -24,11 +27,10 @@ export function LiveApp({
     controller.getSnapshot,
   );
 
+  // start() is idempotent; the controller intentionally survives unmounts
+  // (exec suspend-and-handover remounts the tree). Disposal happens on quit.
   useEffect(() => {
     controller.start();
-    return () => {
-      controller.dispose();
-    };
   }, [controller]);
 
   useInput((input, key) => {
@@ -60,7 +62,7 @@ export function LiveApp({
           summary={health.summary}
           rules={health.rules}
           showPassing={health.showPassing}
-          metrics={null}
+          metrics={controller.metricsOverview()}
           kafka={{
             detected: false,
             deploymentType: 'none',
@@ -128,10 +130,43 @@ export function LiveApp({
             nowMs={snapshot.nowMs}
           />
         );
-      case 'logs':
-        return <Text dimColor>Log streaming is wired in a later phase.</Text>;
-      case 'metrics':
-        return <Text dimColor>No metrics source connected.</Text>;
+      case 'logs': {
+        const logs = snapshot.logs;
+        if (logs === null) {
+          return <Text dimColor>Logs are only available for pods.</Text>;
+        }
+        return (
+          <LogsTab
+            podName={logs.podName}
+            container={logs.container}
+            lines={logs.lines}
+            live={logs.live}
+            timestamps={logs.timestamps}
+            wrap={logs.wrap}
+            lineLimitLabel={logs.lineLimitLabel}
+            previous={logs.previous}
+            search={logs.search}
+            searchFocused={logs.searchFocused}
+            newLinesAvailable={logs.newLinesAvailable}
+            {...(logs.confirmation !== undefined
+              ? { confirmation: logs.confirmation }
+              : {})}
+          />
+        );
+      }
+      case 'metrics': {
+        const series = controller.sessionSeries(detail.resource);
+        return (
+          <MetricsTab
+            resourceKind={detail.resource.kind}
+            resourceName={detail.resource.name}
+            tier={snapshot.metrics.tier}
+            capabilities={snapshot.metrics.capabilities}
+            cpuSeries={series.cpu}
+            memorySeries={series.memory}
+          />
+        );
+      }
       case 'agent':
         return (
           <AgentTab
@@ -144,6 +179,17 @@ export function LiveApp({
 
   const renderDetail = (): React.ReactNode => {
     if (detail === null) {
+      if (snapshot.agentPaneOpen) {
+        return (
+          <Box flexDirection="column">
+            <Text bold>Agent</Text>
+            <AgentTab
+              exchanges={snapshot.agentExchanges}
+              onClearHistory={controller.clearAgentHistory}
+            />
+          </Box>
+        );
+      }
       return null;
     }
     return (
@@ -178,6 +224,16 @@ export function LiveApp({
           destructive={confirm.destructive}
           onConfirm={controller.confirmAccept}
           onCancel={controller.confirmCancel}
+        />
+      )}
+      {snapshot.pfManagerOpen && (
+        <PortForwardManager
+          forwards={snapshot.portForwards.forwards}
+          recents={snapshot.portForwards.recents}
+          onStop={() => undefined}
+          onRetry={() => undefined}
+          onNewForward={() => undefined}
+          onClose={() => undefined}
         />
       )}
     </Box>

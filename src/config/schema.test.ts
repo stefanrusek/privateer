@@ -13,6 +13,7 @@ describe('parseConfig', () => {
       hiddenResources: [],
       lagThresholds: { warning: 10_000, critical: 10_000 },
       agentModel: 'gemma-4-E2B-it-onnx',
+      agentTimeoutSeconds: 15,
     });
   });
 
@@ -28,7 +29,7 @@ describe('parseConfig', () => {
       },
       hiddenResources: ['Events', 42],
       lagThresholds: { warning: 5, critical: 9 },
-      agent: { model: 'gemma-4-E4B-it-onnx' },
+      agent: { model: 'gemma-4-E4B-it-onnx', timeoutSeconds: 60 },
     });
     expect(c.activeContext).toBe('prod');
     expect(c.prometheusUrl).toBe('http://p:9090');
@@ -41,6 +42,7 @@ describe('parseConfig', () => {
     expect(c.hiddenResources).toEqual(['Events']);
     expect(c.lagThresholds).toEqual({ warning: 5, critical: 9 });
     expect(c.agentModel).toBe('gemma-4-E4B-it-onnx');
+    expect(c.agentTimeoutSeconds).toBe(60);
   });
 
   it('ignores malformed types and non-string optional fields', () => {

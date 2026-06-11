@@ -17,6 +17,7 @@ export default tseslint.config(
       '.claude/**',
       '*.config.*',
       'cucumber.mjs',
+      'stubs/**',
     ],
   },
   js.configs.recommended,
