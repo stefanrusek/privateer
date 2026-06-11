@@ -89,8 +89,14 @@ export default tseslint.config(
   },
   {
     // The composition root and the adapters/ directory are the only places
-    // allowed to touch real boundaries directly (Spec 08 §5.2, §6.1).
-    files: ['src/main.ts', 'src/adapters/**/*.ts', 'bin/**/*.ts'],
+    // allowed to touch real boundaries directly (Spec 08 §5.2, §6.1). The
+    // envtest harness (test/**) also speaks to the real API server by design.
+    files: [
+      'src/main.ts',
+      'src/adapters/**/*.ts',
+      'bin/**/*.ts',
+      'test/**/*.ts',
+    ],
     rules: {
       'no-restricted-imports': 'off',
     },

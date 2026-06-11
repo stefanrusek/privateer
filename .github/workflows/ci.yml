@@ -37,10 +37,19 @@ jobs:
       - name: Unit tests + coverage
         run: bun run test
 
-      # 5. vitest run @envtest (integration, real API server) — wired in Chunk 0.3
+      # 5. vitest run @envtest (integration, real API server)
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Provision envtest control-plane binaries
+        env:
+          ENVTEST_K8S_VERSION: '1.31.0'
+        run: |
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+          ASSETS=$("$HOME/go/bin/setup-envtest" use "$ENVTEST_K8S_VERSION" -p path)
+          echo "KUBEBUILDER_ASSETS=$ASSETS" >> "$GITHUB_ENV"
       - name: Integration tests (envtest)
         run: bun run test:envtest
-        if: ${{ hashFiles('test/envtest/**') != '' }}
 
       # 6. cucumber-js (behavior suite)
       - name: Behavior tests (BDD)
