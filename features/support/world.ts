@@ -1,5 +1,6 @@
 import { setWorldConstructor, World } from '@cucumber/cucumber';
 import { createApp } from '../../src/app.js';
+import type { LaunchOptions } from '../../src/cli/args.js';
 
 /**
  * Cucumber World — composes the real application with fakes only at process
@@ -9,12 +10,16 @@ import { createApp } from '../../src/app.js';
  */
 export class PrivateerWorld extends World {
   output: string[] = [];
+  launched: LaunchOptions[] = [];
 
   runApp(argv: readonly string[]): void {
     createApp({
       argv,
       write: (line) => {
         this.output.push(line);
+      },
+      launch: (options) => {
+        this.launched.push(options);
       },
     }).run();
   }

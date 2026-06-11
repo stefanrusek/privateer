@@ -4,4 +4,4 @@
 // the (fully tested) composition logic.
 import { main } from '../src/main.js';
 
-main();
+main(process.argv.slice(2));

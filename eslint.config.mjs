@@ -93,12 +93,21 @@ export default tseslint.config(
     // envtest harness (test/**) also speaks to the real API server by design.
     files: [
       'src/main.ts',
-      'src/adapters/**/*.ts',
+      'src/adapters/**/*.{ts,tsx}',
       'bin/**/*.ts',
       'test/**/*.ts',
     ],
     rules: {
       'no-restricted-imports': 'off',
+    },
+  },
+  {
+    // Adapters are the one place real time/exit/SDK access lives — the boundary
+    // the rest of the app is insulated from. Allow the constructs banned
+    // elsewhere (Date.now, process.exit) here only.
+    files: ['src/adapters/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': 'off',
     },
   },
   {

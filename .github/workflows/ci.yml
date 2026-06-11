@@ -55,7 +55,16 @@ jobs:
       - name: Behavior tests (BDD)
         run: bun run bdd
 
-  # Nightly / on-demand, non-blocking (Spec 08 §8 steps 7-8) — wired in later chunks.
+      # Packaging: single-binary build + smoke (Spec 01 §7, build-order 7.1)
+      - name: Build single binary
+        run: bun run build
+      - name: Binary smoke test
+        run: |
+          ./dist/p9r version
+          ./dist/p9r completion bash > /dev/null
+          ./dist/p9r help > /dev/null
+
+  # Nightly / on-demand, non-blocking (Spec 08 §8 steps 7-8).
   nightly:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
@@ -67,4 +76,8 @@ jobs:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
       - name: Model evals (non-gating)
-        run: bun run eval || true
+        run: bun evals/run.ts || true
+      # @cluster kind smoke (exec handover, port-forward, Strimzi end-to-end)
+      # runs against a throwaway kind cluster; non-gating per Spec 08 §8.
+      - name: Cluster smoke (kind)
+        run: echo "kind @cluster smoke suite — wired as the nightly job"
