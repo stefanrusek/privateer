@@ -26,6 +26,7 @@
     "gate": "bun run format:check && bun run lint && bun run lint:grep && bun run typecheck && bun run test && bun run bdd"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "@kubernetes/client-node": "^1.0.0",
     "ansi-escapes": "^7.0.0",
     "date-fns": "^4.1.0",
