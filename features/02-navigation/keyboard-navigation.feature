@@ -99,3 +99,33 @@ Feature: Keyboard navigation input parsing
     Given the mode is "normal"
     When the mode transitions to "edit"
     Then the current mode is "edit"
+
+  Scenario: Tab cycles focus from sidebar to list to detail and back
+    Given the layout has detail visible
+    And the current focus is "sidebar"
+    When I press Tab
+    Then the current focus is "list"
+    When I press Tab
+    Then the current focus is "detail"
+    When I press Tab
+    Then the current focus is "sidebar"
+
+  Scenario: Tab cycles focus from sidebar to list and back when detail hidden
+    Given the layout has no detail visible
+    And the current focus is "sidebar"
+    When I press Tab
+    Then the current focus is "list"
+    When I press Tab
+    Then the current focus is "sidebar"
+
+  Scenario: Shift+Tab cycles focus in reverse with detail visible
+    Given the layout has detail visible
+    And the current focus is "sidebar"
+    When I press Shift+Tab
+    Then the current focus is "detail"
+
+  Scenario: Shift+Tab cycles focus in reverse without detail
+    Given the layout has no detail visible
+    And the current focus is "sidebar"
+    When I press Shift+Tab
+    Then the current focus is "list"

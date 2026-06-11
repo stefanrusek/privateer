@@ -1,0 +1,75 @@
+/**
+ * UI layer types for Privateer TUI layout and navigation (Spec 02 §3).
+ */
+
+import type { Mode } from '../input/keyboard.js';
+
+export type { Mode };
+
+/** Which pane currently has keyboard focus. */
+export type FocusRegion = 'sidebar' | 'list' | 'detail' | 'commandbar';
+
+/** Badge tier determines visual weight of a resource count. */
+export type BadgeTier = 'live' | 'dimmed';
+
+/** A category group in the sidebar (e.g. "Workloads"). */
+export interface SidebarCategory {
+  readonly kind: 'category';
+  readonly label: string;
+  /** Unique identifier used as collapse key. */
+  readonly id: string;
+  readonly children: readonly SidebarLeaf[];
+}
+
+/** A leaf resource kind entry in the sidebar. */
+export interface SidebarLeaf {
+  readonly kind: 'leaf';
+  readonly label: string;
+  /** Kubernetes resource kind name, e.g. "Deployments". */
+  readonly resourceKind: string;
+}
+
+/** Union of sidebar tree nodes. */
+export type SidebarItem = SidebarCategory | SidebarLeaf;
+
+/** The full prop shape for AppRoot. */
+export interface AppState {
+  /** Current context name from kubeconfig. */
+  readonly context: string;
+  /** Active namespace filter ("" for all namespaces). */
+  readonly namespace: string;
+  /** All available namespaces. */
+  readonly allNamespaces: readonly string[];
+  /** All available contexts. */
+  readonly allContexts: readonly string[];
+  /** Currently selected resource kind (e.g. "Deployments"). */
+  readonly activeKind: string;
+  /** Search filter text. */
+  readonly search: string;
+  /** Current modal mode. */
+  readonly mode: Mode;
+  /** Which region has keyboard focus. */
+  readonly focus: FocusRegion;
+  /** Categories that are collapsed. */
+  readonly collapsedCategories: ReadonlySet<string>;
+  /** Resource kinds with live badge counts. */
+  readonly badgeCounts: ReadonlyMap<string, number>;
+  /** Resource kinds with dimmed (stale) counts. */
+  readonly dimmedKinds: ReadonlySet<string>;
+  /** Resource kinds that returned 403. */
+  readonly forbiddenKinds: ReadonlySet<string>;
+  /** Whether the detail pane is visible. */
+  readonly showDetail: boolean;
+  /** Whether the context switcher overlay is open. */
+  readonly contextSwitcherOpen: boolean;
+  /** Whether the help overlay is open. */
+  readonly helpOpen: boolean;
+  /** Sidebar width ratio (0..1). */
+  readonly sidebarRatio: number;
+  /** Vertical split ratio (0..1). */
+  readonly verticalRatio: number;
+  /** Command bar hint strings. */
+  readonly hints: readonly string[];
+  /** Focused sub-element of header, or null. */
+  readonly headerFocus: 'namespace' | 'search' | null;
+}
