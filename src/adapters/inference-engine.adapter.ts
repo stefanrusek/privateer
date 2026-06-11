@@ -118,7 +118,7 @@ export class TransformersInferenceEngine implements InferenceEngine {
       const decoded: string[] = this.tokenizer.batch_decode(newTokens, {
         skip_special_tokens: true,
       });
-      const text = stripThinkBlock(decoded[0] ?? '');
+      const text = stripCodeFence(stripThinkBlock(decoded[0] ?? ''));
 
       const toolCalls = extractToolCalls(text);
       return ok({
@@ -170,6 +170,18 @@ function toTemplateTool(t: ToolDefinition): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 /** Drop the `<think>…</think>` reasoning prefix (present in thinking mode). */
+/**
+ * Small models often wrap the JSON action in a markdown code fence; the
+ * parser expects bare JSON, so unwrap it here.
+ */
+function stripCodeFence(text: string): string {
+  const match = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
+  if (match?.[1] !== undefined) {
+    return match[1].trim();
+  }
+  return text;
+}
+
 function stripThinkBlock(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/, '').trim();
 }

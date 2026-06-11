@@ -295,11 +295,12 @@ function MetricsOverviewSection({
     return <Box />;
   }
 
-  const statusDot = metrics.prometheusConnected ? '●' : '○';
   const statusLabel = metrics.prometheusConnected
     ? 'Prometheus ● connected'
     : 'Prometheus ○ disconnected';
 
+  // Sparklines render for any active metrics source: Prometheus history or
+  // metrics-server session data (~-prefixed, Spec 06 §2.3 / review M8).
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Box flexDirection="row">
@@ -308,25 +309,18 @@ function MetricsOverviewSection({
         <Text dimColor>({statusLabel})</Text>
       </Box>
       <Text dimColor>{'─'.repeat(65)}</Text>
-      {metrics.prometheusConnected ? (
-        <Box flexDirection="row" gap={4}>
-          <Box flexDirection="row">
-            <Text>CPU </Text>
-            <Text color="green">{metrics.cpuSparkline}</Text>
-            <Text> {String(metrics.cpuAvgPct)}% avg</Text>
-          </Box>
-          <Box flexDirection="row">
-            <Text>Memory </Text>
-            <Text color="green">{metrics.memSparkline}</Text>
-            <Text> {String(metrics.memAvgPct)}% avg</Text>
-          </Box>
+      <Box flexDirection="row" gap={4}>
+        <Box flexDirection="row">
+          <Text>CPU </Text>
+          <Text color="green">{metrics.cpuSparkline}</Text>
+          <Text> {String(metrics.cpuAvgPct)}% avg</Text>
         </Box>
-      ) : (
-        <Text dimColor>
-          {statusDot} Metrics unavailable — connect Prometheus to see cluster
-          utilization
-        </Text>
-      )}
+        <Box flexDirection="row">
+          <Text>Memory </Text>
+          <Text color="green">{metrics.memSparkline}</Text>
+          <Text> {String(metrics.memAvgPct)}% avg</Text>
+        </Box>
+      </Box>
     </Box>
   );
 }
