@@ -11,6 +11,9 @@
 
 **P R I V A T E E R** · *the agentic Kubernetes TUI*
 
+[![CI](https://github.com/stefanrusek/privateer/actions/workflows/ci.yml/badge.svg)](https://github.com/stefanrusek/privateer/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/stefanrusek/privateer)](https://github.com/stefanrusek/privateer/releases/latest)
+
 A single-binary Kubernetes terminal UI with a fully local LLM agent —
 ask your cluster questions in plain language, nothing leaves your machine.
 
@@ -52,19 +55,30 @@ ask your cluster questions in plain language, nothing leaves your machine.
 
 Requires `kubectl` on your PATH and a kubeconfig pointing at a cluster.
 
+**Download a release** ([latest](https://github.com/stefanrusek/privateer/releases/latest)):
+
 ```sh
-# from source (requires bun >= 1.3)
-git clone <repo-url> && cd p9r
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/stefanrusek/privateer/releases/latest/download/p9r-darwin-arm64.tar.gz | tar xz
+sudo mv p9r-darwin-arm64 /usr/local/bin/p9r
+
+# Linux x64 (arm64: substitute p9r-linux-arm64)
+curl -fsSL https://github.com/stefanrusek/privateer/releases/latest/download/p9r-linux-x64.tar.gz | tar xz
+sudo mv p9r-linux-x64 /usr/local/bin/p9r
+```
+
+Windows x64 is published as `p9r-windows-x64.zip` (experimental).
+
+**Or build from source** (requires bun >= 1.3):
+
+```sh
+git clone https://github.com/stefanrusek/privateer && cd privateer
 bun install
-bun run build          # produces dist/p9r (single binary, ~100MB)
-./dist/p9r
+bun run build          # single binary for this machine → dist/p9r
+bun run build:all      # cross-compile every supported platform
 ```
 
-Or run straight from the checkout during development:
-
-```sh
-bun run start
-```
+Or run straight from the checkout during development: `bun run start`.
 
 On first launch p9r asks which agent model to use — **Gemma 3n E2B**
 (best answers, ~3GB) or **Qwen3 0.6B** (small and fast, ~550MB) — and
