@@ -12,6 +12,8 @@
 #   - dockerd is installed but not running
 #   - the host is cgroup v1 and leaves the cpuset controller unmounted;
 #     kubelet refuses to start without it
+#   - the host also lacks the name=systemd named hierarchy; the node's
+#     systemd can't mount it itself (EPERM) and PID 1 exits in a loop
 #   - kubelet >=1.33 refuses cgroup v1 hosts unless failCgroupV1=false
 #   - the sandbox denies writing negative oom_score_adj, which kills the
 #     control-plane pods unless containerd clamps via restrict_oom_score_adj
@@ -38,6 +40,11 @@ fi
 if ! mountpoint -q /sys/fs/cgroup/cpuset 2>/dev/null; then
   mkdir -p /sys/fs/cgroup/cpuset
   mount -t cgroup -o cpuset cgroup /sys/fs/cgroup/cpuset
+fi
+
+if ! mountpoint -q /sys/fs/cgroup/systemd 2>/dev/null; then
+  mkdir -p /sys/fs/cgroup/systemd
+  mount -t cgroup -o none,name=systemd cgroup /sys/fs/cgroup/systemd
 fi
 
 if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
