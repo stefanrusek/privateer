@@ -86,6 +86,19 @@ re-push the tag at the fixed commit.
   (pino, sync destination — Bun can't use worker transports). Never write to
   stdout/stderr; they belong to Ink. `P9R_DEBUG=1` enables debug level.
 
+## Claude Code cloud sessions
+
+The web sandbox has no cluster by default — run
+`bash scripts/claude-cluster-up.sh` to bring up a local kind cluster (it
+works around the sandbox's cgroup v1 host, denied negative oom_score_adj,
+blocked Docker Hub CDN, and TLS-intercepting proxy); after that
+`bun run fixtures:up` and `bun run start` work normally.
+`scripts/claude-env-setup.sh` is the environment Setup script: it installs
+kubectl/kind and pre-pulls the node image into the environment cache.
+The default network allowlist blocks registry.k8s.io, so the metrics-server
+and kube-state-metrics fixtures need `registry.k8s.io` and `*.pkg.dev`
+added as custom allowed domains in the environment settings.
+
 ## Testing the TUI
 
 Drive it under tmux: `tmux new-session -d -s p9r -x 170 -y 50 'bun run start'`,
