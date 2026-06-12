@@ -36,22 +36,53 @@ import type {
 } from '../boundaries/inference-engine.js';
 
 /**
- * Default model id — Qwen3 1.7B instruction-tuned ONNX (q4f16 ≈ 1.3GB).
- * Stands in for the spec's "Gemma 4 E2B": small instruct model with native
- * tool calling and a thinking-mode toggle, runnable by transformers.js.
+ * Default model id — Gemma 3n E2B instruction-tuned ONNX (q4 ≈ 3GB). The
+ * spec's "Gemma 4 E2B" maps onto Gemma 3n's real E2B variant (Spec 07 §11.1).
  */
-const DEFAULT_MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
-
-/** Quantization variant to load (Spec 07 §11.1 — "quantized INT4"). */
-const DTYPE = 'q4f16';
+const DEFAULT_MODEL_ID = 'onnx-community/gemma-3n-E2B-it-ONNX';
 
 /**
- * Preferred execution device. On Apple Silicon the onnxruntime-node WebGPU EP
- * is ~6x faster than the CPU EP for prefill (measured on an M1: 483-token
- * prompt + 46 new tokens ≈ 8s vs ≈ 43s) and the CoreML EP is unusable (>60s).
- * If WebGPU session creation fails we retry on CPU.
+ * Per-model runtime profiles, benchmarked on Apple Silicon (8GB):
+ * - Qwen3 on the WebGPU EP runs at ~6 tok/s (CPU is ~6x slower; CoreML
+ *   unusable) and its chat template supports native tool calls.
+ * - Gemma 3n's multimodal ONNX graph crashes the WebGPU EP outright (a C++
+ *   exception that kills the process, not a catchable error), so it pins to
+ *   the CPU EP with q4 weights (~0.4 tok/s) and exposes no tools (the Gemma
+ *   template has no tool-call format).
  */
-const PREFERRED_DEVICE = 'webgpu';
+interface ModelProfile {
+  device: 'webgpu' | 'cpu';
+  fallbackDevice: 'cpu' | null;
+  dtype: 'q4' | 'q4f16';
+  supportsTools: boolean;
+  supportsThinking: boolean;
+}
+
+function profileFor(modelId: string): ModelProfile {
+  if (modelId.toLowerCase().includes('gemma')) {
+    return {
+      device: 'cpu',
+      fallbackDevice: null,
+      dtype: 'q4',
+      supportsTools: false,
+      supportsThinking: false,
+    };
+  }
+  return {
+    device: 'webgpu',
+    fallbackDevice: 'cpu',
+    dtype: 'q4f16',
+    supportsTools: true,
+    supportsThinking: true,
+  };
+}
+
+/** Whether the model's chat template accepts tool definitions. */
+export function modelSupportsTools(
+  modelId: string = DEFAULT_MODEL_ID,
+): boolean {
+  return profileFor(modelId).supportsTools;
+}
 
 /** Where model files live (Spec 07 §11.1 — `~/.config/p9r/models/`). */
 export function modelCacheDir(): string {
@@ -66,6 +97,7 @@ export class TransformersInferenceEngine implements InferenceEngine {
   private constructor(
     private readonly tokenizer: any,
     private readonly model: any,
+    private readonly profile: ModelProfile,
   ) {}
 
   /** Resolve the ONNX model + tokenizer for `modelId` from the local cache. */
@@ -73,21 +105,24 @@ export class TransformersInferenceEngine implements InferenceEngine {
     modelId: string = DEFAULT_MODEL_ID,
   ): Promise<TransformersInferenceEngine> {
     (env as { cacheDir: string | null }).cacheDir = modelCacheDir();
+    const profile = profileFor(modelId);
     const tokenizer = await AutoTokenizer.from_pretrained(modelId);
     let model: any;
     try {
       model = await AutoModelForCausalLM.from_pretrained(modelId, {
-        dtype: DTYPE,
-        device: PREFERRED_DEVICE,
+        dtype: profile.dtype,
+        device: profile.device,
       });
-    } catch {
-      // WebGPU EP unavailable on this machine — fall back to the CPU EP.
+    } catch (e) {
+      if (profile.fallbackDevice === null) {
+        throw e;
+      }
       model = await AutoModelForCausalLM.from_pretrained(modelId, {
-        dtype: DTYPE,
-        device: 'cpu',
+        dtype: profile.dtype,
+        device: profile.fallbackDevice,
       });
     }
-    return new TransformersInferenceEngine(tokenizer, model);
+    return new TransformersInferenceEngine(tokenizer, model, profile);
   }
 
   async generate(
@@ -97,11 +132,15 @@ export class TransformersInferenceEngine implements InferenceEngine {
       const inputs = this.tokenizer.apply_chat_template(
         request.messages.map(toRawMessage),
         {
-          tools: request.tools.map(toTemplateTool),
+          ...(this.profile.supportsTools && request.tools.length > 0
+            ? { tools: request.tools.map(toTemplateTool) }
+            : {}),
           add_generation_prompt: true,
           return_dict: true,
-          // Qwen3 chat-template toggle: false pre-fills an empty think block.
-          enable_thinking: request.thinking,
+          ...(this.profile.supportsThinking
+            ? // Qwen3 chat-template toggle: false pre-fills an empty think block.
+              { enable_thinking: request.thinking }
+            : {}),
         },
       );
 

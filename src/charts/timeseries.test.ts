@@ -13,12 +13,6 @@ import type { MetricSeries } from '../boundaries/metrics-source.js';
 
 const EPOCH_MS = 1_749_600_000_000;
 
-const fakeClock = {
-  now: () => EPOCH_MS,
-  setTimeout: (_cb: () => void, _ms: number) => () => undefined,
-  setInterval: (_cb: () => void, _ms: number) => () => undefined,
-};
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -47,7 +41,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     // 8 data rows + 1 x-axis row = 9 lines
     expect(chart.lines.length).toBe(9);
@@ -58,7 +51,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
       title: 'CPU Usage',
     });
     // title + 8 data rows + 1 x-axis = 10 lines
@@ -71,7 +63,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     // Count unique non-empty Y labels in the 8 data rows
     const dataLines = chart.lines.slice(0, 8);
@@ -87,7 +78,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     expect(chart.lines.length).toBe(9);
   });
@@ -96,7 +86,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series: [],
       width: 60,
-      clock: fakeClock,
     });
     expect(chart.lines.length).toBe(9);
   });
@@ -106,14 +95,13 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     expect(chart.lines.length).toBe(9);
   });
 
   it('renders correctly with minimum width of 1', () => {
     const series = [makeSeries([10, 50])];
-    const chart = renderTimeseriesChart({ series, width: 1, clock: fakeClock });
+    const chart = renderTimeseriesChart({ series, width: 1 });
     expect(chart.lines.length).toBe(9);
   });
 
@@ -124,7 +112,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     const xAxisLine = chart.lines[chart.lines.length - 1] ?? '';
     // Should contain colon (time labels like HH:MM)
@@ -139,7 +126,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     expect(chart.lines.length).toBe(9);
   });
@@ -149,7 +135,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series: [s],
       width: 60,
-      clock: fakeClock,
     });
     expect(chart.lines.length).toBe(9);
   });
@@ -159,7 +144,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     // At least one line should contain █
     const hasPlot = chart.lines.some((l) => l.includes('█'));
@@ -172,7 +156,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     expect(chart.lines.length).toBe(9);
   });
@@ -183,7 +166,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     const hasKLabel = chart.lines.some((l) => l.includes('k'));
     expect(hasKLabel).toBe(true);
@@ -195,7 +177,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     const hasMLabel = chart.lines.some((l) => l.includes('M'));
     expect(hasMLabel).toBe(true);
@@ -207,7 +188,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     expect(chart.lines.length).toBe(9);
   });
@@ -218,7 +198,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     expect(chart.lines.length).toBe(9);
   });
@@ -229,7 +208,6 @@ describe('renderTimeseriesChart', () => {
     const chart = renderTimeseriesChart({
       series,
       width: 60,
-      clock: fakeClock,
     });
     expect(chart.lines.length).toBe(9);
   });

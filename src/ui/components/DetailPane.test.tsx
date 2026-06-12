@@ -5,6 +5,7 @@ import { Text } from 'ink';
 import { DetailPane, getAvailableTabs, navigateTab } from './DetailPane.js';
 import type { DetailPaneProps, TabId, TabDef } from './DetailPane.js';
 import type { ResourceObject } from '../../core/types.js';
+import { safeWrite, tick } from '../../../test/ink-stdin.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -313,8 +314,8 @@ describe('navigateTab', () => {
 describe('DetailPane useInput integration', () => {
   it('calls onTabChange from useInput when key pressed and focused', async () => {
     // useInput registers via useEffect which is deferred by React's scheduler.
-    // We must yield to the task queue before writing to stdin so effects are
-    // committed and the 'readable' listener is attached.
+    // safeWrite waits for the 'readable' listener before writing so the
+    // keystroke is never dropped.
     let tabChanged: TabId | null = null;
     const { stdin } = render(
       React.createElement(
@@ -327,11 +328,7 @@ describe('DetailPane useInput integration', () => {
         }),
       ),
     );
-    // Yield to allow effects (useInput → setRawMode → stdin listener) to run.
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('3'); // Key '3' = events (index 2) for Pod
+    await safeWrite(stdin, '3'); // Key '3' = events (index 2) for Pod
     expect(tabChanged).toBe('events');
   });
 
@@ -348,10 +345,13 @@ describe('DetailPane useInput integration', () => {
         }),
       ),
     );
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    // Intentionally a raw write: with focused=false, useInput is inactive
+    // ({ isActive: focused }) so Ink never attaches a 'readable' listener —
+    // safeWrite would spin its whole listener-wait budget. The write being
+    // dropped IS the behavior under test (no tab change when unfocused).
+    await tick();
     stdin.write('2');
+    await tick();
     expect(tabChanged).toBeNull();
   });
 });

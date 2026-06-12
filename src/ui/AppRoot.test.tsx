@@ -182,6 +182,52 @@ describe('AppRoot', () => {
     expect(lastFrame()).toContain('Pods');
   });
 
+  it('sizes the sidebar from terminalSize and windows the sidebar rows', () => {
+    // rows: 12 → sidebar viewportHeight = max(5, 9) = 9, fewer than the
+    // 36 expanded sidebar rows, so the bottom clip indicator appears.
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state: defaultState,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        terminalSize: { columns: 120, rows: 12 },
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Workloads');
+    expect(frame).toContain('↓ …');
+  });
+
+  it('clamps the sidebar width to 16 columns on narrow terminals', () => {
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state: defaultState,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        terminalSize: { columns: 40, rows: 200 },
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Workloads');
+    expect(frame).not.toContain('↓ …');
+  });
+
+  it('renders unwindowed at 80 columns when terminalSize is absent', () => {
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state: defaultState,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    // All rows render (the narrow sidebar wraps 'Custom Resources').
+    expect(frame).toContain('Resources');
+    expect(frame).toContain('Namespaces');
+    expect(frame).not.toContain('↓ …');
+    expect(frame).not.toContain('↑ …');
+  });
+
   it('passes inputText through to the command bar when focused', () => {
     const state = { ...defaultState, focus: 'commandbar' as const };
     const { lastFrame } = render(
@@ -193,5 +239,43 @@ describe('AppRoot', () => {
       }),
     );
     expect(lastFrame()).toContain('get pods');
+  });
+
+  it('replaces the command bar with commandBarContent when provided', () => {
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state: defaultState,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        commandBarContent: React.createElement(Text, null, 'Delete it? [y/n]'),
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Delete it? [y/n]');
+    expect(frame).not.toContain('ctx:');
+  });
+
+  it('renders the help overlay exclusively when helpOpen', () => {
+    const state = { ...defaultState, helpOpen: true };
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+      }),
+    );
+    expect(lastFrame() ?? '').not.toContain('Workloads');
+  });
+
+  it('renders the context switcher exclusively when open', () => {
+    const state = { ...defaultState, contextSwitcherOpen: true };
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+      }),
+    );
+    expect(lastFrame() ?? '').not.toContain('Workloads');
   });
 });

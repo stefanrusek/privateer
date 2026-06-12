@@ -30,25 +30,33 @@ import type {
 } from '../model/download.js';
 
 /** Must match the inference adapter so the downloaded files are the ones used. */
-const DEFAULT_MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
-const DTYPE = 'q4f16';
+const DEFAULT_MODEL_ID = 'onnx-community/gemma-3n-E2B-it-ONNX';
+const DTYPE = 'q4';
 
 /** Display name for the first-run screen (Spec 04 §13). */
-export const AGENT_MODEL_DISPLAY_NAME = 'Qwen3 (quantized)';
+export const AGENT_MODEL_DISPLAY_NAME = 'Gemma 3n E2B (quantized)';
 
 /** Approximate download size in bytes for the first-run progress bar. */
-export const AGENT_MODEL_TOTAL_BYTES = 580_000_000;
+export const AGENT_MODEL_TOTAL_BYTES = 3_100_000_000;
 
 /**
  * Whether the agent model files are already cached on disk (Spec 07 §11.2 —
- * decides whether the first-run download screen is shown).
+ * decides whether the first-run download screen is shown). Single-graph
+ * exports ship `onnx/model_<dtype>.onnx`; multimodal exports like Gemma 3n
+ * ship a merged decoder instead.
  */
 export function isModelCached(modelId: string = DEFAULT_MODEL_ID): boolean {
   const dir = join(homedir(), '.config', 'p9r', 'models', modelId);
-  return (
-    existsSync(join(dir, 'tokenizer.json')) &&
-    existsSync(join(dir, 'onnx', `model_${DTYPE}.onnx`))
-  );
+  if (!existsSync(join(dir, 'tokenizer.json'))) {
+    return false;
+  }
+  const candidates = [
+    join(dir, 'onnx', `model_${DTYPE}.onnx`),
+    join(dir, 'onnx', `model_q4f16.onnx`),
+    join(dir, 'onnx', `decoder_model_merged_${DTYPE}.onnx`),
+    join(dir, 'onnx', `decoder_model_merged_q4f16.onnx`),
+  ];
+  return candidates.some((path) => existsSync(path));
 }
 
 interface ProgressEvent {

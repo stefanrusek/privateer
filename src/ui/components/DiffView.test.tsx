@@ -4,6 +4,7 @@ import React from 'react';
 import { DiffView } from './DiffView.js';
 import { FakeKubeClient } from '../../boundaries/kube-client.fake.js';
 import type { KubernetesObject } from '../../core/types.js';
+import { safeWrite } from '../../../test/ink-stdin.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -212,10 +213,7 @@ describe('DiffView apply flow', () => {
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('\r'); // Enter key
+    await safeWrite(stdin, '\r'); // Enter key
     // Wait for async apply to complete
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
@@ -255,19 +253,10 @@ describe('DiffView apply flow', () => {
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('\r'); // Enter to apply
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await safeWrite(stdin, '\r'); // Enter to apply
     expect(lastFrame()).toContain('[Applying');
     // Press a key while applying — should be ignored (applying guard)
-    stdin.write('\x1B'); // Escape while applying — should be ignored
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await safeWrite(stdin, '\x1B'); // Escape while applying — should be ignored
     // Still in applying state (key was ignored)
     expect(lastFrame()).toContain('[Applying');
     // Resolve to clean up
@@ -307,10 +296,7 @@ describe('DiffView apply flow', () => {
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('\r'); // Enter to apply — should 409
+    await safeWrite(stdin, '\r'); // Enter to apply — should 409
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
@@ -339,10 +325,7 @@ describe('DiffView apply flow', () => {
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('\r'); // Enter to apply — should return notFound error
+    await safeWrite(stdin, '\r'); // Enter to apply — should return notFound error
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
@@ -380,13 +363,7 @@ describe('DiffView cancel flow', () => {
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('\x1B'); // Escape
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await safeWrite(stdin, '\x1B'); // Escape
     expect(cancelled).toBe(true);
   });
 
@@ -421,17 +398,11 @@ describe('DiffView cancel flow', () => {
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('\r'); // Enter to apply — 409
+    await safeWrite(stdin, '\r'); // Enter to apply — 409
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
-    stdin.write('\x1B'); // Escape → Discard in conflict state
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await safeWrite(stdin, '\x1B'); // Escape → Discard in conflict state
     expect(cancelled).toBe(true);
   });
 });
@@ -471,14 +442,12 @@ describe('DiffView reload and re-edit', () => {
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('\r'); // Enter to apply — 409 conflict (stale version 1 vs server version 2)
+    // Enter to apply — 409 conflict (stale version 1 vs server version 2)
+    await safeWrite(stdin, '\r');
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
-    stdin.write('r'); // r to reload-and-redit
+    await safeWrite(stdin, 'r'); // r to reload-and-redit
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
@@ -518,14 +487,11 @@ describe('DiffView reload and re-edit', () => {
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('\r'); // Enter to apply — 409 conflict
+    await safeWrite(stdin, '\r'); // Enter to apply — 409 conflict
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
-    stdin.write('r'); // r to reload — will call get('', '', null) — notFound
+    await safeWrite(stdin, 'r'); // r to reload — will call get('', '', null) — notFound
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
@@ -562,14 +528,11 @@ describe('DiffView reload and re-edit', () => {
       }),
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    stdin.write('\r'); // Enter to apply — 409 conflict
+    await safeWrite(stdin, '\r'); // Enter to apply — 409 conflict
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
-    stdin.write('r'); // r to reload — should fail with forbidden
+    await safeWrite(stdin, 'r'); // r to reload — should fail with forbidden
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });

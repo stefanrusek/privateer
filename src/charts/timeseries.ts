@@ -11,7 +11,6 @@
  */
 
 import type { MetricSeries } from '../boundaries/metrics-source.js';
-import type { Clock } from '../boundaries/clock.js';
 
 /** A rendered time-series chart broken into lines. */
 export interface TimeseriesChart {
@@ -25,8 +24,6 @@ export interface TimeseriesChartOptions {
   readonly series: readonly MetricSeries[];
   /** Chart width in characters. */
   readonly width: number;
-  /** Clock for computing time labels. */
-  readonly clock: Clock;
   /** Title shown above the chart. */
   readonly title?: string;
 }

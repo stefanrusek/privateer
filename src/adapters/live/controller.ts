@@ -6,6 +6,7 @@
 
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { KubeConfig } from '@kubernetes/client-node';
 import type { LaunchOptions } from '../../cli/args.js';
 import type { KubeError } from '../../boundaries/kube-client.js';
@@ -56,7 +57,10 @@ import type {
   InferenceEngine,
   ChatMessage,
 } from '../../boundaries/inference-engine.js';
-import { TransformersInferenceEngine } from '../inference-engine.adapter.js';
+import {
+  TransformersInferenceEngine,
+  modelSupportsTools,
+} from '../inference-engine.adapter.js';
 import { RingBuffer } from '../../logs/ring-buffer.js';
 import {
   buildContainerPicker,
@@ -79,10 +83,16 @@ import {
 import { downloadLogs } from '../../logs/download.js';
 import { PortForwardManager } from '../../portforward/manager.js';
 import type { PortForwardManagerState } from '../../portforward/manager.js';
+import type { MetricsTier } from '../../metrics/discovery.js';
+import { SystemTunnel } from '../../metrics/system-tunnel.js';
 import {
-  discoverMetricsSource,
-  type MetricsTier,
-} from '../../metrics/discovery.js';
+  createRangeSelector,
+  selectRange,
+  rangeStartMs,
+  rangeDurationMs,
+  type RangeLabel,
+  type RangeSelectorModel,
+} from '../../charts/range.js';
 import {
   detectExporterCapabilities,
   type ExporterCapabilities,
@@ -171,6 +181,21 @@ export interface PortPromptState {
 export interface MetricsViewState {
   tier: MetricsTier;
   capabilities: ExporterCapabilities;
+  range: RangeSelectorModel;
+  charts: ChartSeries | null;
+}
+
+/** Prometheus queryRange results for the open detail resource. */
+export interface ChartSeries {
+  /** uid of the resource the series belong to. */
+  uid: string;
+  cpu: MetricSeries[];
+  memory: MetricSeries[];
+  networkIn: MetricSeries[];
+  networkOut: MetricSeries[];
+  restarts: MetricSeries[];
+  replicas: MetricSeries[];
+  lag: MetricSeries[];
 }
 
 export interface LiveSnapshot {
@@ -216,7 +241,7 @@ const TICK_MS = 1000;
 const ANIMATION_TICK_MS = 250;
 const HEALTH_INTERVAL_MS = 60_000;
 const BADGE_INTERVAL_MS = 60_000;
-const VISIBLE_HEIGHT = 20;
+const DEFAULT_VISIBLE_HEIGHT = 20;
 
 // ---------------------------------------------------------------------------
 // Controller
@@ -292,13 +317,25 @@ export class LiveController {
   private prometheus: PrometheusHttpAdapter | null = null;
   private metricsServer: MetricsServerAdapter | null = null;
   private readonly sessions = new SessionBuffer();
+  private promTunnel: SystemTunnel | null = null;
+  private metricsRange = createRangeSelector();
+  private charts: ChartSeries | null = null;
+  private chartsFetchSeq = 0;
 
   private readonly fileSink = new FsFileSink();
   private started = false;
+  private layoutSaveDebounce: (() => void) | null = null;
+  // Active detail tab remembered per resource kind (Spec 01 §4).
+  private tabByKind = new Map<string, TabId>();
 
   // Agent (Spec 07): engine loads lazily in the background after launch.
   private enginePromise: Promise<InferenceEngine> | null = null;
   private agentTimeoutMs = 15_000;
+  private agentModelId: string | undefined;
+
+  // Terminal dimensions (updated by LiveApp on resize)
+  private terminalColumns = 80;
+  private terminalRows = 24;
 
   private pendingG: number | null = null;
   private listeners = new Set<() => void>();
@@ -328,6 +365,70 @@ export class LiveController {
       contexts: this.client.listContexts().map((c) => c.name),
       namespaces: [],
     });
+    this.loadLayout();
+  }
+
+  // -------------------------------------------------------------------------
+  // Layout persistence (Spec 01 §4 — ~/.config/p9r/layout.json)
+  // -------------------------------------------------------------------------
+
+  private layoutPath(): string {
+    return join(homedir(), '.config', 'p9r', 'layout.json');
+  }
+
+  private loadLayout(): void {
+    try {
+      if (!existsSync(this.layoutPath())) {
+        return;
+      }
+      const raw = JSON.parse(readFileSync(this.layoutPath(), 'utf8')) as {
+        sidebarRatio?: number;
+        verticalRatio?: number;
+        collapsedCategories?: string[];
+        tabByKind?: Record<string, TabId>;
+      };
+      this.app = {
+        ...this.app,
+        ...(typeof raw.sidebarRatio === 'number'
+          ? { sidebarRatio: Math.min(0.4, Math.max(0.1, raw.sidebarRatio)) }
+          : {}),
+        ...(typeof raw.verticalRatio === 'number'
+          ? { verticalRatio: Math.min(0.8, Math.max(0.2, raw.verticalRatio)) }
+          : {}),
+        ...(Array.isArray(raw.collapsedCategories)
+          ? { collapsedCategories: new Set(raw.collapsedCategories) }
+          : {}),
+      };
+      for (const [kind, tab] of Object.entries(raw.tabByKind ?? {})) {
+        this.tabByKind.set(kind, tab);
+      }
+    } catch {
+      // Corrupt layout file — start fresh.
+    }
+  }
+
+  private saveLayout(): void {
+    this.layoutSaveDebounce ??= this.clock.setTimeout(() => {
+      this.layoutSaveDebounce = null;
+      try {
+        mkdirSync(join(homedir(), '.config', 'p9r'), { recursive: true });
+        writeFileSync(
+          this.layoutPath(),
+          JSON.stringify(
+            {
+              sidebarRatio: this.app.sidebarRatio,
+              verticalRatio: this.app.verticalRatio,
+              collapsedCategories: [...this.app.collapsedCategories],
+              tabByKind: Object.fromEntries(this.tabByKind),
+            },
+            null,
+            2,
+          ),
+        );
+      } catch {
+        // Persistence is best-effort.
+      }
+    }, 1000);
   }
 
   // -------------------------------------------------------------------------
@@ -385,8 +486,14 @@ export class LiveController {
       .load()
       .then((result) => {
         if (result.ok) {
-          this.agentTimeoutMs =
-            parseConfig(result.value).agentTimeoutSeconds * 1000;
+          const config = parseConfig(result.value);
+          this.agentTimeoutMs = config.agentTimeoutSeconds * 1000;
+          // Spec 07 §11 names the model "gemma-4-E2B-it-onnx"; that sentinel
+          // (and E4B) keeps the adapter default. Anything else (a real HF
+          // model id) is passed through.
+          if (!config.agentModel.startsWith('gemma-4-')) {
+            this.agentModelId = config.agentModel;
+          }
         }
       });
 
@@ -439,23 +546,60 @@ export class LiveController {
       pfManagerOpen: this.pfManagerOpen,
       portPrompt: this.portPrompt,
       agentPaneOpen: this.agentPaneOpen,
-      metrics: { tier: this.metricsTier, capabilities: this.metricsCaps },
+      metrics: {
+        tier: this.metricsTier,
+        capabilities: this.metricsCaps,
+        range: this.metricsRange,
+        charts: this.charts,
+      },
       nowMs: this.clock.now(),
     };
     return this.snapshot;
   };
 
+  setTerminalSize = (columns: number, rows: number): void => {
+    if (columns !== this.terminalColumns || rows !== this.terminalRows) {
+      this.terminalColumns = columns;
+      this.terminalRows = rows;
+      this.bump();
+    }
+  };
+
+  /** Rows available to the resource table (header, table header, command bar). */
+  visibleHeight(): number {
+    const usable = this.terminalRows - 5;
+    if (usable <= 0) {
+      return DEFAULT_VISIBLE_HEIGHT;
+    }
+    return Math.max(
+      3,
+      this.app.showDetail ? Math.floor(usable * 0.45) : usable,
+    );
+  }
+
+  /** Columns available to the resource table. */
+  tableWidth(): number {
+    const sidebar = Math.max(
+      16,
+      Math.round(this.app.sidebarRatio * this.terminalColumns),
+    );
+    return Math.max(60, this.terminalColumns - sidebar - 2);
+  }
+
+  terminalSize(): { columns: number; rows: number } {
+    return { columns: this.terminalColumns, rows: this.terminalRows };
+  }
+
   private appWithIndicators(): AppState {
     const active = this.pf
       .getState()
       .forwards.filter((f) => f.status !== 'failed').length;
-    if (active === 0) {
-      return this.app;
-    }
-    return {
-      ...this.app,
-      hints: [`⇄ ${String(active)}`, ...this.app.hints],
-    };
+    const hints = [
+      `⌖ ${this.app.focus}`,
+      ...(active > 0 ? [`⇄ ${String(active)}`] : []),
+      ...this.app.hints,
+    ];
+    return { ...this.app, hints };
   }
 
   private commandBarText(): string {
@@ -561,6 +705,7 @@ export class LiveController {
     this.store.applyEvent(this.app.context, event);
 
     const kind = event.object.kind ?? event.kind;
+    this.clearKindMarks(kindToLabel(kind));
     const activeKind =
       this.app.activeKind === 'Overview'
         ? null
@@ -648,6 +793,9 @@ export class LiveController {
       if (result.ok) {
         const count =
           result.value.items.length + (result.value.remainingItemCount ?? 0);
+        const forbidden = new Set(this.app.forbiddenKinds);
+        forbidden.delete(label);
+        this.app = { ...this.app, forbiddenKinds: forbidden };
         this.setBadge(label, count, true);
       } else if (result.error.kind === 'forbidden') {
         const forbidden = new Set(this.app.forbiddenKinds);
@@ -656,6 +804,21 @@ export class LiveController {
         this.bump();
       }
     }
+  }
+
+  /** A kind delivered data — clear any stale forbidden/dimmed marks. */
+  private clearKindMarks(label: string): void {
+    if (
+      !this.app.forbiddenKinds.has(label) &&
+      !this.app.dimmedKinds.has(label)
+    ) {
+      return;
+    }
+    const forbidden = new Set(this.app.forbiddenKinds);
+    forbidden.delete(label);
+    const dimmed = new Set(this.app.dimmedKinds);
+    dimmed.delete(label);
+    this.app = { ...this.app, forbiddenKinds: forbidden, dimmedKinds: dimmed };
   }
 
   private onStreamError(kind: string, error: KubeError): void {
@@ -699,19 +862,59 @@ export class LiveController {
       join(homedir(), '.config', 'p9r', 'config.yaml'),
     );
     const msAdapter = new MetricsServerAdapter(this.kc);
-    const result = await discoverMetricsSource({
-      configStore,
-      kubeClient: this.client,
-      makeSource: (url) => new PrometheusHttpAdapter(url),
-      metricsServerSource: msAdapter,
-      getEnv: (name) => process.env[name],
-    });
-    this.metricsTier = result.tier;
-    if (result.tier === 'prometheus' && result.url !== null) {
-      this.prometheus = new PrometheusHttpAdapter(result.url);
-      this.metricsCaps = await detectExporterCapabilities(this.prometheus);
-    } else if (result.tier === 'metrics-server') {
-      this.metricsServer = msAdapter;
+
+    // 1. Explicit Prometheus URL (config override or env) — reachable as-is.
+    const configResult = await configStore.load();
+    const configUrl =
+      configResult.ok &&
+      typeof (configResult.value.prometheus as { url?: unknown } | undefined)
+        ?.url === 'string'
+        ? (configResult.value.prometheus as { url: string }).url
+        : undefined;
+    const explicitUrl = configUrl ?? process.env.PROMETHEUS_URL;
+    if (explicitUrl !== undefined && explicitUrl.length > 0) {
+      const source = new PrometheusHttpAdapter(explicitUrl);
+      const probe = await source.probeSeries('up');
+      if (probe.ok) {
+        await this.usePrometheus(source);
+        return;
+      }
+    }
+
+    // 2. In-cluster Prometheus service — p9r runs on the host, so in-cluster
+    //    URLs need a system port-forward tunnel (Spec 06 §2.2 / Spec 01 OQ-2).
+    const promService = await this.findPrometheusService();
+    if (promService !== null) {
+      const localPort = 39_090;
+      this.promTunnel = new SystemTunnel(new SubprocessRunner(), this.clock, {
+        resource: `service/${promService.name}`,
+        namespace: promService.namespace,
+        remotePort: promService.port,
+        localPort,
+      });
+      this.promTunnel.open();
+      const active = await this.awaitTunnel(this.promTunnel, 15_000);
+      if (active) {
+        const source = new PrometheusHttpAdapter(
+          `http://127.0.0.1:${String(localPort)}`,
+        );
+        const probe = await source.probeSeries('up');
+        if (probe.ok) {
+          await this.usePrometheus(source);
+          // metrics-server still feeds the session buffer for sparkline
+          // columns and the dashboard overview.
+          this.startMetricsServerPolling(msAdapter);
+          return;
+        }
+      }
+      this.promTunnel.close();
+      this.promTunnel = null;
+    }
+
+    // 3. metrics-server fallback
+    const msProbe = await msAdapter.probeSeries('up');
+    if (msProbe.ok) {
+      this.metricsTier = 'metrics-server';
       // Under metrics-server, CPU/memory charts render from the session
       // buffer; the cadvisor capability gates exactly those charts.
       this.metricsCaps = {
@@ -720,20 +923,110 @@ export class LiveController {
         kafkaExporter: false,
         strimziJmx: false,
       };
-      void this.pollMetricsServer();
-      this.cancels.push(
-        this.clock.setInterval(() => {
-          void this.pollMetricsServer();
-        }, 30_000),
-      );
+      this.startMetricsServerPolling(msAdapter);
+    } else {
+      this.metricsTier = 'none';
     }
-    // Refresh table columns so sparklines appear for the active kind.
+    this.refreshMetricsColumns();
+    this.bump();
+  }
+
+  private async usePrometheus(source: PrometheusHttpAdapter): Promise<void> {
+    this.prometheus = source;
+    this.metricsTier = 'prometheus';
+    this.metricsCaps = await detectExporterCapabilities(source);
+    this.refreshMetricsColumns();
+    this.bump();
+  }
+
+  private startMetricsServerPolling(msAdapter: MetricsServerAdapter): void {
+    this.metricsServer = msAdapter;
+    void this.pollMetricsServer();
+    this.cancels.push(
+      this.clock.setInterval(() => {
+        void this.pollMetricsServer();
+      }, 30_000),
+    );
+  }
+
+  private refreshMetricsColumns(): void {
     if (this.app.activeKind !== 'Overview') {
       this.columns = this.columnsForKind(
         labelToKind(this.app.activeKind) ?? '',
       );
     }
-    this.bump();
+  }
+
+  /** Find a Prometheus service to tunnel to (standard names, then labels). */
+  private async findPrometheusService(): Promise<{
+    name: string;
+    namespace: string;
+    port: number;
+  } | null> {
+    const services = await this.client.list('Service', {});
+    if (!services.ok) {
+      return null;
+    }
+    const standardNames = new Set([
+      'prometheus-operated',
+      'prometheus',
+      'prometheus-server',
+    ]);
+    interface SvcRaw {
+      metadata?: {
+        name?: string;
+        namespace?: string;
+        labels?: Record<string, string>;
+      };
+      spec?: { ports?: { port?: number }[] };
+    }
+    const items = services.value.items as SvcRaw[];
+    const byName = items.find((svc) =>
+      standardNames.has(svc.metadata?.name ?? ''),
+    );
+    const byLabel = items.find(
+      (svc) =>
+        svc.metadata?.labels?.app === 'prometheus' ||
+        svc.metadata?.labels?.['app.kubernetes.io/name'] === 'prometheus',
+    );
+    const found = byName ?? byLabel;
+    if (found?.metadata?.name === undefined) {
+      return null;
+    }
+    return {
+      name: found.metadata.name,
+      namespace: found.metadata.namespace ?? 'default',
+      port: found.spec?.ports?.[0]?.port ?? 9090,
+    };
+  }
+
+  private awaitTunnel(
+    tunnel: SystemTunnel,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      const cancel = this.clock.setTimeout(() => {
+        off();
+        resolve(tunnel.getState().status === 'active');
+      }, timeoutMs);
+      const off = tunnel.onChange(() => {
+        const status = tunnel.getState().status;
+        if (status === 'active') {
+          cancel();
+          off();
+          // Give kubectl a beat to actually accept connections.
+          this.cancels.push(
+            this.clock.setTimeout(() => {
+              resolve(true);
+            }, 500),
+          );
+        } else if (status === 'failed' || status === 'closed') {
+          cancel();
+          off();
+          resolve(false);
+        }
+      });
+    });
   }
 
   private async pollMetricsServer(): Promise<void> {
@@ -771,6 +1064,120 @@ export class LiveController {
       }
     }
     this.bump();
+  }
+
+  // -------------------------------------------------------------------------
+  // Prometheus chart queries (Spec 06 §4)
+  // -------------------------------------------------------------------------
+
+  setMetricsRange = (label: RangeLabel): void => {
+    this.metricsRange = selectRange(this.metricsRange, label);
+    void this.fetchCharts();
+    this.bump();
+  };
+
+  /** PromQL per chart for the selected resource (Spec 06 §4.3). */
+  private chartQueries(
+    resource: ResourceObject,
+  ): Partial<Record<keyof Omit<ChartSeries, 'uid'>, string>> {
+    const ns = resource.namespace ?? '';
+    const name = resource.name;
+    const podsOf = `{namespace="${ns}",pod=~"${name}-.*",container!="",image!=""}`;
+    switch (resource.kind) {
+      case 'Pod': {
+        const sel = `{namespace="${ns}",pod="${name}",container!="",image!=""}`;
+        const podSel = `{namespace="${ns}",pod="${name}"}`;
+        return {
+          cpu: `sum(rate(container_cpu_usage_seconds_total${sel}[2m])) * 1000`,
+          memory: `sum(container_memory_working_set_bytes${sel})`,
+          networkIn: `sum(rate(container_network_receive_bytes_total${podSel}[2m]))`,
+          networkOut: `sum(rate(container_network_transmit_bytes_total${podSel}[2m]))`,
+          ...(this.metricsCaps.kubeStateMetrics
+            ? {
+                restarts: `sum(kube_pod_container_status_restarts_total${podSel})`,
+              }
+            : {}),
+        };
+      }
+      case 'Node': {
+        const sel = `{id="/",node="${name}"}`;
+        return {
+          cpu: `100 * sum(rate(container_cpu_usage_seconds_total${sel}[2m])) / sum(machine_cpu_cores{node="${name}"})`,
+          memory: `100 * sum(container_memory_working_set_bytes${sel}) / sum(machine_memory_bytes{node="${name}"})`,
+        };
+      }
+      case 'Deployment':
+      case 'StatefulSet': {
+        const ksmKind =
+          resource.kind === 'Deployment' ? 'deployment' : 'statefulset';
+        return {
+          cpu: `sum(rate(container_cpu_usage_seconds_total${podsOf}[2m])) * 1000`,
+          memory: `sum(container_memory_working_set_bytes${podsOf})`,
+          ...(this.metricsCaps.kubeStateMetrics
+            ? {
+                replicas: `kube_${ksmKind}_status_replicas{namespace="${ns}",${ksmKind}="${name}"}`,
+              }
+            : {}),
+        };
+      }
+      case 'KafkaTopic':
+        return this.metricsCaps.kafkaExporter
+          ? {
+              lag: `sum by (consumergroup) (kafka_consumergroup_lag{topic="${name}"})`,
+            }
+          : {};
+      default:
+        return {};
+    }
+  }
+
+  private async fetchCharts(): Promise<void> {
+    const prom = this.prometheus;
+    const resource = this.detail?.resource;
+    if (
+      prom === null ||
+      resource === undefined ||
+      this.detail?.tab !== 'metrics'
+    ) {
+      return;
+    }
+    const seq = ++this.chartsFetchSeq;
+    const now = this.clock.now();
+    const durationMs = rangeDurationMs(this.metricsRange.selected);
+    const range = {
+      startMs: rangeStartMs(this.metricsRange, now),
+      endMs: now,
+      stepSeconds: Math.max(15, Math.round(durationMs / 1000 / 120)),
+    };
+    const queries = this.chartQueries(resource);
+    const result: ChartSeries = {
+      uid: resource.uid,
+      cpu: [],
+      memory: [],
+      networkIn: [],
+      networkOut: [],
+      restarts: [],
+      replicas: [],
+      lag: [],
+    };
+    await Promise.all(
+      (
+        Object.entries(queries) as [keyof Omit<ChartSeries, 'uid'>, string][]
+      ).map(async ([key, promql]) => {
+        const r = await prom.queryRange(promql, range);
+        if (r.ok) {
+          result[key] = r.value;
+        }
+      }),
+    );
+    this.applyCharts(seq, resource.uid, result);
+  }
+
+  private applyCharts(seq: number, uid: string, result: ChartSeries): void {
+    if (seq === this.chartsFetchSeq && this.detail?.uid === uid) {
+      this.charts = result;
+      this.bump();
+    }
   }
 
   /** Columns for a kind, with CPU/Memory sparklines when metrics flow. */
@@ -1080,6 +1487,7 @@ export class LiveController {
       collapsed.add(cat);
     }
     this.app = { ...this.app, collapsedCategories: collapsed };
+    this.saveLayout();
     this.bump();
   };
 
@@ -1109,8 +1517,13 @@ export class LiveController {
   setDetailTab = (tab: TabId): void => {
     if (this.detail !== null) {
       this.detail = { ...this.detail, tab };
+      this.tabByKind.set(this.detail.resource.kind, tab);
+      this.saveLayout();
       if (tab === 'logs' && this.detail.resource.kind === 'Pod') {
         this.initLogs(this.detail.resource);
+      }
+      if (tab === 'metrics') {
+        void this.fetchCharts();
       }
       this.bump();
     }
@@ -1119,6 +1532,7 @@ export class LiveController {
   closeDetail = (): void => {
     this.detail = null;
     this.agentPaneOpen = false;
+    this.charts = null;
     this.stopLogs();
     this.app = { ...this.app, showDetail: false, focus: 'list' };
     this.bump();
@@ -1225,10 +1639,14 @@ export class LiveController {
   // -------------------------------------------------------------------------
 
   private openDetail(resource: ResourceObject, tab: TabId): void {
+    // Re-open on the kind's last-used tab when entering via plain Enter.
+    const remembered =
+      tab === 'overview' ? this.tabByKind.get(resource.kind) : undefined;
+    const effectiveTab = remembered ?? tab;
     this.detail = {
       uid: resource.uid,
       resource,
-      tab,
+      tab: effectiveTab,
       events: [],
       warningCount: 0,
       showAllEvents: false,
@@ -1239,6 +1657,10 @@ export class LiveController {
     } else {
       this.stopLogs();
     }
+    if (tab === 'metrics') {
+      void this.fetchCharts();
+    }
+    this.charts = null;
     this.app = { ...this.app, showDetail: true, focus: 'detail' };
     void this.fetchDetailEvents();
     this.bump();
@@ -1299,15 +1721,19 @@ export class LiveController {
   }
 
   private copyNameToClipboard(resource: ResourceObject): void {
-    if (process.platform === 'darwin') {
-      try {
+    try {
+      if (process.platform === 'darwin') {
         const child = spawn('pbcopy');
         child.stdin.write(resource.name);
         child.stdin.end();
-        this.setHints([`✓ Copied ${resource.name}`]);
-      } catch {
-        // Clipboard unavailable — non-fatal.
+      } else {
+        // OSC-52: terminal-native clipboard, works over ssh/tmux too.
+        const b64 = Buffer.from(resource.name).toString('base64');
+        process.stdout.write(`\x1b]52;c;${b64}\x07`);
       }
+      this.setHints([`✓ Copied ${resource.name}`]);
+    } catch {
+      // Clipboard unavailable — non-fatal.
     }
   }
 
@@ -1403,19 +1829,27 @@ export class LiveController {
 
   /** Resolve the local inference engine, loading it on first use. */
   private ensureEngine(): Promise<InferenceEngine> {
-    this.enginePromise ??= TransformersInferenceEngine.create();
+    this.enginePromise ??= TransformersInferenceEngine.create(
+      this.agentModelId,
+    );
     return this.enginePromise;
   }
 
   /**
-   * Tool subset exposed to the model. Each tool schema costs ~100 prompt
-   * tokens per round and any tool round-trip doubles the rounds — on this
-   * hardware (8GB, WebGPU at ~1-6 tok/s) that busts the 15s budget, so the
-   * model answers from the cluster summary in the system prompt instead.
-   * On faster hardware, widen this set (the dispatcher supports the full
-   * catalog and is exercised by the BDD suite).
+   * Tool subset exposed to the model when tool-calling is enabled. Each tool
+   * schema costs ~100 prompt tokens per round and a tool round-trip doubles
+   * the rounds, so tools are enabled adaptively: only when the model's chat
+   * template supports them AND the measured warmup round is fast enough for
+   * a two-round exchange to fit the configured timeout.
    */
-  private static readonly AGENT_TOOLS = new Set<string>([]);
+  private static readonly AGENT_TOOLS = new Set<string>([
+    'list_resources',
+    'count_resources',
+    'get_pod_detail',
+    'find_erroring_pods',
+  ]);
+
+  private toolsEnabled = false;
 
   /**
    * Preload the engine in the background and run a tiny warmup generation so
@@ -1439,15 +1873,26 @@ export class LiveController {
         if (process.env.P9R_DEBUG !== undefined) {
           process.stderr.write('[engine] loaded\n');
         }
-        return engine.generate({
-          messages: [{ role: 'user', content: 'Reply with the word ok.' }],
-          tools: [],
-          thinking: false,
-        });
+        const warmupStart = this.clock.now();
+        return engine
+          .generate({
+            messages: [{ role: 'user', content: 'Reply with the word ok.' }],
+            tools: [],
+            thinking: false,
+          })
+          .then(() => this.clock.now() - warmupStart);
       })
-      .then(() => {
+      .then((warmupMs) => {
+        // Enable tool-calling only when a two-round exchange plausibly fits
+        // the timeout: the warmup is a tiny prompt, a real round costs
+        // roughly 10x it, and tools double the rounds.
+        this.toolsEnabled =
+          modelSupportsTools(this.agentModelId) &&
+          warmupMs * 20 < this.agentTimeoutMs;
         if (process.env.P9R_DEBUG !== undefined) {
-          process.stderr.write('[engine] warmup done\n');
+          process.stderr.write(
+            `[engine] warmup ${String(warmupMs)}ms tools=${String(this.toolsEnabled)}\n`,
+          );
         }
       })
       .catch((e: unknown) => {
@@ -1530,9 +1975,11 @@ export class LiveController {
       onToolCall: (toolName, params) => {
         this.setHints([`> ${humanizeToolCall(toolName, params)}`]);
       },
-      tools: buildToolDefinitions().filter((tool) =>
-        LiveController.AGENT_TOOLS.has(tool.name),
-      ),
+      tools: this.toolsEnabled
+        ? buildToolDefinitions().filter((tool) =>
+            LiveController.AGENT_TOOLS.has(tool.name),
+          )
+        : [],
       timeoutMs: this.agentTimeoutMs,
     });
 
@@ -2032,6 +2479,15 @@ export class LiveController {
   // -------------------------------------------------------------------------
 
   handleInput(input: string, key: InkKey): void {
+    // Terminals can deliver rapid keystrokes as one chunk ("jj"); split so
+    // navigation handlers see single keypresses. Text-entry handlers append
+    // per character, which is equivalent to appending the chunk.
+    if (input.length > 1 && !key.ctrl && !key.meta && !key.return) {
+      for (const ch of input) {
+        this.handleInput(ch, key);
+      }
+      return;
+    }
     // Ctrl+C is handled by Ink's exitOnCtrlC; q routing below.
     if (this.confirm !== null) {
       // ConfirmDialog's own useInput handles selection.
@@ -2134,6 +2590,27 @@ export class LiveController {
       } else {
         this.seedTable(this.app.activeKind);
       }
+      this.bump();
+      return;
+    }
+    // Pane resize (Spec 02 §6.1): Alt+Up/Down (meta in Ink) or +/- adjust the
+    // list/detail split while the detail pane is open.
+    if (
+      this.app.showDetail &&
+      ((key.meta && key.upArrow) ||
+        input === '+' ||
+        (key.meta && key.downArrow) ||
+        input === '-')
+    ) {
+      const grow = (key.meta && key.downArrow) || input === '-' ? -0.05 : 0.05;
+      this.app = {
+        ...this.app,
+        verticalRatio: Math.min(
+          0.8,
+          Math.max(0.2, this.app.verticalRatio + grow),
+        ),
+      };
+      this.saveLayout();
       this.bump();
       return;
     }
@@ -2318,6 +2795,14 @@ export class LiveController {
         !this.app.collapsedCategories.has(entry.id)
       ) {
         this.toggleCategory(entry.id);
+      } else if (entry.type === 'leaf') {
+        const parent = SIDEBAR_CATEGORIES.find((cat) =>
+          cat.children.some((leaf) => leaf.resourceKind === entry.resourceKind),
+        );
+        if (parent !== undefined) {
+          this.cursorKind = parent.id;
+          this.bump();
+        }
       }
       return;
     }
@@ -2354,6 +2839,14 @@ export class LiveController {
       this.bump();
       return;
     }
+    if (key.leftArrow) {
+      this.setFocus('sidebar');
+      return;
+    }
+    if (key.rightArrow && this.app.showDetail) {
+      this.setFocus('detail');
+      return;
+    }
     if (input === 'g') {
       const now = this.clock.now();
       if (this.pendingG !== null && now - this.pendingG < GG_WINDOW_MS) {
@@ -2374,7 +2867,7 @@ export class LiveController {
     }
     if (key.ctrl && input === 'f') {
       this.selectedIndex = Math.min(
-        this.selectedIndex + VISIBLE_HEIGHT,
+        this.selectedIndex + this.visibleHeight(),
         Math.max(0, rows.length - 1),
       );
       this.ensureVisible();
@@ -2382,7 +2875,10 @@ export class LiveController {
       return;
     }
     if (key.ctrl && input === 'b') {
-      this.selectedIndex = Math.max(this.selectedIndex - VISIBLE_HEIGHT, 0);
+      this.selectedIndex = Math.max(
+        this.selectedIndex - this.visibleHeight(),
+        0,
+      );
       this.ensureVisible();
       this.bump();
       return;
@@ -2429,10 +2925,10 @@ export class LiveController {
     const offset = this.table.scrollOffset;
     if (this.selectedIndex < offset) {
       this.table = scrollUp(this.table, offset - this.selectedIndex);
-    } else if (this.selectedIndex >= offset + VISIBLE_HEIGHT) {
+    } else if (this.selectedIndex >= offset + this.visibleHeight()) {
       this.table = scrollDown(
         this.table,
-        this.selectedIndex - (offset + VISIBLE_HEIGHT) + 1,
+        this.selectedIndex - (offset + this.visibleHeight()) + 1,
       );
     }
   }
@@ -2447,6 +2943,22 @@ export class LiveController {
     }
     if (key.escape) {
       this.closeDetail();
+      return;
+    }
+    if (key.leftArrow) {
+      this.setFocus('list');
+      return;
+    }
+    if (this.detail?.tab === 'metrics' && (input === '[' || input === ']')) {
+      const options = this.metricsRange.options;
+      const idx = options.indexOf(this.metricsRange.selected);
+      const next =
+        options[
+          (idx + (input === ']' ? 1 : options.length - 1)) % options.length
+        ];
+      if (next !== undefined) {
+        this.setMetricsRange(next);
+      }
       return;
     }
     if (input === 'q') {

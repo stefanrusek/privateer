@@ -19,6 +19,7 @@ import type { MetricSeries } from '../../boundaries/metrics-source.js';
 import type { MetricsTier } from '../../metrics/discovery.js';
 import { createRangeSelector, selectRange } from '../../charts/range.js';
 import type { RangeLabel, RangeSelectorModel } from '../../charts/range.js';
+import { renderTimeseriesChart } from '../../charts/timeseries.js';
 import { computeTrendIndicator } from '../../charts/timeseries.js';
 
 // ---------------------------------------------------------------------------
@@ -105,24 +106,36 @@ interface ChartPlaceholderProps {
   readonly series: readonly MetricSeries[];
 }
 
+/** Width of rendered charts (Spec 06 §4.2 — fills the pane). */
+const CHART_WIDTH = 64;
+
 function ChartPlaceholder({
   title,
   series,
 }: ChartPlaceholderProps): React.ReactElement {
-  // Render a simple ASCII sparkline summary for the chart
   const firstSeries = series[0];
   const pointCount = firstSeries !== undefined ? firstSeries.points.length : 0;
   const hasData = series.length > 0 && pointCount > 0;
+  if (!hasData) {
+    return (
+      <Box flexDirection="column" marginBottom={1}>
+        <Text bold>{title}</Text>
+        <Text dimColor>No data</Text>
+      </Box>
+    );
+  }
+  const chart = renderTimeseriesChart({
+    series,
+    width: CHART_WIDTH,
+  });
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Text bold>{title}</Text>
-      {hasData ? (
-        <Text dimColor>
-          {series.length} series, {pointCount} points
+      {chart.lines.map((line, i) => (
+        <Text key={i} color="green">
+          {line}
         </Text>
-      ) : (
-        <Text dimColor>No data</Text>
-      )}
+      ))}
     </Box>
   );
 }

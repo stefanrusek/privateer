@@ -193,3 +193,96 @@ describe('Sidebar', () => {
     expect(lastFrame()).toBe(baseline.lastFrame());
   });
 });
+
+describe('Sidebar viewport windowing', () => {
+  // With all categories expanded: 1 Overview + 8 headers + 27 leaves = 36 rows.
+
+  function frameLines(frame: string | undefined): string[] {
+    return (frame ?? '').split('\n');
+  }
+
+  it('renders identically to the unwindowed sidebar when rows fit', () => {
+    const props = { ...defaultProps, viewportHeight: 100 };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    const baseline = render(React.createElement(Sidebar, defaultProps));
+    expect(lastFrame()).toBe(baseline.lastFrame());
+    expect(lastFrame()).not.toContain('↑ …');
+    expect(lastFrame()).not.toContain('↓ …');
+  });
+
+  it('clips the bottom when the cursor is at the top', () => {
+    const props = {
+      ...defaultProps,
+      cursorKind: 'Overview',
+      viewportHeight: 10,
+    };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Overview');
+    expect(frame).not.toContain('↑ …');
+    expect(frame).toContain('↓ …');
+    expect(frame).not.toContain('Custom Resources');
+    expect(frameLines(frame).length).toBeLessThanOrEqual(10);
+  });
+
+  it('falls back to the top window when cursorKind matches no row', () => {
+    const props = { ...defaultProps, cursorKind: null, viewportHeight: 10 };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    const baseline = render(
+      React.createElement(Sidebar, {
+        ...defaultProps,
+        cursorKind: 'Overview',
+        viewportHeight: 10,
+      }),
+    );
+    // cursorKind null highlights nothing, but the window position matches
+    // the cursor-at-row-0 window aside from the Overview row styling.
+    expect(lastFrame()).toContain('Overview');
+    expect(lastFrame()).not.toContain('↑ …');
+    expect(lastFrame()).toContain('↓ …');
+    expect(frameLines(lastFrame()).length).toBe(
+      frameLines(baseline.lastFrame()).length,
+    );
+  });
+
+  it('clips both ends when the cursor is in the middle', () => {
+    // 'Secrets' is row index 16 of 36; window of 8 rows centers on it.
+    const props = {
+      ...defaultProps,
+      cursorKind: 'Secrets',
+      viewportHeight: 10,
+    };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Secrets');
+    expect(frame).toContain('↑ …');
+    expect(frame).toContain('↓ …');
+    expect(frame).not.toContain('Overview');
+    expect(frameLines(frame).length).toBeLessThanOrEqual(10);
+  });
+
+  it('clips the top when the cursor is at the bottom', () => {
+    const props = {
+      ...defaultProps,
+      cursorKind: 'CustomResourceDefinitions',
+      viewportHeight: 10,
+    };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('CustomResourceDefinitions');
+    expect(frame).toContain('↑ …');
+    expect(frame).not.toContain('↓ …');
+    expect(frame).not.toContain('Overview');
+    expect(frameLines(frame).length).toBeLessThanOrEqual(10);
+  });
+
+  it('keeps a category-header cursor row inside the window', () => {
+    const props = { ...defaultProps, cursorKind: 'storage', viewportHeight: 7 };
+    const { lastFrame } = render(React.createElement(Sidebar, props));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Storage');
+    expect(frame).toContain('↑ …');
+    expect(frame).toContain('↓ …');
+    expect(frameLines(frame).length).toBeLessThanOrEqual(7);
+  });
+});

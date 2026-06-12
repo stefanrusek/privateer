@@ -26,6 +26,10 @@ export interface ResourceTableProps {
   onPageUp: () => void;
   /** Absolute index (into the full sorted/filtered row list) of the selected row. */
   selectedIndex?: number;
+  /** When false, the selected row renders bold instead of inverse. Default true. */
+  focused?: boolean;
+  /** Total table width in columns used to resolve percentage widths. Default 120. */
+  totalWidth?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,15 +141,21 @@ function rowColor(row: TableRow): InkColor | undefined {
 // Main component
 // ---------------------------------------------------------------------------
 
-const TOTAL_WIDTH = 120;
-
 export function ResourceTable(props: ResourceTableProps): React.ReactElement {
-  const { model, columns, visibleHeight, nowMs, namespace, selectedIndex } =
-    props;
+  const {
+    model,
+    columns,
+    visibleHeight,
+    nowMs,
+    namespace,
+    selectedIndex,
+    focused = true,
+    totalWidth = 120,
+  } = props;
 
   const colsWithWidths = columns.map((col) => ({
     col,
-    width: resolveWidth(col.width, TOTAL_WIDTH),
+    width: resolveWidth(col.width, totalWidth),
   }));
 
   // Empty/error/loading states
@@ -226,11 +236,17 @@ export function ResourceTable(props: ResourceTableProps): React.ReactElement {
     return (
       <Box key={row.resource.uid} flexDirection="row">
         {isSelected
-          ? cells.map((cell, ci) => (
-              <Text key={String(ci)} inverse>
-                {cell}
-              </Text>
-            ))
+          ? cells.map((cell, ci) =>
+              focused ? (
+                <Text key={String(ci)} inverse>
+                  {cell}
+                </Text>
+              ) : (
+                <Text key={String(ci)} bold>
+                  {cell}
+                </Text>
+              ),
+            )
           : isDimmed
             ? cells.map((cell, ci) => (
                 <Text key={String(ci)} dimColor>

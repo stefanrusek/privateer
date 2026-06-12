@@ -9,6 +9,7 @@ import {
 } from './ConfirmDialog.js';
 import type { ConfirmSelection } from './ConfirmDialog.js';
 import type { Key } from 'ink';
+import { safeWrite } from '../../../test/ink-stdin.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,13 +45,6 @@ const defaultProps = {
   onConfirm: noop,
   onCancel: noop,
 };
-
-/** Yield to the macrotask queue so ink's useEffect can attach stdin listeners. */
-function yieldToEventLoop(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 // ---------------------------------------------------------------------------
 // confirmDialogKeyAction — pure key-to-action mapping
@@ -332,9 +326,9 @@ describe('ConfirmDialog default selection', () => {
 });
 
 // ---------------------------------------------------------------------------
-// useInput integration — exercises the component's useInput callback body
-// (lines 102-103) by yielding to the event loop with setImmediate so that
-// ink's useEffect can register its stdin listener before we write to stdin.
+// useInput integration — exercises the component's useInput callback body.
+// safeWrite waits for Ink's stdin 'readable' subscription before each write
+// so keystrokes are never dropped while effects are still pending.
 // ---------------------------------------------------------------------------
 
 describe('ConfirmDialog useInput integration', () => {
@@ -348,9 +342,7 @@ describe('ConfirmDialog useInput integration', () => {
         onCancel,
       }),
     );
-    // Yield so useInput's useEffect attaches the stdin listener.
-    await yieldToEventLoop();
-    stdin.write('\r');
+    await safeWrite(stdin, '\r');
     expect(onCancel).toHaveBeenCalledOnce();
     expect(onConfirm).not.toHaveBeenCalled();
   });
@@ -365,13 +357,11 @@ describe('ConfirmDialog useInput integration', () => {
         onCancel,
       }),
     );
-    // Yield once to register stdin listener.
-    await yieldToEventLoop();
-    // ESC + [C = right arrow; triggers setSelection('confirm')
-    stdin.write('\x1B[C');
-    // Yield again to let React process the state update before writing Enter.
-    await yieldToEventLoop();
-    stdin.write('\r');
+    // ESC + [C = right arrow; triggers setSelection('confirm'). safeWrite
+    // yields after the write so React commits the state update (and the
+    // refreshed useInput handler) before Enter is written.
+    await safeWrite(stdin, '\x1B[C');
+    await safeWrite(stdin, '\r');
     expect(onConfirm).toHaveBeenCalledOnce();
     expect(onCancel).not.toHaveBeenCalled();
   });

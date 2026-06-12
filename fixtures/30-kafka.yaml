@@ -6,7 +6,7 @@
 #
 # Requires the Strimzi operator, which scripts/fixtures.sh installs from the
 # pinned release manifest before applying this file.
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaNodePool
 metadata:
   name: dual-role
@@ -20,15 +20,21 @@ spec:
     - broker
   storage:
     type: ephemeral
+  resources:
+    requests:
+      memory: 384Mi
+      cpu: 100m
+    limits:
+      memory: 640Mi
+  jvmOptions:
+    -Xms: 256m
+    -Xmx: 256m
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: Kafka
 metadata:
   name: fixture
   namespace: kafka
-  annotations:
-    strimzi.io/kraft: enabled
-    strimzi.io/node-pools: enabled
 spec:
   kafka:
     listeners:
@@ -42,15 +48,6 @@ spec:
       transaction.state.log.min.isr: 1
       default.replication.factor: 1
       min.insync.replicas: 1
-    resources:
-      requests:
-        memory: 384Mi
-        cpu: 100m
-      limits:
-        memory: 640Mi
-    jvmOptions:
-      -Xms: 256m
-      -Xmx: 256m
   entityOperator:
     topicOperator:
       resources:
@@ -67,7 +64,7 @@ spec:
       limits:
         memory: 128Mi
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: orders

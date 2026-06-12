@@ -33,6 +33,22 @@ export function LiveApp({
     controller.start();
   }, [controller]);
 
+  // Track terminal size so panes scroll instead of overflowing.
+  useEffect(() => {
+    const update = (): void => {
+      const { columns, rows } = process.stdout as {
+        columns?: number;
+        rows?: number;
+      };
+      controller.setTerminalSize(columns ?? 80, rows ?? 24);
+    };
+    update();
+    process.stdout.on('resize', update);
+    return () => {
+      process.stdout.off('resize', update);
+    };
+  }, [controller]);
+
   useInput((input, key) => {
     controller.handleInput(input, key);
   });
@@ -88,7 +104,9 @@ export function LiveApp({
       <ResourceTable
         model={table}
         columns={columns}
-        visibleHeight={20}
+        visibleHeight={controller.visibleHeight()}
+        totalWidth={controller.tableWidth()}
+        focused={app.focus === 'list'}
         nowMs={snapshot.nowMs}
         namespace={app.namespace === '' ? 'all namespaces' : app.namespace}
         selectedIndex={selectedIndex}
@@ -155,15 +173,28 @@ export function LiveApp({
         );
       }
       case 'metrics': {
-        const series = controller.sessionSeries(detail.resource);
+        const m = snapshot.metrics;
+        const charts =
+          m.tier === 'prometheus' && m.charts?.uid === detail.resource.uid
+            ? m.charts
+            : null;
+        const session =
+          charts === null ? controller.sessionSeries(detail.resource) : null;
         return (
           <MetricsTab
             resourceKind={detail.resource.kind}
             resourceName={detail.resource.name}
-            tier={snapshot.metrics.tier}
-            capabilities={snapshot.metrics.capabilities}
-            cpuSeries={series.cpu}
-            memorySeries={series.memory}
+            tier={m.tier}
+            capabilities={m.capabilities}
+            cpuSeries={charts?.cpu ?? session?.cpu ?? []}
+            memorySeries={charts?.memory ?? session?.memory ?? []}
+            networkInSeries={charts?.networkIn ?? []}
+            networkOutSeries={charts?.networkOut ?? []}
+            restartSeries={charts?.restarts ?? []}
+            replicaSeries={charts?.replicas ?? []}
+            lagSeries={charts?.lag ?? []}
+            rangeModel={m.range}
+            onRangeChange={controller.setMetricsRange}
           />
         );
       }
@@ -197,7 +228,7 @@ export function LiveApp({
         resource={detail.resource}
         activeTab={detail.tab}
         warningCount={detail.warningCount}
-        hasPrometheus={false}
+        hasPrometheus={snapshot.metrics.tier === 'prometheus'}
         focused={app.focus === 'detail'}
         onClose={controller.closeDetail}
         onTabChange={controller.setDetailTab}
@@ -206,27 +237,19 @@ export function LiveApp({
     );
   };
 
-  return (
-    <Box flexDirection="column">
-      <AppRoot
-        state={app}
-        callbacks={callbacks}
-        contextFilter={controller.getContextFilter()}
-        cursorKind={snapshot.cursorKind}
-        inputText={snapshot.inputText}
-        renderList={renderList}
-        renderDetail={renderDetail}
-      />
-      {confirm !== null && (
-        <ConfirmDialog
-          message={confirm.message}
-          confirmLabel={confirm.confirmLabel}
-          destructive={confirm.destructive}
-          onConfirm={controller.confirmAccept}
-          onCancel={controller.confirmCancel}
-        />
-      )}
-      {snapshot.pfManagerOpen && (
+  const termSize = controller.terminalSize();
+  const rows = termSize.rows;
+  const termCols = termSize.columns;
+  const contentRows = Math.max(8, rows - 3);
+  // verticalRatio is the detail pane's share of the split (Spec 02 §6.1).
+  const listRows = app.showDetail
+    ? Math.max(4, Math.round(contentRows * (1 - app.verticalRatio)))
+    : contentRows;
+  const detailRows = Math.max(4, contentRows - listRows);
+
+  if (snapshot.pfManagerOpen) {
+    return (
+      <Box height={rows} width={termCols} overflow="hidden">
         <PortForwardManager
           forwards={snapshot.portForwards.forwards}
           recents={snapshot.portForwards.recents}
@@ -235,7 +258,48 @@ export function LiveApp({
           onNewForward={() => undefined}
           onClose={() => undefined}
         />
-      )}
+      </Box>
+    );
+  }
+
+  return (
+    <Box
+      height={rows}
+      width={termCols}
+      overflow="hidden"
+      flexDirection="column"
+    >
+      <AppRoot
+        state={app}
+        callbacks={callbacks}
+        terminalSize={controller.terminalSize()}
+        contextFilter={controller.getContextFilter()}
+        cursorKind={snapshot.cursorKind}
+        inputText={snapshot.inputText}
+        renderList={() => (
+          <Box height={listRows} overflow="hidden" flexDirection="column">
+            {renderList()}
+          </Box>
+        )}
+        renderDetail={() => (
+          <Box height={detailRows} overflow="hidden" flexDirection="column">
+            {renderDetail()}
+          </Box>
+        )}
+        {...(confirm !== null
+          ? {
+              commandBarContent: (
+                <ConfirmDialog
+                  message={confirm.message}
+                  confirmLabel={confirm.confirmLabel}
+                  destructive={confirm.destructive}
+                  onConfirm={controller.confirmAccept}
+                  onCancel={controller.confirmCancel}
+                />
+              ),
+            }
+          : {})}
+      />
     </Box>
   );
 }

@@ -5,6 +5,7 @@ import { YamlTab } from './YamlTab.js';
 import { FakeKubeClient } from '../../boundaries/kube-client.fake.js';
 import { FakeClock } from '../../boundaries/clock.fake.js';
 import type { KubernetesObject } from '../../core/types.js';
+import { safeWrite, tick } from '../../../test/ink-stdin.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,14 +42,27 @@ function noop(): void {
   return;
 }
 
-/** Yield to the event loop so Ink can process state updates. */
-async function tick(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+/**
+ * Press a key repeatedly-safely: write once (via safeWrite, which waits for
+ * Ink's stdin subscription), then poll the frame until the predicate holds
+ * (Ink's useInput subscription can lag under host load — Spec 08 §8
+ * flaky-test policy).
+ */
+async function pressUntil(
+  stdin: { write: (s: string) => void },
+  input: string,
+  frame: () => string,
+  predicate: (frame: string) => boolean,
+): Promise<void> {
+  await safeWrite(stdin, input);
+  for (let i = 0; i < 200 && !predicate(frame()); i++) {
+    await tick();
+    if (i % 50 === 49 && !predicate(frame())) {
+      stdin.write(input);
+    }
+  }
 }
 
-/** Yield multiple times to allow async actions to complete. */
 async function ticks(n = 3): Promise<void> {
   for (let i = 0; i < n; i++) {
     await tick();
@@ -185,8 +199,12 @@ describe('YamlTab secret redaction', () => {
     await tick();
     // Initially redacted
     expect(lastFrame()).toContain('[redacted]');
-    stdin.write('v'); // reveal
-    await tick();
+    await pressUntil(
+      stdin,
+      'v',
+      () => lastFrame() ?? '',
+      (frame) => frame.includes('c2VjcmV0'),
+    );
     // After revealing, should show actual base64 value
     const frame = lastFrame() ?? '';
     expect(frame).toContain('c2VjcmV0');
@@ -211,8 +229,7 @@ describe('YamlTab edit mode', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e');
+    await safeWrite(stdin, 'e');
     expect(lastFrame()).toContain('EDITING');
   });
 
@@ -228,8 +245,7 @@ describe('YamlTab edit mode', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e');
+    await safeWrite(stdin, 'e');
     expect(lastFrame()).toContain('Ctrl+S');
   });
 
@@ -245,11 +261,8 @@ describe('YamlTab edit mode', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e');
-    await tick();
-    stdin.write('\x1B'); // Escape
-    await tick();
+    await safeWrite(stdin, 'e');
+    await safeWrite(stdin, '\x1B'); // Escape
     // Since buffer isn't dirty (no edits made), should return to read mode
     expect(lastFrame()).not.toContain('Discard changes?');
     expect(lastFrame()).toContain('[Edit]');
@@ -268,11 +281,8 @@ describe('YamlTab edit mode', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e'); // enter edit mode
-    await tick();
-    stdin.write('\x13'); // Ctrl+S
-    await tick();
+    await safeWrite(stdin, 'e'); // enter edit mode
+    await safeWrite(stdin, '\x13'); // Ctrl+S
     const frame = lastFrame() ?? '';
     expect(frame).toContain('[Apply]');
     expect(frame).toContain('[Cancel]');
@@ -292,14 +302,10 @@ describe('YamlTab edit mode', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e');
-    await tick();
-    stdin.write('\x13'); // Ctrl+S → diff mode
-    await tick();
+    await safeWrite(stdin, 'e');
+    await safeWrite(stdin, '\x13'); // Ctrl+S → diff mode
     // Now pressing 'e' in diff mode should do nothing (mode guard)
-    stdin.write('e');
-    await tick();
+    await safeWrite(stdin, 'e');
     const frame = lastFrame() ?? '';
     // Still in diff mode (shows Apply/Cancel), not edit mode
     expect(frame).toContain('[Cancel]');
@@ -344,11 +350,8 @@ describe('YamlTab discard confirm', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e');
-    await tick();
-    stdin.write('\x1B'); // Escape with clean buffer → back to read
-    await tick();
+    await safeWrite(stdin, 'e');
+    await safeWrite(stdin, '\x1B'); // Escape with clean buffer → back to read
     expect(lastFrame()).toContain('[Edit]'); // Back in read mode
   });
 
@@ -378,11 +381,8 @@ describe('YamlTab discard confirm', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e');
-    await tick();
-    stdin.write('\x1B');
-    await tick();
+    await safeWrite(stdin, 'e');
+    await safeWrite(stdin, '\x1B');
     // With clean buffer, escape returns to read mode directly (no discard-confirm)
     expect(lastFrame()).toContain('[Edit]');
     void stdin; // used
@@ -407,12 +407,9 @@ describe('YamlTab diff mode', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e'); // enter edit mode
-    await tick();
+    await safeWrite(stdin, 'e'); // enter edit mode
     // Press Ctrl+S — buffer is clean/valid, should open diff
-    stdin.write('\x13'); // Ctrl+S
-    await tick();
+    await safeWrite(stdin, '\x13'); // Ctrl+S
     // DiffView should show
     const frame = lastFrame() ?? '';
     expect(frame).toContain('[Apply]');
@@ -432,13 +429,10 @@ describe('YamlTab diff mode', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e'); // enter edit mode
-    await tick();
-    stdin.write('\x13'); // Ctrl+S → diff mode
-    await tick();
+    await safeWrite(stdin, 'e'); // enter edit mode
+    await safeWrite(stdin, '\x13'); // Ctrl+S → diff mode
     // DiffView is now shown; press Escape to cancel
-    stdin.write('\x1B'); // Escape → onCancel → back to edit mode
+    await safeWrite(stdin, '\x1B'); // Escape → onCancel → back to edit mode
     await ticks(3);
     const frame = lastFrame() ?? '';
     // Should be back in edit mode
@@ -464,12 +458,9 @@ describe('YamlTab diff mode', () => {
         onSave,
       }),
     );
-    await tick();
-    stdin.write('e'); // enter edit mode
-    await tick();
-    stdin.write('\x13'); // Ctrl+S → diff mode
-    await tick();
-    stdin.write('\r'); // Enter → apply
+    await safeWrite(stdin, 'e'); // enter edit mode
+    await safeWrite(stdin, '\x13'); // Ctrl+S → diff mode
+    await safeWrite(stdin, '\r'); // Enter → apply
     await ticks(5);
     const frame = lastFrame() ?? '';
     // Should be back in read mode after successful apply
@@ -493,17 +484,15 @@ describe('YamlTab diff mode', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('e'); // enter edit mode
-    await tick();
-    stdin.write('\x13'); // Ctrl+S → diff mode
-    await tick();
-    stdin.write('\r'); // Enter → apply → 409 conflict (stored version 2 vs applied version 1)
+    await safeWrite(stdin, 'e'); // enter edit mode
+    await safeWrite(stdin, '\x13'); // Ctrl+S → diff mode
+    // Enter → apply → 409 conflict (stored version 2 vs applied version 1)
+    await safeWrite(stdin, '\r');
     await ticks(5);
     // Should be in conflict state, showing Reload button
     const conflictFrame = lastFrame() ?? '';
     expect(conflictFrame).toContain('Conflict');
-    stdin.write('r'); // r → reload-and-redit
+    await safeWrite(stdin, 'r'); // r → reload-and-redit
     await ticks(5);
     const reloadFrame = lastFrame() ?? '';
     // Should be back in edit mode with fresh buffer
@@ -629,9 +618,8 @@ describe('YamlTab dirty buffer', () => {
         _testInitialContent: modifiedContent,
       }),
     );
-    await tick();
-    stdin.write('\x1B'); // Escape with dirty buffer → should show discard-confirm
-    await tick();
+    // Escape with dirty buffer → should show discard-confirm
+    await safeWrite(stdin, '\x1B');
     expect(lastFrame()).toContain('Discard changes?');
   });
 
@@ -650,11 +638,8 @@ describe('YamlTab dirty buffer', () => {
         _testInitialContent: modifiedContent,
       }),
     );
-    await tick();
-    stdin.write('\x1B'); // Escape → discard-confirm
-    await tick();
-    stdin.write('y'); // y → discard and go to read mode
-    await tick();
+    await safeWrite(stdin, '\x1B'); // Escape → discard-confirm
+    await safeWrite(stdin, 'y'); // y → discard and go to read mode
     expect(lastFrame()).toContain('[Edit]');
     expect(lastFrame()).not.toContain('Discard changes?');
   });
@@ -674,11 +659,8 @@ describe('YamlTab dirty buffer', () => {
         _testInitialContent: modifiedContent,
       }),
     );
-    await tick();
-    stdin.write('\x1B'); // Escape → discard-confirm
-    await tick();
-    stdin.write('Y'); // Y → discard and go to read mode
-    await tick();
+    await safeWrite(stdin, '\x1B'); // Escape → discard-confirm
+    await safeWrite(stdin, 'Y'); // Y → discard and go to read mode
     expect(lastFrame()).toContain('[Edit]');
   });
 
@@ -697,11 +679,8 @@ describe('YamlTab dirty buffer', () => {
         _testInitialContent: modifiedContent,
       }),
     );
-    await tick();
-    stdin.write('\x1B'); // Escape → discard-confirm
-    await tick();
-    stdin.write('n'); // n → back to edit mode
-    await tick();
+    await safeWrite(stdin, '\x1B'); // Escape → discard-confirm
+    await safeWrite(stdin, 'n'); // n → back to edit mode
     expect(lastFrame()).toContain('EDITING');
   });
 
@@ -720,11 +699,8 @@ describe('YamlTab dirty buffer', () => {
         _testInitialContent: modifiedContent,
       }),
     );
-    await tick();
-    stdin.write('\x1B'); // Escape → discard-confirm
-    await tick();
-    stdin.write('N'); // N → back to edit mode
-    await tick();
+    await safeWrite(stdin, '\x1B'); // Escape → discard-confirm
+    await safeWrite(stdin, 'N'); // N → back to edit mode
     expect(lastFrame()).toContain('EDITING');
   });
 
@@ -743,11 +719,8 @@ describe('YamlTab dirty buffer', () => {
         _testInitialContent: modifiedContent,
       }),
     );
-    await tick();
-    stdin.write('\x1B'); // Escape → discard-confirm
-    await tick();
-    stdin.write('\x1B'); // Second Escape → back to edit mode
-    await tick();
+    await safeWrite(stdin, '\x1B'); // Escape → discard-confirm
+    await safeWrite(stdin, '\x1B'); // Second Escape → back to edit mode
     expect(lastFrame()).toContain('EDITING');
   });
 
@@ -768,9 +741,7 @@ describe('YamlTab dirty buffer', () => {
         _testInitialContent: invalidYaml,
       }),
     );
-    await tick();
-    stdin.write('\x13'); // Ctrl+S with invalid YAML
-    await tick();
+    await safeWrite(stdin, '\x13'); // Ctrl+S with invalid YAML
     expect(lastFrame()).toContain('YAML error');
   });
 
@@ -787,9 +758,7 @@ describe('YamlTab dirty buffer', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('\x13'); // Ctrl+S in read mode — should be no-op
-    await tick();
+    await safeWrite(stdin, '\x13'); // Ctrl+S in read mode — should be no-op
     // Still in read mode
     expect(lastFrame()).toContain('[Edit]');
   });
@@ -807,9 +776,7 @@ describe('YamlTab dirty buffer', () => {
         clock,
       }),
     );
-    await tick();
-    stdin.write('\x1B'); // Escape in read mode — should be no-op
-    await tick();
+    await safeWrite(stdin, '\x1B'); // Escape in read mode — should be no-op
     // Still in read mode (no change)
     expect(lastFrame()).toContain('[Edit]');
   });
@@ -834,8 +801,7 @@ async function press(
   ...inputs: string[]
 ): Promise<void> {
   for (const input of inputs) {
-    stdin.write(input);
-    await tick();
+    await safeWrite(stdin, input);
   }
 }
 
@@ -1066,12 +1032,19 @@ describe('YamlTab onModeChange', () => {
         },
       }),
     );
-    await tick();
-    stdin.write('e'); // read → edit
-    await tick();
-    stdin.write('\x13'); // Ctrl+S → diff
-    await tick();
-    stdin.write('\r'); // Enter → apply → read
+    // Poll-based waits: fixed ticks race Ink's useInput subscription when
+    // the host is under load (Spec 08 §8 flaky-test policy).
+    const waitForModes = async (count: number): Promise<void> => {
+      for (let i = 0; i < 200 && modes.length < count; i++) {
+        await tick();
+      }
+    };
+    await safeWrite(stdin, 'e'); // read → edit
+    await waitForModes(1);
+    await safeWrite(stdin, '\x13'); // Ctrl+S → diff
+    await waitForModes(2);
+    await safeWrite(stdin, '\r'); // Enter → apply → read
+    await waitForModes(3);
     await ticks(5);
     expect(modes).toEqual(['edit', 'diff', 'read']);
   });
@@ -1094,9 +1067,7 @@ describe('YamlTab onModeChange', () => {
         },
       }),
     );
-    await tick();
-    stdin.write('v'); // reveal — still read mode
-    await tick();
+    await safeWrite(stdin, 'v'); // reveal — still read mode
     expect(modes).toEqual(['read']);
   });
 
@@ -1118,11 +1089,8 @@ describe('YamlTab onModeChange', () => {
         },
       }),
     );
-    await tick();
-    stdin.write('\x1B'); // Escape → discard-confirm
-    await tick();
-    stdin.write('n'); // n → back to edit
-    await tick();
+    await safeWrite(stdin, '\x1B'); // Escape → discard-confirm
+    await safeWrite(stdin, 'n'); // n → back to edit
     expect(modes).toEqual(['discard-confirm', 'edit']);
   });
 });

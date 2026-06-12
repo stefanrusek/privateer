@@ -534,6 +534,84 @@ describe('ResourceTable selected row', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Focused prop
+// ---------------------------------------------------------------------------
+
+describe('ResourceTable focused prop', () => {
+  function renderSelected(focused?: boolean): string {
+    let model = createTableModel('Deployment');
+    model = applyResourceEvent(
+      model,
+      { type: 'ADDED', resource: makeResource('api', 'uid-1') },
+      0,
+    );
+    const cols = getColumns(model.kind);
+    const { lastFrame } = render(
+      React.createElement(ResourceTable, {
+        ...DEFAULT_PROPS,
+        model,
+        columns: cols,
+        selectedIndex: 0,
+        ...(focused === undefined ? {} : { focused }),
+      }),
+    );
+    return lastFrame() ?? '';
+  }
+
+  it('renders the selected row inverse when focused (default)', () => {
+    expect(renderSelected()).toContain('api');
+  });
+
+  it('renders the selected row inverse when focused is true', () => {
+    expect(renderSelected(true)).toBe(renderSelected());
+  });
+
+  it('renders the selected row bold (not inverse) when focused is false', () => {
+    const unfocused = renderSelected(false);
+    expect(unfocused).toContain('api');
+    expect(unfocused).not.toContain('[7m');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// totalWidth prop
+// ---------------------------------------------------------------------------
+
+describe('ResourceTable totalWidth prop', () => {
+  const longName = 'a-deployment-name-of-considerable-length';
+
+  function renderWide(totalWidth?: number): string {
+    let model = createTableModel('Deployment');
+    model = applyResourceEvent(
+      model,
+      { type: 'ADDED', resource: makeResource(longName, 'uid-1') },
+      0,
+    );
+    const cols = getColumns(model.kind);
+    const { lastFrame } = render(
+      React.createElement(ResourceTable, {
+        ...DEFAULT_PROPS,
+        model,
+        columns: cols,
+        ...(totalWidth === undefined ? {} : { totalWidth }),
+      }),
+    );
+    return lastFrame() ?? '';
+  }
+
+  it('defaults to 120 columns', () => {
+    expect(renderWide()).toBe(renderWide(120));
+  });
+
+  it('truncates more aggressively at a narrower totalWidth', () => {
+    // Name column is 30%: 41-char name fits at width 200 but not at 60.
+    expect(renderWide(200)).toContain(longName);
+    expect(renderWide(60)).not.toContain(longName);
+    expect(renderWide(60)).toContain('…');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // padLeft overflow branch
 // ---------------------------------------------------------------------------
 

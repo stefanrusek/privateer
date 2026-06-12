@@ -39,6 +39,18 @@ export interface AppRootProps {
   cursorKind?: string | null;
   /** Command bar input text (rendered while the bar is focused). */
   inputText?: string;
+  /**
+   * Real terminal dimensions. When provided, the sidebar width is derived
+   * from the actual column count (min 16) and the sidebar gets a viewport
+   * height of `rows - 3` (header + command bar + margin, min 5). When
+   * absent, layout assumes 80 columns and the sidebar is unwindowed.
+   */
+  terminalSize?: { columns: number; rows: number };
+  /**
+   * Replaces the command bar row when set (inline confirm dialogs render in
+   * the command bar per Spec 04 §12).
+   */
+  commandBarContent?: React.ReactNode;
 }
 
 export function AppRoot({
@@ -49,8 +61,35 @@ export function AppRoot({
   renderDetail,
   cursorKind = null,
   inputText = '',
+  terminalSize,
+  commandBarContent,
 }: AppRootProps): React.ReactElement {
-  const sidebarWidthCols = Math.round(state.sidebarRatio * 80);
+  const sidebarWidthCols =
+    terminalSize === undefined
+      ? Math.round(state.sidebarRatio * 80)
+      : Math.max(16, Math.round(state.sidebarRatio * terminalSize.columns));
+  const sidebarViewport =
+    terminalSize === undefined
+      ? {}
+      : { viewportHeight: Math.max(5, terminalSize.rows - 3) };
+
+  // Full-screen overlays replace the main layout entirely so the frame never
+  // grows taller than the terminal (Ink cannot reclaim overflowed rows).
+  if (state.helpOpen) {
+    return <HelpOverlay open onClose={callbacks.onHelpClose} />;
+  }
+  if (state.contextSwitcherOpen) {
+    return (
+      <ContextSwitcher
+        open
+        contexts={[...state.allContexts]}
+        currentContext={state.context}
+        filter={contextFilter}
+        onSelect={callbacks.onContextSelect}
+        onClose={callbacks.onContextSwitcherClose}
+      />
+    );
+  }
 
   return (
     <Box flexDirection="column">
@@ -80,31 +119,25 @@ export function AppRoot({
             onToggleCategory={callbacks.onToggleCategory}
             collapsedCategories={state.collapsedCategories}
             cursorKind={cursorKind}
+            {...sidebarViewport}
           />
         )}
         renderList={renderList ?? ((): null => null)}
         renderDetail={renderDetail ?? ((): null => null)}
-        renderCommandBar={() => (
-          <CommandBar
-            context={state.context}
-            namespace={state.namespace}
-            resourceKind={state.activeKind}
-            mode={state.mode}
-            focused={state.focus === 'commandbar'}
-            hints={[...state.hints]}
-            inputText={inputText}
-          />
-        )}
+        renderCommandBar={() =>
+          commandBarContent ?? (
+            <CommandBar
+              context={state.context}
+              namespace={state.namespace}
+              resourceKind={state.activeKind}
+              mode={state.mode}
+              focused={state.focus === 'commandbar'}
+              hints={[...state.hints]}
+              inputText={inputText}
+            />
+          )
+        }
       />
-      <ContextSwitcher
-        open={state.contextSwitcherOpen}
-        contexts={[...state.allContexts]}
-        currentContext={state.context}
-        filter={contextFilter}
-        onSelect={callbacks.onContextSelect}
-        onClose={callbacks.onContextSwitcherClose}
-      />
-      <HelpOverlay open={state.helpOpen} onClose={callbacks.onHelpClose} />
     </Box>
   );
 }

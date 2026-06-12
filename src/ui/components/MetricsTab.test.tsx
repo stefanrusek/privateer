@@ -486,7 +486,7 @@ describe('MetricsTab — KafkaConnect charts', () => {
 // ---------------------------------------------------------------------------
 
 describe('MetricsTab — ChartPlaceholder with data', () => {
-  it('shows series count when data is provided', () => {
+  it('renders an ASCII chart when data is provided', () => {
     const cpuSeries = [
       {
         labels: {},
@@ -505,8 +505,8 @@ describe('MetricsTab — ChartPlaceholder with data', () => {
         }),
       ),
     );
-    // Should show series info when data is present
-    expect(lastFrame()).toContain('series');
+    // Should render the ASCII chart plot when data is present
+    expect(lastFrame()).toContain('█');
   });
 });
 

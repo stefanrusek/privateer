@@ -353,15 +353,9 @@ When('I list all chart range options', function (this: PrivateerWorld) {
 When(
   'the chart is rendered at width {int}',
   function (this: PrivateerWorld, width: number) {
-    const clock = {
-      now: () => this.chartTimeseriesClockMs,
-      setTimeout: (_cb: () => void, _ms: number) => () => undefined,
-      setInterval: (_cb: () => void, _ms: number) => () => undefined,
-    };
     const chart = renderTimeseriesChart({
       series: this.chartTimeseriesSeries,
       width,
-      clock,
     });
     this.chartTimeseriesLines = chart.lines;
   },
