@@ -43,11 +43,13 @@ Every change must pass `bun run gate` before it is done. Pieces of the bar:
 
 ## Releases
 
-The version lives in **two places** and both must be bumped together:
-`package.json` and `src/version.ts` (what `p9r version` actually prints —
-forgetting it shipped a mislabeled binary once).
+The version lives in **three places** and all must be bumped together:
+`package.json`, `src/version.ts` (what `p9r version` actually prints —
+forgetting it shipped a mislabeled binary once), and the BDD feature files
+`features/00-scaffold/version.feature` and `features/01-architecture/cli.feature`
+(both assert the exact version string; missing them breaks the gate).
 
-1. Bump both, commit, push to main.
+1. Bump all three, run `bun run gate` to confirm, commit, push to main.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z` — the tag triggers
    `.github/workflows/release.yml`, which cross-compiles all targets from one
    Linux host (`onnxruntime-node` ships every platform's natives;
