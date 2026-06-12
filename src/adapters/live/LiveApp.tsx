@@ -15,7 +15,42 @@ import { ConfirmDialog } from '../../ui/components/ConfirmDialog.js';
 import { LogsTab } from '../../ui/components/LogsTab.js';
 import { PortForwardManager } from '../../ui/components/PortForwardManager.js';
 import { MetricsTab } from '../../ui/components/MetricsTab.js';
+import { MouseProvider, useMouse } from '@zenobius/ink-mouse';
 import { LiveController } from './controller.js';
+
+/** Routes global mouse events into the controller's geometry hit-testing. */
+function MouseRouter({ controller }: { controller: LiveController }): null {
+  const { events } = useMouse();
+  useEffect(() => {
+    // ink-mouse turns on any-motion tracking (1003h), which we don't use —
+    // motion events flood the stream and leak into the shell on unclean
+    // exits. Click (1000h) + SGR (1006h) stay on; motion modes go off.
+    process.stdout.write('\x1b[?1003l\x1b[?1015l');
+    const onClick = (
+      position: { x: number; y: number },
+      action: 'press' | 'release' | null,
+    ): void => {
+      if (action === 'press') {
+        controller.handleMouseClick(position.x, position.y);
+      }
+    };
+    const onScroll = (
+      position: { x: number; y: number },
+      direction: 'scrollup' | 'scrolldown' | null,
+    ): void => {
+      if (direction !== null) {
+        controller.handleMouseScroll(position.x, direction);
+      }
+    };
+    events.on('click', onClick);
+    events.on('scroll', onScroll);
+    return () => {
+      events.off('click', onClick);
+      events.off('scroll', onScroll);
+    };
+  }, [controller, events]);
+  return null;
+}
 
 export function LiveApp({
   controller,
@@ -263,43 +298,46 @@ export function LiveApp({
   }
 
   return (
-    <Box
-      height={rows}
-      width={termCols}
-      overflow="hidden"
-      flexDirection="column"
-    >
-      <AppRoot
-        state={app}
-        callbacks={callbacks}
-        terminalSize={controller.terminalSize()}
-        contextFilter={controller.getContextFilter()}
-        cursorKind={snapshot.cursorKind}
-        inputText={snapshot.inputText}
-        renderList={() => (
-          <Box height={listRows} overflow="hidden" flexDirection="column">
-            {renderList()}
-          </Box>
-        )}
-        renderDetail={() => (
-          <Box height={detailRows} overflow="hidden" flexDirection="column">
-            {renderDetail()}
-          </Box>
-        )}
-        {...(confirm !== null
-          ? {
-              commandBarContent: (
-                <ConfirmDialog
-                  message={confirm.message}
-                  confirmLabel={confirm.confirmLabel}
-                  destructive={confirm.destructive}
-                  onConfirm={controller.confirmAccept}
-                  onCancel={controller.confirmCancel}
-                />
-              ),
-            }
-          : {})}
-      />
-    </Box>
+    <MouseProvider>
+      <MouseRouter controller={controller} />
+      <Box
+        height={rows}
+        width={termCols}
+        overflow="hidden"
+        flexDirection="column"
+      >
+        <AppRoot
+          state={app}
+          callbacks={callbacks}
+          terminalSize={controller.terminalSize()}
+          contextFilter={controller.getContextFilter()}
+          cursorKind={snapshot.cursorKind}
+          inputText={snapshot.inputText}
+          renderList={() => (
+            <Box height={listRows} overflow="hidden" flexDirection="column">
+              {renderList()}
+            </Box>
+          )}
+          renderDetail={() => (
+            <Box height={detailRows} overflow="hidden" flexDirection="column">
+              {renderDetail()}
+            </Box>
+          )}
+          {...(confirm !== null
+            ? {
+                commandBarContent: (
+                  <ConfirmDialog
+                    message={confirm.message}
+                    confirmLabel={confirm.confirmLabel}
+                    destructive={confirm.destructive}
+                    onConfirm={controller.confirmAccept}
+                    onCancel={controller.confirmCancel}
+                  />
+                ),
+              }
+            : {})}
+        />
+      </Box>
+    </MouseProvider>
   );
 }

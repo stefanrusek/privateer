@@ -75,20 +75,34 @@ function FirstRunFlow({
   return <FirstRunScreen state={state} modelName={AGENT_MODEL_DISPLAY_NAME} />;
 }
 
+/**
+ * Hard-disable every mouse reporting mode. React cleanup normally does this,
+ * but escape sequences leaking into the user's shell after a crash or hard
+ * exit are bad enough to warrant belt and braces (Spec 01 §3.5).
+ */
+function disableMouseReporting(): void {
+  process.stdout.write(
+    '\x1b[?1003l\x1b[?1015l\x1b[?1006l\x1b[?1002l\x1b[?1000l',
+  );
+}
+
 function launchLiveApp(options: LaunchOptions): void {
   let instance: ReturnType<typeof render> | null = null;
   const controller = new LiveController(options, () => {
     instance?.unmount();
+    disableMouseReporting();
   });
   // Exec suspend-and-handover (Spec 05 §4.3): unmount the Ink tree to
   // restore the terminal, run the raw-TTY command, then re-render. The
   // controller keeps all state and streams across the remount.
   controller.setSuspendRunner((run) => {
     instance?.unmount();
+    disableMouseReporting();
     void run().then(() => {
       instance = render(<LiveApp controller={controller} />);
     });
   });
+  process.on('exit', disableMouseReporting);
   instance = render(<LiveApp controller={controller} />);
   controller.preloadEngine();
 }

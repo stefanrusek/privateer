@@ -14,7 +14,10 @@ import type { ResourceEvent, ResourceObject } from '../../core/types.js';
 import type { AppState, FocusRegion } from '../../ui/types.js';
 import type { TableModel } from '../../ui/resource-table-model.js';
 import type { ColumnDef } from '../../resources/columns.js';
-import type { TabId } from '../../ui/components/DetailPane.js';
+import {
+  getAvailableTabs,
+  type TabId,
+} from '../../ui/components/DetailPane.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
 import type { ClusterSummary } from '../../ui/components/HealthDashboard.js';
 import type { EvaluatedRule } from '../../health/types.js';
@@ -2477,6 +2480,203 @@ export class LiveController {
   // -------------------------------------------------------------------------
   // Keyboard routing
   // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // Mouse routing (Spec 01 §3.5, Spec 02 §5) — coordinates are 1-based SGR.
+  // The adapter owns the layout geometry, so hit-testing is plain math:
+  // row 1 = header, rows 2.. = sidebar (left) / list+detail (right),
+  // last row = command bar.
+  // -------------------------------------------------------------------------
+
+  private sidebarWidthCols(): number {
+    return Math.max(
+      16,
+      Math.round(this.app.sidebarRatio * this.terminalColumns),
+    );
+  }
+
+  /** Replicates the Sidebar component's cursor-centered window math. */
+  private sidebarWindow(): {
+    keys: string[];
+    offset: number;
+    clippedTop: boolean;
+  } {
+    const entries = flattenSidebarNav(
+      SIDEBAR_CATEGORIES,
+      this.app.collapsedCategories,
+    );
+    const keys = entries.map((e) =>
+      e.type === 'overview'
+        ? 'Overview'
+        : e.type === 'category'
+          ? e.id
+          : e.resourceKind,
+    );
+    const viewportHeight = Math.max(5, this.terminalRows - 3);
+    if (keys.length <= viewportHeight) {
+      return { keys, offset: 0, clippedTop: false };
+    }
+    const content = viewportHeight - 2;
+    const cursorIdx = Math.max(0, keys.indexOf(this.cursorKind));
+    const offset = Math.min(
+      Math.max(0, cursorIdx - Math.floor(content / 2)),
+      Math.max(0, keys.length - content),
+    );
+    return { keys, offset, clippedTop: offset > 0 };
+  }
+
+  handleMouseClick(x: number, y: number): void {
+    if (
+      this.confirm !== null ||
+      this.app.helpOpen ||
+      this.app.contextSwitcherOpen ||
+      this.pfManagerOpen
+    ) {
+      return;
+    }
+    const contentTop = 2; // row 1 is the header
+    const lastRow = this.terminalRows;
+    if (y < contentTop || y >= lastRow) {
+      if (y >= lastRow) {
+        // Command bar click focuses agent input (Spec 02 §7).
+        this.commandOpen = true;
+        this.inputText = '';
+        this.app = { ...this.app, mode: 'command', focus: 'commandbar' };
+        this.bump();
+      }
+      return;
+    }
+
+    if (x <= this.sidebarWidthCols()) {
+      const win = this.sidebarWindow();
+      let row = y - contentTop + win.offset;
+      if (win.clippedTop) {
+        row -= 1; // the "↑ …" indicator occupies the first visible line
+      }
+      const key = win.keys[row];
+      if (key === undefined) {
+        return;
+      }
+      this.cursorKind = key;
+      this.setFocus('sidebar');
+      if (key === 'Overview') {
+        this.selectKind('Overview');
+      } else if (SIDEBAR_CATEGORIES.some((cat) => cat.id === key)) {
+        this.toggleCategory(key);
+      } else {
+        this.selectKind(key);
+        this.setFocus('list');
+      }
+      this.bump();
+      return;
+    }
+
+    // Right side: list on top, detail below when open.
+    const contentRows = Math.max(8, this.terminalRows - 3);
+    const listRows = this.app.showDetail
+      ? Math.max(4, Math.round(contentRows * (1 - this.app.verticalRatio)))
+      : contentRows;
+    const inDetail = this.app.showDetail && y >= contentTop + listRows;
+
+    if (inDetail) {
+      const detailTop = contentTop + listRows;
+      if (this.detail !== null && y === detailTop) {
+        this.clickDetailTabBar(x);
+      }
+      this.setFocus('detail');
+      this.bump();
+      return;
+    }
+
+    // List region: row at contentTop is the column header.
+    if (this.table === null) {
+      this.setFocus('list');
+      this.bump();
+      return;
+    }
+    const rowIndex = y - contentTop - 1 + this.table.scrollOffset;
+    const rows = getSortedFilteredRows(this.table);
+    if (rowIndex < 0 || rowIndex >= rows.length) {
+      this.setFocus('list');
+      this.bump();
+      return;
+    }
+    if (this.selectedIndex === rowIndex && this.app.focus === 'list') {
+      // Second click on the selected row opens the detail pane.
+      const resource = rows[rowIndex]?.resource;
+      if (resource !== undefined) {
+        this.openDetail(resource, 'overview');
+        return;
+      }
+    }
+    this.selectedIndex = rowIndex;
+    this.setFocus('list');
+    this.bump();
+  }
+
+  /** Map an x coordinate on the detail tab bar to a tab id. */
+  private clickDetailTabBar(x: number): void {
+    if (this.detail === null) {
+      return;
+    }
+    const left = this.sidebarWidthCols() + 1;
+    // Mirror DetailPane's bar: "<name> [Tab1] [Tab2] … · [Agent] ✕"
+    const tabs = getAvailableTabs(
+      this.detail.resource.kind,
+      this.metricsTier === 'prometheus',
+    );
+    let cursor = left + this.detail.resource.name.length + 2;
+    for (const tab of tabs) {
+      const label =
+        tab.id === 'events' && this.detail.warningCount > 0
+          ? `Events (${String(this.detail.warningCount)})`
+          : tab.label;
+      const width = label.length + 2; // [label]
+      if (x >= cursor && x < cursor + width) {
+        this.setDetailTab(tab.id);
+        return;
+      }
+      cursor += width + 1;
+    }
+    // Past the divider: the Agent tab.
+    if (x >= cursor && x < cursor + 10) {
+      this.setDetailTab('agent');
+    }
+  }
+
+  handleMouseScroll(x: number, direction: 'scrollup' | 'scrolldown'): void {
+    if (
+      this.confirm !== null ||
+      this.app.helpOpen ||
+      this.app.contextSwitcherOpen ||
+      this.pfManagerOpen
+    ) {
+      return;
+    }
+    const delta = direction === 'scrolldown' ? 1 : -1;
+    if (x <= this.sidebarWidthCols()) {
+      const win = this.sidebarWindow();
+      const idx = Math.max(
+        0,
+        Math.min(
+          win.keys.indexOf(this.cursorKind) + delta,
+          win.keys.length - 1,
+        ),
+      );
+      this.cursorKind = win.keys[idx] ?? this.cursorKind;
+      this.bump();
+      return;
+    }
+    if (this.table !== null) {
+      const rows = getSortedFilteredRows(this.table);
+      this.selectedIndex = Math.max(
+        0,
+        Math.min(this.selectedIndex + delta, rows.length - 1),
+      );
+      this.ensureVisible();
+      this.bump();
+    }
+  }
 
   handleInput(input: string, key: InkKey): void {
     // Terminals can deliver rapid keystrokes as one chunk ("jj"); split so

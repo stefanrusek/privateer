@@ -19,6 +19,14 @@ up() {
   kubectl apply -f fixtures/20-prometheus.yaml
 
   if [[ "$opt" == "kafka" ]]; then
+    # Three JVMs (broker, entity operator, cluster operator) + exporter need
+    # real memory: with less than ~4GB of Docker VM the apiserver starts
+    # swap-thrashing and the whole cluster degrades.
+    vm_bytes=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
+    if [ "$vm_bytes" -lt 3500000000 ]; then
+      echo "WARNING: Docker VM has $((vm_bytes / 1024 / 1024))MB memory;" >&2
+      echo "the Kafka fixture needs ~4GB to run without destabilizing the cluster." >&2
+    fi
     kubectl create namespace kafka --dry-run=client -o yaml | kubectl apply -f -
     echo "Installing Strimzi operator ${STRIMZI_VERSION}…"
     curl -sL "$STRIMZI_URL" | sed "s/namespace: .*/namespace: kafka/" \
