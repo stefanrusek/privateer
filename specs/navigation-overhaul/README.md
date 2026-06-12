@@ -62,7 +62,7 @@ this conversation.
 |----|----------------------------------------|--------------------------------|----------------|--------|
 | 01 | `01-focus-keyboard-routing.md`         | Focus & keyboard routing model | —              | DRAFT  |
 | 02 | `02-region-chrome-layout-math.md`      | Region chrome & layout math    | —              | DRAFT  |
-| 03 | `03-detail-scroll-viewport.md`         | Detail scroll viewport         | 01, 02         | TODO   |
+| 03 | `03-detail-scroll-viewport.md`         | Detail scroll viewport         | 01, 02         | DRAFT  |
 | 04 | `04-mouse-interaction.md`              | Mouse: wheel, drag-resize, header clicks | 02, 03 | TODO   |
 | 05 | `05-list-horizontal-scroll.md`         | List horizontal scroll         | 01, 02         | TODO   |
 | 06 | `06-inline-logs-container-picker.md`   | Inline Logs container picker   | 02             | TODO   |
