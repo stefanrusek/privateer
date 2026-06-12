@@ -1,43 +1,40 @@
 ns: [ ▾]  search: []
 [7m  Overview[0m                    [1m══ Cluster Health — [36mdocker-desktop[39m ══[0m
 [1m▼ Workloads[0m
-  Deployments[37m 11[39m              [1mSUMMARY
-[0m  StatefulSets[37m 0[39m              [32m● 13 pods running[39m  [33m● 5 warnings[39m  [31m✕ 4 errors[39m  ○ 1 pending
+  Deployments[37m 8[39m               [1mSUMMARY
+[0m  StatefulSets[37m 0[39m              [32m● 8 pods running[39m  [33m● 9 warnings[39m  [31m✕ 1 errors[39m  ○ 0 pending
   DaemonSets[37m 2[39m                Nodes: 1/1 ready   Namespaces: 9
-  ReplicaSets[90m 12[39m
-  Jobs[90m 0[39m                      [1mBEST PRACTICES[0m  [33m19 issues[39m
+  ReplicaSets[90m 9[39m
+  Jobs[90m 0[39m                      [1mBEST PRACTICES[0m  [33m18 issues[39m
   CronJobs[90m 0[39m                  [2m─────────────────────────────────────────────────────────────────[0m
-  Pods[37m 23[39m                     [31m✕ ERROR [39m18 pods have no CPU limit set [4m[36m[show][0m
-[1m▶ Networking[0m                  [31m✕ ERROR [39m11 pods have no memory limit set [4m[36m[show][0m
-[1m▶ Configuration[0m               [31m✕ ERROR [39m22 pods run as root [4m[36m[show][0m
+  Pods[37m 18[39m                     [31m✕ ERROR [39m14 pods have no CPU limit set [4m[36m[show][0m
+[1m▶ Networking[0m                  [31m✕ ERROR [39m10 pods have no memory limit set [4m[36m[show][0m
+[1m▶ Configuration[0m               [31m✕ ERROR [39m17 pods run as root [4m[36m[show][0m
 [1m▶ Storage[0m                     [31m✕ ERROR [39m1 topic has replication factor of 1 (no fault tolerance) [4m[36m[show][0m
 [1m▶ Access Control[0m              [31m✕ ERROR [39mStrimzi operator pod not running (CRDs present but operator absent) [4m[36m[show][0m
-[1m▶ Nodes[0m                       [33m⚠ [39m [33mWARN  [39m6 pods have no CPU request set [4m[36m[show][0m
-[1m▶ Namespaces[0m                  [33m⚠ [39m [33mWARN  [39m7 pods have no memory request set [4m[36m[show][0m
-[1m▶ Custom Resources[0m            [33m⚠ [39m [33mWARN  [39m4 pods have CPU limit more than 4x CPU request [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m8 deployments have only 1 replica [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m11 deployments have no PodDisruptionBudget [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m12 pods have no liveness probe [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m13 pods have no readiness probe [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m18 pods have no startup probe [4m[36m[show]
+[1m▶ Nodes[0m                       [33m⚠ [39m [33mWARN  [39m3 pods have no CPU request set [4m[36m[show][0m
+[1m▶ Namespaces[0m                  [33m⚠ [39m [33mWARN  [39m6 pods have no memory request set [4m[36m[show][0m
+[1m▶ Custom Resources[0m            [33m⚠ [39m [33mWARN  [39m3 pods have CPU limit more than 4x CPU request [4m[36m[show][0m
+                              [33m⚠ [39m [33mWARN  [39m5 deployments have only 1 replica [4m[36m[show][0m
+                              [33m⚠ [39m [33mWARN  [39m8 deployments have no PodDisruptionBudget [4m[36m[show][0m
+                              [33m⚠ [39m [33mWARN  [39m11 pods have no liveness probe [4m[36m[show][0m
+                              [33m⚠ [39m [33mWARN  [39m12 pods have no readiness probe [4m[36m[show][0m
+                              [33m⚠ [39m [33mWARN  [39m14 pods have no startup probe [4m[36m[show]
 [0m                              [33m⚠ [39m [33mWARN  [39mNo ServiceMonitors defined (Prometheus present but nothing monitored) [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m23 pods have no Prometheus scrape annotation [4m[36m[show][0m
+                              [33m⚠ [39m [33mWARN  [39m18 pods have no Prometheus scrape annotation [4m[36m[show][0m
                               [33m⚠ [39m [33mWARN  [39m9 namespaces have no NetworkPolicy [4m[36m[show][0m
                               [33m⚠ [39m [33mWARN  [39mKafka cluster has only 1 broker (single point of failure) [4m[36m[show][0m
                               [33m⚠ [39m [33mWARN  [39m1 topic has no consumer groups (possibly orphaned) [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m1 Kafka pod uses emptyDir volumes (no persistent storage) [4m[36m[show][0m
                               [90m○ SUPR  [39mUnmanaged Opaque Secrets check suppressed (no secrets operator detected)
-                              [2m20 passing rules [0;4m[36m[show passing][0m
+                              [2m21 passing rules [0;4m[36m[show passing][0m
+
+                              [1mMETRICS OVERVIEW[0m             [2m(Prometheus ● connected)[0m
+                              [2m─────────────────────────────────────────────────────────────────[0m
+                              CPU [32m~▁▁▁▁▁▁▁▁▂▆[39m 66% avg    Memory [32m~▁▁▁▁▁▁▁▁▃▃[39m 26% avg
 
                               [1mKAFKA[0m
                               [2m─────────────────────────────────────────────────────────────────[0m
                               [32m●[39m  orders  [32mAll consumer groups healthy[39m
-
-
-
-
-
-
 
 
 
