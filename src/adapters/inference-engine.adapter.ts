@@ -23,6 +23,7 @@ import {
   env,
 } from '@huggingface/transformers';
 import { homedir } from 'node:os';
+import { log } from './logger.js';
 import { join } from 'node:path';
 import { type Result, ok, err } from '../core/result.js';
 import type {
@@ -157,11 +158,13 @@ export class TransformersInferenceEngine implements InferenceEngine {
       const decoded: string[] = this.tokenizer.batch_decode(newTokens, {
         skip_special_tokens: true,
       });
-      if (process.env.P9R_DEBUG !== undefined) {
-        process.stderr.write(
-          `[engine] decoded(${String((decoded[0] ?? '').length)}ch): ${JSON.stringify((decoded[0] ?? '').slice(0, 500))}\n`,
-        );
-      }
+      log.debug(
+        {
+          chars: (decoded[0] ?? '').length,
+          text: (decoded[0] ?? '').slice(0, 500),
+        },
+        'engine decoded',
+      );
       const text = stripCodeFence(stripThinkBlock(decoded[0] ?? ''));
 
       let toolCalls = extractToolCalls(text);

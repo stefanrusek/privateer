@@ -135,6 +135,14 @@ This gives you healthy deployments, a CrashLoopBackOff pod for the health
 rules to find, Prometheus + kube-state-metrics scraping the exporters the
 charts use, and (opt-in) a KRaft Kafka with a topic and kafka-exporter.
 
+## Troubleshooting
+
+p9r journals warnings and errors (watch-stream drops, agent failures) to
+`~/.config/p9r/debug.log` as JSON lines — check there first when something
+misbehaves. Set `P9R_DEBUG=1` for verbose tracing (stream events, agent
+rounds, tool calls, model timing). Pretty-print with
+`npx pino-pretty < ~/.config/p9r/debug.log`. The file self-truncates at 5MB.
+
 ## Development
 
 ```sh

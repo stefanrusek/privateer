@@ -124,6 +124,7 @@ import {
   FsConfigStore,
 } from '../system.adapter.js';
 import { join } from 'node:path';
+import { log } from '../logger.js';
 import {
   labelToKind,
   kindToLabel,
@@ -717,9 +718,7 @@ export class LiveController {
   // -------------------------------------------------------------------------
 
   private startStreams(): void {
-    if (process.env.P9R_DEBUG !== undefined) {
-      process.stderr.write('[streams] starting\n');
-    }
+    log.debug('streams starting');
     void this.startStreamsWithCrds();
   }
 
@@ -780,11 +779,10 @@ export class LiveController {
   }
 
   private onResourceEvent(event: ResourceEvent): void {
-    if (process.env.P9R_DEBUG !== undefined) {
-      process.stderr.write(
-        `[stream] ${event.type} ${event.kind}/${event.name}\n`,
-      );
-    }
+    log.debug(
+      { type: event.type, kind: event.kind, name: event.name },
+      'stream event',
+    );
     this.store.applyEvent(this.app.context, event);
 
     const kind = event.object.kind ?? event.kind;
@@ -868,9 +866,10 @@ export class LiveController {
         continue;
       }
       const result = await this.client.list(kind, { limit: 1 });
-      if (process.env.P9R_DEBUG !== undefined) {
-        process.stderr.write(
-          `[badge] ${kind}: ${result.ok ? 'ok' : result.error.kind + ' ' + result.error.message}\n`,
+      if (!result.ok) {
+        log.debug(
+          { kind, errorKind: result.error.kind, message: result.error.message },
+          'badge list failed',
         );
       }
       if (result.ok) {
@@ -905,11 +904,10 @@ export class LiveController {
   }
 
   private onStreamError(kind: string, error: KubeError): void {
-    if (process.env.P9R_DEBUG !== undefined) {
-      process.stderr.write(
-        `[stream-err] ${kind}: ${error.kind} ${error.message}\n`,
-      );
-    }
+    log.warn(
+      { kind, errorKind: error.kind, message: error.message },
+      'stream error',
+    );
     const label = kindToLabel(kind === 'WarningEvents' ? 'Event' : kind);
     if (error.kind === 'forbidden') {
       const forbidden = new Set(this.app.forbiddenKinds);
@@ -2000,9 +1998,7 @@ export class LiveController {
   private reallyPreloadEngine(): void {
     void this.ensureEngine()
       .then((engine) => {
-        if (process.env.P9R_DEBUG !== undefined) {
-          process.stderr.write('[engine] loaded\n');
-        }
+        log.debug('engine loaded');
         const warmupStart = this.clock.now();
         return engine
           .generate({
@@ -2019,16 +2015,13 @@ export class LiveController {
         this.toolsEnabled =
           modelSupportsTools(this.agentModelId) &&
           warmupMs * 20 < this.agentTimeoutMs;
-        if (process.env.P9R_DEBUG !== undefined) {
-          process.stderr.write(
-            `[engine] warmup ${String(warmupMs)}ms tools=${String(this.toolsEnabled)}\n`,
-          );
-        }
+        log.debug(
+          { warmupMs, toolsEnabled: this.toolsEnabled },
+          'engine warmup',
+        );
       })
       .catch((e: unknown) => {
-        if (process.env.P9R_DEBUG !== undefined) {
-          process.stderr.write(`[engine] failed: ${String(e)}\n`);
-        }
+        log.error({ err: String(e) }, 'engine load failed');
       });
   }
 
@@ -2094,12 +2087,13 @@ export class LiveController {
       { role: 'user', content: text },
     ];
 
-    if (process.env.P9R_DEBUG !== undefined) {
-      const total = messages.reduce((a, m) => a + m.content.length, 0);
-      process.stderr.write(
-        `[agent] system=${String(system.length)}ch total=${String(total)}ch (~${String(Math.round(total / 4))} tokens)\n`,
-      );
-    }
+    log.debug(
+      {
+        systemChars: system.length,
+        totalChars: messages.reduce((a, m) => a + m.content.length, 0),
+      },
+      'agent prompt built',
+    );
     const t0 = this.clock.now();
     const result = await runLoop({
       engine,
@@ -2115,11 +2109,7 @@ export class LiveController {
       // timeout — force-off until a faster device is detected.
       thinking: false,
       onToolCall: (toolName, params) => {
-        if (process.env.P9R_DEBUG !== undefined) {
-          process.stderr.write(
-            `[agent] tool ${toolName} ${JSON.stringify(params)}\n`,
-          );
-        }
+        log.debug({ tool: toolName, params }, 'agent tool call');
         this.setHints([`> ${humanizeToolCall(toolName, params)}`]);
       },
       tools: this.toolsEnabled
@@ -2130,11 +2120,10 @@ export class LiveController {
       timeoutMs: this.agentTimeoutMs,
     });
 
-    if (process.env.P9R_DEBUG !== undefined) {
-      process.stderr.write(
-        `[agent] result=${result.kind} in ${String(this.clock.now() - t0)}ms\n`,
-      );
-    }
+    log.debug(
+      { result: result.kind, ms: this.clock.now() - t0 },
+      'agent round done',
+    );
     switch (result.kind) {
       case 'action':
         this.finishExchange(text, result.action, undefined);
@@ -2151,11 +2140,7 @@ export class LiveController {
         this.finishExchange(text, null, result.message);
         break;
       case 'parseError':
-        if (process.env.P9R_DEBUG !== undefined) {
-          process.stderr.write(
-            `[agent] parseError raw: ${result.raw.slice(0, 400)}\n`,
-          );
-        }
+        log.warn({ raw: result.raw.slice(0, 400) }, 'agent parse error');
         this.finishExchange(
           text,
           null,
@@ -2805,11 +2790,7 @@ export class LiveController {
   }
 
   handleMouseDrag(x: number, y: number, dragging: boolean): void {
-    if (process.env.P9R_DEBUG !== undefined) {
-      process.stderr.write(
-        `[drag] x=${String(x)} y=${String(y)} dragging=${String(dragging)} splitter=${String(this.splitterRow())}\n`,
-      );
-    }
+    log.debug({ x, y, dragging, splitter: this.splitterRow() }, 'drag');
     if (!dragging) {
       this.draggingSplitter = false;
       return;
