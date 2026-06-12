@@ -20,13 +20,17 @@ this conversation.
 - **Keyboard model:** `Tab`/`Shift+Tab` cycle regions; arrows act within the
   focused region. List `←/→` = horizontal scroll (all columns together).
   Detail `←/→` = switch tabs, `↑/↓` = scroll content.
-- **Focus indicator:** all three regions always bordered + titled; the focused
-  one is highlighted, the others dim. Width/height math accounts for borders.
+- **Focus indicator & frame:** all regions (header, sidebar, list, detail,
+  command bar) are bordered, with borders **collapsed** into one connected grid
+  (Option A: full-width header/command bar, full-height sidebar). The focused
+  region is highlighted, others dim. The header shows the current context left
+  of the namespace. Width/height math accounts for borders.
+- **Mouse:** wheel routes by cursor geometry; the two shared border lines are
+  drag-resize handles; clicking the context opens the switcher and clicking the
+  namespace opens the namespace picker.
 - **Detail scrolling:** a real scroll viewport on every detail tab. Logs:
   scrolling up pauses live-tail and walks the ring buffer; returning to the
   bottom resumes tail.
-- **Mouse wheel:** routes by cursor geometry (hit-test x *and* y) to the region
-  under the cursor.
 - **YAML editing:** in-pane multi-line editor **and** pop-out to `$EDITOR`;
   Save applies to the cluster (with confirm); Cancel/Revert discards pending
   edits.
@@ -59,7 +63,7 @@ this conversation.
 | 01 | `01-focus-keyboard-routing.md`         | Focus & keyboard routing model | —              | DRAFT  |
 | 02 | `02-region-chrome-layout-math.md`      | Region chrome & layout math    | —              | DRAFT  |
 | 03 | `03-detail-scroll-viewport.md`         | Detail scroll viewport         | 01, 02         | TODO   |
-| 04 | `04-mouse-wheel-geometry.md`           | Mouse-wheel geometry routing   | 02, 03         | TODO   |
+| 04 | `04-mouse-interaction.md`              | Mouse: wheel, drag-resize, header clicks | 02, 03 | TODO   |
 | 05 | `05-list-horizontal-scroll.md`         | List horizontal scroll         | 01, 02         | TODO   |
 | 06 | `06-inline-logs-container-picker.md`   | Inline Logs container picker   | 02             | TODO   |
 | 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03     | TODO   |

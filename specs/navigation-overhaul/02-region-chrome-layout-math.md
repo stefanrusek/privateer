@@ -3,163 +3,227 @@
 **Status:** DRAFT
 **Depends on:** —
 **Implements / amends:** `spec/spec-02-navigation-layout.md` (layout, regions,
-sizing). Update that canonical spec where this changes it.
+sizing, header). Update that canonical spec where this changes it.
 
 ## User stories
 
-> As a user, I always want to see **which region is focused**, with a clear
-> bordered box and a title on each region, so navigation never feels
-> ambiguous.
+> As a user, I want the whole UI to read as **one connected framed grid** with
+> a title on every region, and I always want to see **which region is focused**,
+> so navigation is never ambiguous.
 
-> As a user, I never want the resource list, the detail divider, or the metrics
+> As a user, I never want the resource list, the detail content, or the metrics
 > charts to **wrap by a character** or spill past their pane at any terminal
 > size or when the detail pane opens.
 
-## Two problems, one root cause
+> As a user, I want to see the **current context** in the header and click it
+> (or the namespace) to change it.
 
-There is no single source of truth for region geometry. Several places compute
-widths/heights independently and disagree by a column or more:
+## The frame (Option A)
 
-- `controller.tableWidth()` (controller.ts ~635) returns
-  `max(60, columns − sidebar − 2)`. The `max(60, …)` floor can exceed the
-  **real** list-pane width on narrow terminals or with a wide sidebar, so the
-  table renders one (or more) columns wider than its pane → **the list wraps by
-  one char**.
-- The detail divider is `'╌'.repeat(max(10, termCols − 36))` (LiveApp.tsx
-  ~349) — sized to the **whole terminal** minus a magic 36, not the detail
-  pane's inner width → it **wraps when the detail pane opens**.
-- The metrics charts render at a hard-coded `CHART_WIDTH = 64`
-  (MetricsTab.tsx ~110/129) regardless of pane width → **every chart line
-  wraps** whenever the detail pane is narrower than 64 columns.
-- `controller.sidebarWidthCols()` and `AppRoot`'s sidebar width are computed
-  with the same formula in two places (controller.ts ~2702, AppRoot.tsx ~67) —
-  duplication that must not drift.
-
-Adding borders (below) consumes columns and rows, which would make all of this
-worse — so we centralize the math **and** add borders in this chunk.
-
-## Part A — Region chrome (borders + titles + focus highlight)
-
-The three Tab-cycle regions — **sidebar, list, detail** — each render inside a
-bordered box with a **title** in the top border, at all times.
-
-- **Focused region:** highlighted border (a single accent color, e.g. `cyan`)
-  and a **bold** title.
-- **Unfocused regions:** dim border and dim title.
-- **Changing focus changes only styling, never dimensions** — no region grows,
-  shrinks, or reflows when focus moves. (This is why borders are always
-  present, even when unfocused.)
-
-Titles:
-
-| Region | Title content |
-|--------|---------------|
-| Sidebar | `Resources` |
-| List | active kind + count, e.g. `Pods (12)`; with namespace when set, e.g. `Pods · default (12)` |
-| Detail | resource kind + name, e.g. `Pod · web-7d9` |
-
-The **header** (namespace/search row) and the **command bar** remain
-full-width single-line chrome **outside** the three bordered regions, unchanged.
-
-> Border style: `borderStyle="round"`, accent color `cyan` for the focused
-> region, default/`gray` dim for the others. These are the proposed defaults;
-> they are cosmetic and may be tuned during implementation without a spec
-> change.
-
-## Part B — Single source of truth for geometry
-
-Introduce a **pure, 100%-covered** module `src/ui/layout-geometry.ts`:
+All five regions are bordered, and the borders **collapse** into one connected
+grid (adjacent regions share a single line, with correct box-drawing
+junctions — `┬ ┴ ├ ┤ ┼`). The layout:
 
 ```
-computeLayout(input: {
-  columns: number;       // terminal columns
-  rows: number;          // terminal rows
+┌──────────────────────────────────────┐
+│ <context> · ns: <namespace>   /<search>│  header   (full width)
+├──────┬───────────────────────────────┤
+│ side │ list                          │
+│ bar  │                               │
+│      ├───────────────────────────────┤  ← list│detail line = VERTICAL resize
+│      │ detail                        │
+├──────┴───────────────────────────────┤
+│ Space agent · / search · ? help · q  │  command bar (full width)
+└──────────────────────────────────────┘
+         ↑ sidebar│right line = HORIZONTAL resize
+```
+
+- **Header** and **command bar** are full-width cells (top and bottom).
+- **Sidebar** spans the full height between them.
+- **List** sits above **detail** in the right column; when `showDetail` is
+  false, the list fills the right column and there is no list│detail line.
+- When detail is closed, the sidebar│right vertical line still exists (it's the
+  horizontal-resize handle).
+
+### Drag handles (coordinates only here; behavior in chunk 04)
+
+The two shared lines are the resize handles:
+
+- **sidebar│right** vertical line → horizontal resize (`sidebarRatio`).
+- **list│detail** horizontal line → vertical resize (`verticalRatio`).
+
+This chunk only needs to **expose these segments' coordinates** from the
+geometry module. The drag interaction itself (replacing the current
+undiscoverable `handleMouseDrag`/`splitterRow`, which has no visible handle and
+no horizontal resize at all) is chunk 04.
+
+## Header content
+
+The header cell shows, left to right:
+
+1. **Current context** (e.g. `docker-desktop`).
+2. **Namespace** filter (e.g. `ns: default`).
+3. **Search** field (right-aligned, e.g. `/web`).
+
+- The context and namespace are **distinct clickable sub-regions**; this chunk
+  exposes their coordinate ranges from the geometry module. The click behavior
+  — context → context switcher, namespace → namespace picker — is wired in
+  chunk 04. (Today only `n` opens the namespace picker and `!ctx` opens the
+  switcher.)
+- The context string is the single source already in `state.context`.
+
+## Region titles & focus highlight
+
+Each region carries a title in its top border:
+
+| Region | Title |
+|--------|-------|
+| Sidebar | `Resources` |
+| List | active kind + count, e.g. `Pods · default (12)` |
+| Detail | resource kind + name, e.g. `Pod · web-7d9` |
+| Header / Command bar | no title needed (single-line chrome) |
+
+- **Focused region:** the border segments enclosing it render in an accent
+  color (proposed `cyan`) and its title is **bold**. Shared segments adopt the
+  accent when they bound the focused region; junction glyphs at the focused
+  region's corners are accent too.
+- **Unfocused regions:** dim border, dim title.
+- **Changing focus changes only styling, never dimensions** — no region grows,
+  shrinks, or reflows on focus change. (This is why borders are always drawn.)
+
+> Accent color / glyph set are cosmetic and may be tuned during implementation
+> without a spec change.
+
+## Root cause being fixed: no single geometry source
+
+Several places compute geometry independently and disagree by a column or more,
+which (a) causes the wrap bugs and (b) makes collapsed borders + drag handles
+impossible to place correctly:
+
+- `controller.tableWidth()` = `max(60, columns − sidebar − 2)` (controller.ts
+  ~635) — the `max(60,…)` floor can exceed the real list-pane width → **list
+  wraps by one char**.
+- Detail divider `'╌'.repeat(max(10, termCols − 36))` (LiveApp.tsx ~349) —
+  sized to the whole terminal → **wraps when detail opens**. (With the bordered
+  grid + tab bar this divider should simply be removed.)
+- Metrics charts hard-code `CHART_WIDTH = 64` (MetricsTab.tsx ~110/129) → **chart
+  lines wrap** whenever the detail pane is narrower than 64.
+- Sidebar width formula is duplicated (controller.ts ~2702, AppRoot.tsx ~67) —
+  must not drift.
+
+## Single source of truth: `src/ui/layout-geometry.ts` (new, pure)
+
+```
+computeFrame(input: {
+  columns: number;
+  rows: number;
   sidebarRatio: number;
-  verticalRatio: number; // detail pane's share of the list+detail split
+  verticalRatio: number;   // detail pane's share of the list+detail split
   showDetail: boolean;
 }): {
-  sidebar: Rect;   // { x, y, width, height } — INNER content area (inside border)
-  list:    Rect;
-  detail:  Rect | null;  // null when showDetail is false
+  header:     Rect;        // inner content rect of each region
+  sidebar:    Rect;
+  list:       Rect;
+  detail:     Rect | null; // null when showDetail is false
+  commandBar: Rect;
+  handles: {
+    sidebar:  Segment;     // vertical drag handle (x, yStart..yEnd)
+    vertical: Segment | null; // list│detail handle, null when detail closed
+  };
+  // Optional: a renderable border-glyph grid (see "Rendering" below).
 }
 ```
 
-Rules the module encodes:
+- `Rect = { x, y, width, height }` — **inner** content area (inside the
+  border), in absolute terminal coordinates. `x/y` feed mouse hit-testing
+  (chunk 04); `width/height` bound content so it never wraps.
+- Each bordered cell consumes 1 column per side and 1 row top/bottom; **shared
+  (collapsed) edges are counted once**, not twice.
+- `sidebarRatio` (clamped) sets the sidebar outer width; `verticalRatio`
+  (clamped 0.2–0.8) splits list/detail, matching today's semantics.
+- **No floor that can exceed the real pane.** When the terminal is too small,
+  inner dimensions clamp toward defined minimums and content is **truncated**,
+  never wrapped. A `max(60,…)`-style floor is forbidden.
+- Degrades gracefully at extreme sizes (never negative); minimums unit-tested.
 
-- Each bordered box consumes **1 column on each side** and **1 row top and
-  bottom**; the title lives in the top border row (no extra row).
-- `Rect.width`/`Rect.height` are the **inner** content dimensions (what the
-  content may use without wrapping). `Rect.x`/`Rect.y` are absolute terminal
-  coordinates of the inner top-left (these feed mouse hit-testing in chunk 04).
-- Sidebar outer width = `max(MIN_SIDEBAR, round(sidebarRatio × columns))`.
-- The list + detail share the right column vertically by `verticalRatio` (the
-  detail pane's share), matching today's `verticalRatio` semantics
-  (clamped 0.2–0.8); each gets its own border.
-- **No magic floors that exceed the real pane.** When the terminal is too small
-  to show meaningful content, the inner dimensions clamp toward a minimum and
-  content is **truncated**, never wrapped. (A `max(60, …)`-style floor that can
-  exceed the available width is forbidden.)
-- Degrade gracefully at extreme sizes (tiny terminals): inner dimensions never
-  go negative; minimums defined and unit-tested.
+### Rendering the collapsed grid
 
-All consumers derive from `computeLayout`:
+Ink's per-`Box` `borderStyle` draws each box's four borders independently, so
+two adjacent boxes show a **double** line and can't form `┼` junctions. The
+collapsed grid is therefore drawn by a **pure frame model** (part of
+`layout-geometry.ts` or a sibling `src/ui/frame.ts`) that emits the correct
+box-drawing glyph for every border cell (corners, tees, crosses), with focus
+accent applied per segment. A thin Ink renderer paints that glyph grid and
+positions each region's content inside its `Rect`. The frame model is pure and
+100%-covered; the Ink renderer is thin adapter glue.
 
-- `controller.tableWidth()` → `list.width`.
-- `controller.visibleHeight()` → `list.height`.
-- `AppRoot`/`LiveApp` box `width`/`height` props for each region.
-- The detail divider (if kept) sizes to `detail.width` — or is removed in
-  favor of the bordered chrome + tab bar.
-- `MetricsTab` receives an available width and sizes charts to it (see Part C).
-- `controller.sidebarWidthCols()` and AppRoot's sidebar width both call the
-  module — the formula exists in exactly one place.
+### All consumers derive from the frame
 
-## Part C — Content fits its pane (the wrap fixes)
+- `controller.tableWidth()` → `list.width`; `controller.visibleHeight()` →
+  `list.height`.
+- Region box sizes/positions in `AppRoot`/`LiveApp`.
+- `MetricsTab` chart width = `min(detail.width, MAX_CHART_WIDTH)` (replaces
+  `CHART_WIDTH = 64`); the divider is removed.
+- `controller.sidebarWidthCols()` and AppRoot's sidebar width call the module —
+  one formula.
+- Mouse hit-testing (chunk 04) consumes `Rect`s, `handles`, and the header
+  context/namespace sub-region coordinates.
 
-1. **Resource list:** `ResourceTable` is given `totalWidth = list.width`
-   exactly. Column-width resolution (`resolveWidth`, ResourceTable.tsx ~39)
-   must guarantee the **sum of resolved column widths is ≤ `totalWidth`** at
-   every width — distribute any rounding remainder rather than letting floors
-   drift, and truncate the last/flex column if needed. Result: the list never
-   wraps and never spills, with detail open or closed.
+## Content fits its pane (wrap fixes)
 
-2. **Metrics charts:** thread the detail pane's inner width into `MetricsTab`
-   and replace the hard-coded `CHART_WIDTH = 64` with
-   `min(available, MAX_CHART_WIDTH)` where `available` derives from
-   `detail.width` (minus any title gutter). Charts and their text lines must
-   fit within `detail.width`. `renderTimeseriesChart({ width })` is already
-   width-parameterized — feed it the computed width.
-
-3. **Detail divider / dividers:** any decorative rule (`╌` etc.) sizes to
-   `detail.width`, or is dropped in favor of the bordered chrome.
+1. **List:** `ResourceTable` gets `totalWidth = list.width` exactly. Column
+   resolution (`resolveWidth`, ResourceTable.tsx ~39) must guarantee
+   **Σ column widths ≤ totalWidth** at every width — distribute rounding
+   remainder; truncate the flex column if needed. No wrap, detail open or
+   closed.
+2. **Metrics charts:** thread `detail.width` into `MetricsTab`; charts and text
+   fit within it (`renderTimeseriesChart({ width })` is already
+   width-parameterized).
+3. **Dividers:** the ad-hoc `╌` divider is removed in favor of the bordered
+   chrome + tab bar.
 
 ## Where the logic lives (coverage)
 
-- `src/ui/layout-geometry.ts` — pure, **100% covered** (lines/branches/
-  functions/statements), exhaustively unit-tested across terminal sizes
-  (tiny, typical, ultra-wide), both `showDetail` states, and the
-  `sidebarRatio`/`verticalRatio` clamp boundaries.
-- `ResourceTable` width distribution — pure component logic, covered by frame
-  tests asserting total rendered width ≤ pane and no wrap.
-- `MetricsTab` chart-width selection — covered by frame tests.
-- `controller.ts` (excluded adapter) only calls `computeLayout` and passes
-  widths through; it must contain no geometry arithmetic of its own.
+- `src/ui/layout-geometry.ts` (+ frame model) — pure, **100% covered**,
+  exhaustively tested across terminal sizes (tiny/typical/ultra-wide), both
+  `showDetail` states, ratio clamp boundaries, and **junction-glyph
+  correctness** for the collapsed grid.
+- `ResourceTable` width distribution + `MetricsTab` chart width — frame tests
+  asserting rendered width ≤ pane and no wrap.
+- `controller.ts` (excluded adapter) calls the module and passes widths
+  through; it contains no geometry arithmetic of its own.
 
 ## Acceptance criteria (given-when-then)
 
 ```gherkin
-Feature: Region chrome and focus indicator
+Feature: Collapsed bordered grid
 
-  Scenario: All three regions are bordered and titled
+  Scenario: All regions are bordered and share collapsed edges
     Given the detail pane is open
-    Then the sidebar, list, and detail regions each render a border and a title
+    Then the header, sidebar, list, detail, and command bar each render inside
+      the connected frame
+    And adjacent regions share a single border line (no double lines)
+    And the line junctions use the correct box-drawing glyphs
 
   Scenario: Focus is shown without moving anything
     Given the list is focused
-    Then the list's border and title are highlighted
-    And the sidebar and detail borders are dim
+    Then the border enclosing the list and its title are highlighted
+    And the other regions' borders are dim
     When I press Tab to focus the detail pane
     Then the detail border/title become highlighted and the list's dim
     And every region keeps the exact same width and height as before
+```
+
+```gherkin
+Feature: Header shows and exposes context + namespace
+
+  Scenario: Current context is shown left of the namespace
+    Given the current context is "docker-desktop" and the namespace is "default"
+    Then the header shows the context to the left of "ns: default"
+
+  Scenario: Context and namespace are distinct clickable regions
+    Then computeFrame exposes separate coordinate ranges for the context and
+      the namespace within the header
 ```
 
 ```gherkin
@@ -183,41 +247,39 @@ Feature: Content never wraps
   Scenario: Metrics charts fit the detail pane
     Given a Pod's detail pane is open on the Metrics tab
     And the detail pane inner width is 48 columns
-    Then every metrics chart line is <= 48 columns wide
-    And no chart line wraps
-
-  Scenario: Detail divider fits the detail pane
-    Given the detail pane is open
-    Then any divider rule is <= the detail pane inner width
-    And it does not wrap
+    Then every metrics chart line is <= 48 columns wide and does not wrap
 ```
 
 ```gherkin
 Feature: One geometry source
 
-  Scenario: tableWidth and visibleHeight derive from computeLayout
+  Scenario: tableWidth and visibleHeight derive from computeFrame
     Given a terminal of any size
-    Then controller.tableWidth() equals computeLayout(...).list.width
-    And controller.visibleHeight() equals computeLayout(...).list.height
+    Then controller.tableWidth() equals computeFrame(...).list.width
+    And controller.visibleHeight() equals computeFrame(...).list.height
 ```
 
 ## Out of scope (handled elsewhere)
 
-- Using `Rect.x/y` for mouse hit-testing — that's chunk 04 (this chunk just
-  exposes the coordinates).
+- Mouse behavior: drag-resize on the handle segments, header context/namespace
+  clicks, and wheel routing — all chunk 04 (this chunk only exposes the
+  coordinates).
 - List horizontal scrolling when content legitimately exceeds the pane — chunk
-  05. (This chunk guarantees *default* columns fit; chunk 05 adds opt-in wider
-  layouts with a scroll offset.)
+  05.
 - Detail-content vertical scrolling — chunk 03.
+- Context-switcher polish (feedback, per-context memory, `c` key) — chunk 08.
 
 ## Done when
 
-- Sidebar, list, and detail always render bordered + titled; the focused region
-  is highlighted with zero layout movement on focus change.
+- All five regions render inside one collapsed bordered grid with correct
+  junctions and titles; the focused region is highlighted with zero layout
+  movement on focus change.
+- The header shows the current context left of the namespace, and the frame
+  exposes context/namespace/handle coordinates.
 - `src/ui/layout-geometry.ts` is the single geometry source, 100% covered;
-  `tableWidth()`/`visibleHeight()` and all box sizing derive from it; no magic
+  `tableWidth()`/`visibleHeight()` and all sizing derive from it; no magic
   width floors/offsets remain (`max(60,…)`, `−2`, `termCols−36`,
-  `CHART_WIDTH=64`).
-- The list, detail divider, and metrics charts never wrap or spill at any
-  terminal size, detail open or closed (acceptance scenarios pass).
+  `CHART_WIDTH=64`); the `╌` divider is gone.
+- List and metrics charts never wrap or spill at any terminal size, detail open
+  or closed.
 - `bun run gate` is green.
