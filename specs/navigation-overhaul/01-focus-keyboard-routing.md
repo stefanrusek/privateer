@@ -71,6 +71,26 @@ detail**.
   `src/ui/detail-tabs.ts`) with full unit tests so both the controller and the
   component derive the same list from one source.
 
+### Quit (`q`) and close-pane (`Escape`)
+
+- **`q` quits the app from every region** while in normal navigation mode
+  (i.e. not while a text input is active — resource-list search, command bar,
+  Logs search, or YAML edit, all of which are handled earlier in the dispatch
+  and where `q` is a literal character). The existing quit-confirm when
+  port-forwards are active (`quit()` → confirm → `forceQuit()`,
+  controller.ts ~2231) still applies.
+- **Known bug to root-cause:** users report `q` does **not** currently quit —
+  only `Ctrl+C` does. Today the global handler guards `q` with
+  `focus !== 'detail'` (controller.ts ~3137) and the detail handler quits on
+  `q` separately (~3550). Consolidate to a single global `q`-quits-in-normal-
+  mode path (remove the `focus !== 'detail'` guard and the detail-handler
+  duplicate), and verify the app actually exits in all regions (confirm
+  `onExit()` terminates under Bun). The acceptance below must hold.
+- **`Escape` closes the detail pane** (and returns focus to the list) whenever
+  the pane is open, from any region. `Escape` never quits the app. `Escape`
+  while a modal/search/command/edit mode is active still cancels that mode
+  (handled earlier in dispatch, unchanged).
+
 ### Opening the detail pane focuses it (fixes the `/`-in-Logs bug)
 
 Today `openDetail()` (and the `l`/`e`/Enter actions in `handleListInput`) open
@@ -188,6 +208,34 @@ Feature: Opening the detail pane focuses it
     Then the detail pane is open and focused
 ```
 
+```gherkin
+Feature: Quit and close-pane
+
+  Scenario: q quits from the list
+    Given the list is focused in normal mode
+    When I press "q"
+    And there are no active port-forwards
+    Then the app exits
+
+  Scenario: q quits from the detail pane
+    Given the detail pane is open and focused in normal mode
+    When I press "q"
+    Then the app exits
+
+  Scenario: q is a literal character while typing
+    Given the Logs search input is active
+    When I press "q"
+    Then "q" is appended to the search query
+    And the app does NOT exit
+
+  Scenario: Escape closes the detail pane, never quits
+    Given the detail pane is open and focused
+    When I press Escape
+    Then the detail pane closes
+    And focus returns to the list
+    And the app does NOT exit
+```
+
 ## Out of scope (handled elsewhere)
 
 - The actual list horizontal-scroll behavior (chunk 05) and detail content
@@ -203,6 +251,8 @@ Feature: Opening the detail pane focuses it
 - List `←/→` and detail `←` no longer move focus; detail `←/→` switch tabs;
   `1–6` jump tabs.
 - Opening the detail pane focuses it; `/` in the Logs tab opens Logs search.
+- `q` quits from every region in normal mode (root-caused so it actually
+  exits); `Escape` closes the detail pane and never quits.
 - Tab-list and region-cycle logic live in pure, 100%-covered modules; new BDD
   scenarios above pass.
 - `bun run gate` is green.
