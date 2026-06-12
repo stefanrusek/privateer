@@ -86,6 +86,13 @@ import {
   type LineOptionId,
 } from '../../logs/line-options.js';
 import { downloadLogs } from '../../logs/download.js';
+import {
+  CommandInput,
+  loadHistory,
+  appendHistory,
+  resolveCommand,
+  DEFAULT_COMMAND,
+} from '../../exec/command-history.js';
 import { PortForwardManager } from '../../portforward/manager.js';
 import type { PortForwardManagerState } from '../../portforward/manager.js';
 import type { MetricsTier } from '../../metrics/discovery.js';
@@ -316,6 +323,12 @@ export class LiveController {
   private pfManagerOpen = false;
   private portPrompt: PortPromptState | null = null;
   private agentPaneOpen = false;
+  // Exec command prompt (Spec 05 §4.2): editable command with ↑/↓ history.
+  private execPrompt: {
+    resource: ResourceObject;
+    container: string;
+    input: CommandInput;
+  } | null = null;
   private picker:
     | (PickerViewState & {
         onPick: (value: string) => void;
@@ -644,6 +657,10 @@ export class LiveController {
   }
 
   private commandBarText(): string {
+    if (this.execPrompt !== null) {
+      const shown = this.execPrompt.input.value;
+      return `exec ${this.execPrompt.resource.name} ▸ ${shown.length > 0 ? shown : DEFAULT_COMMAND} (↑ history)`;
+    }
     if (this.portPrompt !== null) {
       return `⇄ ${this.portPrompt.podName} ports remote:local = ${this.portPrompt.text}`;
     }
@@ -2486,11 +2503,70 @@ export class LiveController {
 
   private execPod(resource: ResourceObject): void {
     this.pickContainer(resource, 'Exec — choose container', (container) => {
-      this.execInto(resource, container);
+      void this.openExecPrompt(resource, container);
     });
   }
 
-  private execInto(resource: ResourceObject, container: string): void {
+  private async openExecPrompt(
+    resource: ResourceObject,
+    container: string,
+  ): Promise<void> {
+    const history = await loadHistory(this.fileSink);
+    this.execPrompt = {
+      resource,
+      container,
+      input: new CommandInput(history, ''),
+    };
+    this.app = { ...this.app, focus: 'commandbar', mode: 'command' };
+    this.bump();
+  }
+
+  private handleExecPromptInput(input: string, key: InkKey): void {
+    const prompt = this.execPrompt;
+    if (prompt === null) {
+      return;
+    }
+    if (key.escape) {
+      this.execPrompt = null;
+      this.app = { ...this.app, focus: 'list', mode: 'normal' };
+      this.bump();
+      return;
+    }
+    if (key.return) {
+      const command = resolveCommand(prompt.input.value);
+      void appendHistory(this.fileSink, command);
+      this.execPrompt = null;
+      this.app = { ...this.app, focus: 'list', mode: 'normal' };
+      this.bump();
+      this.execInto(prompt.resource, prompt.container, command);
+      return;
+    }
+    if (key.upArrow) {
+      prompt.input.up();
+      this.bump();
+      return;
+    }
+    if (key.downArrow) {
+      prompt.input.down();
+      this.bump();
+      return;
+    }
+    if (key.backspace || key.delete) {
+      prompt.input.setBuffer(prompt.input.value.slice(0, -1));
+      this.bump();
+      return;
+    }
+    if (input.length >= 1 && !key.ctrl && !key.meta && !key.tab) {
+      prompt.input.setBuffer(prompt.input.value + input);
+      this.bump();
+    }
+  }
+
+  private execInto(
+    resource: ResourceObject,
+    container: string,
+    command: string = DEFAULT_COMMAND,
+  ): void {
     const namespace = resource.namespace ?? 'default';
     const podName = resource.name;
     this.suspendRunner(
@@ -2509,7 +2585,9 @@ export class LiveController {
               '--',
               'sh',
               '-c',
-              'command -v bash >/dev/null 2>&1 && exec bash || exec sh',
+              command === DEFAULT_COMMAND
+                ? 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'
+                : command,
             ],
             { stdio: 'inherit' },
           );
@@ -2996,6 +3074,10 @@ export class LiveController {
     // Ctrl+C is handled by Ink's exitOnCtrlC; q routing below.
     if (this.confirm !== null) {
       // ConfirmDialog's own useInput handles selection.
+      return;
+    }
+    if (this.execPrompt !== null) {
+      this.handleExecPromptInput(input, key);
       return;
     }
     if (this.picker !== null) {
