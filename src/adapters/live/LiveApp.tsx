@@ -26,7 +26,9 @@ function MouseRouter({ controller }: { controller: LiveController }): null {
     // ink-mouse turns on any-motion tracking (1003h), which we don't use —
     // motion events flood the stream and leak into the shell on unclean
     // exits. Click (1000h) + SGR (1006h) stay on; motion modes go off.
-    process.stdout.write('\x1b[?1003l\x1b[?1015l');
+    // Button-held motion (1002h) is silent on hover and gives us drag
+    // events for the pane splitter.
+    process.stdout.write('\x1b[?1003l\x1b[?1015l\x1b[?1002h');
     const onClick = (
       position: { x: number; y: number },
       action: 'press' | 'release' | null,
@@ -43,9 +45,22 @@ function MouseRouter({ controller }: { controller: LiveController }): null {
         controller.handleMouseScroll(position.x, direction);
       }
     };
+    // ink-mouse's drag event proved unreliable; parse SGR drag (button 32,
+    // reported under mode 1002) and release straight off stdin.
+    const onData = (chunk: Buffer | string): void => {
+      const text = chunk.toString();
+      for (const match of text.matchAll(/\[<32;(\d+);(\d+)M/g)) {
+        controller.handleMouseDrag(Number(match[1]), Number(match[2]), true);
+      }
+      if (/\[<0;\d+;\d+m/.test(text)) {
+        controller.handleMouseDrag(0, 0, false);
+      }
+    };
+    process.stdin.on('data', onData);
     events.on('click', onClick);
     events.on('scroll', onScroll);
     return () => {
+      process.stdin.off('data', onData);
       events.off('click', onClick);
       events.off('scroll', onScroll);
     };
@@ -330,6 +345,9 @@ export function LiveApp({
           )}
           renderDetail={() => (
             <Box height={detailRows} overflow="hidden" flexDirection="column">
+              {app.showDetail && (
+                <Text dimColor>{'╌'.repeat(Math.max(10, termCols - 36))}</Text>
+              )}
               {renderDetail()}
             </Box>
           )}

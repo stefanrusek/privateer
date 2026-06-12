@@ -7,3 +7,4 @@ coverage
 .bun
 
 .claude/worktrees/
+bin/*.generated.ts

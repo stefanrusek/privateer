@@ -2792,6 +2792,48 @@ export class LiveController {
     }
   }
 
+  private draggingSplitter = false;
+
+  /** Row of the splitter between list and detail (1-based screen coords). */
+  private splitterRow(): number {
+    const contentRows = Math.max(8, this.terminalRows - 3);
+    const listRows = Math.max(
+      4,
+      Math.round(contentRows * (1 - this.app.verticalRatio)),
+    );
+    return 2 + listRows;
+  }
+
+  handleMouseDrag(x: number, y: number, dragging: boolean): void {
+    if (process.env.P9R_DEBUG !== undefined) {
+      process.stderr.write(
+        `[drag] x=${String(x)} y=${String(y)} dragging=${String(dragging)} splitter=${String(this.splitterRow())}\n`,
+      );
+    }
+    if (!dragging) {
+      this.draggingSplitter = false;
+      return;
+    }
+    if (!this.app.showDetail || x <= this.sidebarWidthCols()) {
+      return;
+    }
+    if (!this.draggingSplitter) {
+      if (Math.abs(y - this.splitterRow()) > 1) {
+        return;
+      }
+      this.draggingSplitter = true;
+    }
+    const contentRows = Math.max(8, this.terminalRows - 3);
+    const listRows = Math.min(contentRows - 4, Math.max(4, y - 2));
+    const ratio = 1 - listRows / contentRows;
+    this.app = {
+      ...this.app,
+      verticalRatio: Math.min(0.8, Math.max(0.2, ratio)),
+    };
+    this.saveLayout();
+    this.bump();
+  }
+
   handleMouseScroll(x: number, direction: 'scrollup' | 'scrolldown'): void {
     if (
       this.confirm !== null ||

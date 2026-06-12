@@ -12,7 +12,7 @@
   },
   "scripts": {
     "start": "bun run bin/p9r.ts",
-    "build": "bun build ./bin/p9r.ts --compile --outfile dist/p9r",
+    "build": "bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:grep": "bash scripts/grep-gate.sh",
@@ -25,7 +25,8 @@
     "bdd": "bun --bun cucumber-js",
     "gate": "bun run format:check && bun run lint && bun run lint:grep && bun run typecheck && bun run test && bun run bdd",
     "fixtures:up": "bash scripts/fixtures.sh up",
-    "fixtures:down": "bash scripts/fixtures.sh down"
+    "fixtures:down": "bash scripts/fixtures.sh down",
+    "build:all": "bun scripts/build.ts all"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
