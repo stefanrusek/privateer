@@ -16,6 +16,7 @@ import { LogsTab } from '../../ui/components/LogsTab.js';
 import { PortForwardManager } from '../../ui/components/PortForwardManager.js';
 import { MetricsTab } from '../../ui/components/MetricsTab.js';
 import { MouseProvider, useMouse } from '@zenobius/ink-mouse';
+import { PickerOverlay } from '../../ui/components/PickerOverlay.js';
 import { LiveController } from './controller.js';
 
 /** Routes global mouse events into the controller's geometry hit-testing. */
@@ -281,6 +282,20 @@ export function LiveApp({
     ? Math.max(4, Math.round(contentRows * (1 - app.verticalRatio)))
     : contentRows;
   const detailRows = Math.max(4, contentRows - listRows);
+
+  if (snapshot.picker !== null) {
+    return (
+      <Box height={rows} width={termCols} overflow="hidden">
+        <PickerOverlay
+          title={snapshot.picker.title}
+          items={snapshot.picker.items}
+          selectedIndex={snapshot.picker.selectedIndex}
+          filter={snapshot.picker.filter}
+          maxRows={Math.max(6, rows - 8)}
+        />
+      </Box>
+    );
+  }
 
   if (snapshot.pfManagerOpen) {
     return (

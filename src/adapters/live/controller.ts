@@ -18,6 +18,7 @@ import {
   getAvailableTabs,
   type TabId,
 } from '../../ui/components/DetailPane.js';
+import type { PickerItem } from '../../ui/components/PickerOverlay.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
 import type { ClusterSummary } from '../../ui/components/HealthDashboard.js';
 import type { EvaluatedRule } from '../../health/types.js';
@@ -173,6 +174,14 @@ export interface LogsViewState {
   confirmation: string | undefined;
 }
 
+/** Modal picker state (namespace dropdown, container picker). */
+export interface PickerViewState {
+  title: string;
+  items: PickerItem[];
+  selectedIndex: number;
+  filter: string;
+}
+
 /** Inline port-forward prompt state (Spec 05 §5.2). */
 export interface PortPromptState {
   podName: string;
@@ -216,6 +225,7 @@ export interface LiveSnapshot {
   portForwards: PortForwardManagerState;
   pfManagerOpen: boolean;
   agentPaneOpen: boolean;
+  picker: PickerViewState | null;
   portPrompt: PortPromptState | null;
   metrics: MetricsViewState;
   nowMs: number;
@@ -304,6 +314,11 @@ export class LiveController {
   private pfManagerOpen = false;
   private portPrompt: PortPromptState | null = null;
   private agentPaneOpen = false;
+  private picker:
+    | (PickerViewState & {
+        onPick: (value: string) => void;
+      })
+    | null = null;
 
   // Exec suspend/handover (Spec 05 §4.3): set by the launch adapter.
   private suspendRunner: (run: () => Promise<void>) => void = () => undefined;
@@ -483,22 +498,37 @@ export class LiveController {
       }, HEALTH_INTERVAL_MS),
     );
 
-    // Config-driven agent timeout (Spec 07 §9 default 15s; slower hardware
-    // can raise it via agent.timeoutSeconds in ~/.config/p9r/config.yaml).
-    void new FsConfigStore(join(homedir(), '.config', 'p9r', 'config.yaml'))
-      .load()
-      .then((result) => {
-        if (result.ok) {
-          const config = parseConfig(result.value);
-          this.agentTimeoutMs = config.agentTimeoutSeconds * 1000;
-          // Spec 07 §11 names the model "gemma-4-E2B-it-onnx"; that sentinel
-          // (and E4B) keeps the adapter default. Anything else (a real HF
-          // model id) is passed through.
-          if (!config.agentModel.startsWith('gemma-4-')) {
-            this.agentModelId = config.agentModel;
-          }
-        }
-      });
+    // Config-driven agent settings with hot-reload (Spec 01 §4).
+    const configStore = new FsConfigStore(
+      join(homedir(), '.config', 'p9r', 'config.yaml'),
+    );
+    const applyConfig = (raw: Record<string, unknown>): void => {
+      const config = parseConfig(raw);
+      this.agentTimeoutMs = config.agentTimeoutSeconds * 1000;
+      // Spec 07 §11 names the model "gemma-4-E2B-it-onnx"; that sentinel
+      // (and E4B) keeps the adapter default. Anything else (a real HF
+      // model id) is passed through.
+      const model = config.agentModel.startsWith('gemma-4-')
+        ? undefined
+        : config.agentModel;
+      if (model !== this.agentModelId) {
+        this.agentModelId = model;
+        // Next query loads the newly configured model.
+        this.enginePromise = null;
+        this.toolsEnabled = false;
+      }
+    };
+    void configStore.load().then((result) => {
+      if (result.ok) {
+        applyConfig(result.value);
+      }
+    });
+    this.cancels.push(
+      configStore.watch((config) => {
+        applyConfig(config);
+        this.bump();
+      }),
+    );
 
     // Metrics discovery + polling (Spec 06 §2)
     void this.initMetrics();
@@ -549,6 +579,7 @@ export class LiveController {
       pfManagerOpen: this.pfManagerOpen,
       portPrompt: this.portPrompt,
       agentPaneOpen: this.agentPaneOpen,
+      picker: this.pickerView(),
       metrics: {
         tier: this.metricsTier,
         capabilities: this.metricsCaps,
@@ -2118,13 +2149,13 @@ export class LiveController {
       return;
     }
     this.stopLogs();
+    this.pickContainer(resource, 'Logs — choose container', (container) => {
+      this.startLogsFor(resource, container);
+    });
+  }
+
+  private startLogsFor(resource: ResourceObject, container: string): void {
     const picker = buildContainerPicker(resource.raw);
-    const idx = picker.defaultIndex >= 0 ? picker.defaultIndex : 0;
-    const container = picker.options[idx]?.name;
-    if (container === undefined) {
-      this.logs = null;
-      return;
-    }
     this.logs = {
       podName: resource.name,
       namespace: resource.namespace ?? '',
@@ -2351,13 +2382,12 @@ export class LiveController {
   // -------------------------------------------------------------------------
 
   private execPod(resource: ResourceObject): void {
-    const picker = buildContainerPicker(resource.raw);
-    const idx = picker.defaultIndex >= 0 ? picker.defaultIndex : 0;
-    const container = picker.options[idx]?.name;
-    if (container === undefined) {
-      this.setHints(['✗ No running container to exec into']);
-      return;
-    }
+    this.pickContainer(resource, 'Exec — choose container', (container) => {
+      this.execInto(resource, container);
+    });
+  }
+
+  private execInto(resource: ResourceObject, container: string): void {
     const namespace = resource.namespace ?? 'default';
     const podName = resource.name;
     this.suspendRunner(
@@ -2678,6 +2708,140 @@ export class LiveController {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Modal pickers (namespace dropdown, container picker)
+  // -------------------------------------------------------------------------
+
+  private pickerView(): PickerViewState | null {
+    if (this.picker === null) {
+      return null;
+    }
+    const filtered = this.pickerFiltered();
+    return {
+      title: this.picker.title,
+      items: filtered,
+      selectedIndex: Math.min(
+        this.picker.selectedIndex,
+        Math.max(0, filtered.length - 1),
+      ),
+      filter: this.picker.filter,
+    };
+  }
+
+  private pickerFiltered(): PickerItem[] {
+    if (this.picker === null) {
+      return [];
+    }
+    const f = this.picker.filter.toLowerCase();
+    return f === ''
+      ? this.picker.items
+      : this.picker.items.filter((item) =>
+          item.label.toLowerCase().includes(f),
+        );
+  }
+
+  private openPicker(
+    title: string,
+    items: PickerItem[],
+    selectedIndex: number,
+    onPick: (value: string) => void,
+  ): void {
+    this.picker = {
+      title,
+      items,
+      selectedIndex: Math.max(0, selectedIndex),
+      filter: '',
+      onPick,
+    };
+    this.bump();
+  }
+
+  private handlePickerInput(input: string, key: InkKey): void {
+    const picker = this.picker;
+    if (picker === null) {
+      return;
+    }
+    if (key.escape) {
+      this.picker = null;
+      this.bump();
+      return;
+    }
+    const filtered = this.pickerFiltered();
+    if (key.return) {
+      const item =
+        filtered[Math.min(picker.selectedIndex, filtered.length - 1)];
+      this.picker = null;
+      this.bump();
+      if (item !== undefined) {
+        picker.onPick(item.value);
+      }
+      return;
+    }
+    if (key.downArrow || (input === 'j' && picker.filter === '')) {
+      picker.selectedIndex = Math.min(
+        picker.selectedIndex + 1,
+        Math.max(0, filtered.length - 1),
+      );
+      this.bump();
+      return;
+    }
+    if (key.upArrow || (input === 'k' && picker.filter === '')) {
+      picker.selectedIndex = Math.max(picker.selectedIndex - 1, 0);
+      this.bump();
+      return;
+    }
+    if (key.backspace || key.delete) {
+      picker.filter = picker.filter.slice(0, -1);
+      picker.selectedIndex = 0;
+      this.bump();
+      return;
+    }
+    if (input.length >= 1 && !key.ctrl && !key.meta && !key.tab) {
+      picker.filter += input;
+      picker.selectedIndex = 0;
+      this.bump();
+    }
+  }
+
+  private openNamespacePicker(): void {
+    const items: PickerItem[] = [
+      { value: '', label: '(all namespaces)' },
+      ...this.app.allNamespaces.map((ns) => ({ value: ns, label: ns })),
+    ];
+    const current = items.findIndex(
+      (item) => item.value === this.app.namespace,
+    );
+    this.openPicker('Namespace', items, Math.max(0, current), (value) => {
+      this.setNamespace(value);
+    });
+  }
+
+  /** Container picker for logs/exec (Spec 05 §3.1). */
+  private pickContainer(
+    resource: ResourceObject,
+    title: string,
+    onPick: (container: string) => void,
+  ): void {
+    const picker = buildContainerPicker(resource.raw);
+    if (picker.options.length === 0) {
+      this.setHints(['✗ No containers found']);
+      return;
+    }
+    if (picker.autoOpen && picker.defaultIndex >= 0) {
+      const name = picker.options[picker.defaultIndex]?.name;
+      if (name !== undefined) {
+        onPick(name);
+      }
+      return;
+    }
+    const items: PickerItem[] = picker.options.map((option) => ({
+      value: option.name,
+      label: option.label,
+      ...(option.phase !== 'running' ? { note: option.phase } : {}),
+    }));
+    this.openPicker(title, items, Math.max(0, picker.defaultIndex), onPick);
+  }
+
   handleInput(input: string, key: InkKey): void {
     // Terminals can deliver rapid keystrokes as one chunk ("jj"); split so
     // navigation handlers see single keypresses. Text-entry handlers append
@@ -2691,6 +2855,10 @@ export class LiveController {
     // Ctrl+C is handled by Ink's exitOnCtrlC; q routing below.
     if (this.confirm !== null) {
       // ConfirmDialog's own useInput handles selection.
+      return;
+    }
+    if (this.picker !== null) {
+      this.handlePickerInput(input, key);
       return;
     }
     if (this.portPrompt !== null) {
@@ -2758,12 +2926,7 @@ export class LiveController {
       return;
     }
     if (input === 'n') {
-      this.namespacePickIndex = Math.max(
-        0,
-        ['', ...this.app.allNamespaces].indexOf(this.app.namespace),
-      );
-      this.app = { ...this.app, headerFocus: 'namespace' };
-      this.bump();
+      this.openNamespacePicker();
       return;
     }
     if (input === ' ') {
