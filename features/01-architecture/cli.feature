@@ -5,7 +5,7 @@ Feature: Command-line interface
 
   Scenario: version prints the build version
     When I run p9r with arguments "version"
-    Then the output contains "p9r 0.1.0"
+    Then the output contains "p9r 0.2.0"
 
   Scenario: help prints usage
     When I run p9r with arguments "help"

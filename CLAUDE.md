@@ -43,11 +43,13 @@ Every change must pass `bun run gate` before it is done. Pieces of the bar:
 
 ## Releases
 
-The version lives in **two places** and both must be bumped together:
-`package.json` and `src/version.ts` (what `p9r version` actually prints —
-forgetting it shipped a mislabeled binary once).
+The version lives in **three places** and all must be bumped together:
+`package.json`, `src/version.ts` (what `p9r version` actually prints —
+forgetting it shipped a mislabeled binary once), and the BDD feature files
+`features/00-scaffold/version.feature` and `features/01-architecture/cli.feature`
+(both assert the exact version string; missing them breaks the gate).
 
-1. Bump both, commit, push to main.
+1. Bump all three, run `bun run gate` to confirm, commit, push to main.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z` — the tag triggers
    `.github/workflows/release.yml`, which cross-compiles all targets from one
    Linux host (`onnxruntime-node` ships every platform's natives;
@@ -83,6 +85,19 @@ re-push the tag at the fixed commit.
 - Diagnostics go to `~/.config/p9r/debug.log` via `src/adapters/logger.ts`
   (pino, sync destination — Bun can't use worker transports). Never write to
   stdout/stderr; they belong to Ink. `P9R_DEBUG=1` enables debug level.
+
+## Claude Code cloud sessions
+
+The web sandbox has no cluster by default — run
+`bash scripts/claude-cluster-up.sh` to bring up a local kind cluster (it
+works around the sandbox's cgroup v1 host, denied negative oom_score_adj,
+blocked Docker Hub CDN, and TLS-intercepting proxy); after that
+`bun run fixtures:up` and `bun run start` work normally.
+`scripts/claude-env-setup.sh` is the environment Setup script: it installs
+kubectl/kind and pre-pulls the node image into the environment cache.
+The default network allowlist blocks registry.k8s.io, so the metrics-server
+and kube-state-metrics fixtures need `registry.k8s.io` and `*.pkg.dev`
+added as custom allowed domains in the environment settings.
 
 ## Testing the TUI
 
