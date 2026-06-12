@@ -83,16 +83,21 @@ Each region carries a title in its top border:
 | Detail | resource kind + name, e.g. `Pod · web-7d9` |
 | Header / Command bar | no title needed (single-line chrome) |
 
-- **Focused region:** the border segments enclosing it render in an accent
-  color (proposed `cyan`) and its title is **bold**. Shared segments adopt the
-  accent when they bound the focused region; junction glyphs at the focused
-  region's corners are accent too.
-- **Unfocused regions:** dim border, dim title.
-- **Changing focus changes only styling, never dimensions** — no region grows,
-  shrinks, or reflows on focus change. (This is why borders are always drawn.)
+- **Focused region:** the border segments enclosing it render as a **double
+  line** in an accent color (proposed `cyan`) and its title is **bold**.
+  Unfocused regions render as single lines. Where a double-line (focused) edge
+  meets a single-line (unfocused) edge, the frame uses the correct **mixed
+  single/double junction** glyph (`╞ ╡ ╤ ╧ ╪ ╟ ╢ ╓ ╖ ╘ ╛` …). Because a
+  double-line glyph still occupies exactly one cell, switching weight causes
+  **no layout movement**.
+- **Unfocused regions:** single-line dim border, dim title.
+- **Changing focus changes only border weight/color and title style, never
+  dimensions** — no region grows, shrinks, or reflows on focus change. (This is
+  why borders are always drawn.)
 
-> Accent color / glyph set are cosmetic and may be tuned during implementation
-> without a spec change.
+> Accent color, single/double weight, and glyph set are cosmetic and may be
+> tuned during implementation without a spec change — but the frame model must
+> support per-segment line weight and the mixed junctions, with tests.
 
 ## Root cause being fixed: no single geometry source
 
@@ -152,10 +157,12 @@ Ink's per-`Box` `borderStyle` draws each box's four borders independently, so
 two adjacent boxes show a **double** line and can't form `┼` junctions. The
 collapsed grid is therefore drawn by a **pure frame model** (part of
 `layout-geometry.ts` or a sibling `src/ui/frame.ts`) that emits the correct
-box-drawing glyph for every border cell (corners, tees, crosses), with focus
-accent applied per segment. A thin Ink renderer paints that glyph grid and
-positions each region's content inside its `Rect`. The frame model is pure and
-100%-covered; the Ink renderer is thin adapter glue.
+box-drawing glyph for every border cell (corners, tees, crosses) given each
+segment's **line weight** (single/double) and accent. The focused region's
+segments are double-weight; mixed single/double junctions are resolved to the
+correct glyph. A thin Ink renderer paints that glyph grid and positions each
+region's content inside its `Rect`. The frame model is pure and 100%-covered;
+the Ink renderer is thin adapter glue.
 
 ### All consumers derive from the frame
 
@@ -187,7 +194,8 @@ positions each region's content inside its `Rect`. The frame model is pure and
 - `src/ui/layout-geometry.ts` (+ frame model) — pure, **100% covered**,
   exhaustively tested across terminal sizes (tiny/typical/ultra-wide), both
   `showDetail` states, ratio clamp boundaries, and **junction-glyph
-  correctness** for the collapsed grid.
+  correctness** for the collapsed grid (including mixed single/double junctions
+  where a focused double-border meets a single-border neighbor).
 - `ResourceTable` width distribution + `MetricsTab` chart width — frame tests
   asserting rendered width ≤ pane and no wrap.
 - `controller.ts` (excluded adapter) calls the module and passes widths
@@ -207,10 +215,13 @@ Feature: Collapsed bordered grid
 
   Scenario: Focus is shown without moving anything
     Given the list is focused
-    Then the border enclosing the list and its title are highlighted
-    And the other regions' borders are dim
+    Then the border enclosing the list is a double line in the accent color
+    And the list title is bold
+    And the other regions' borders are single dim lines
+    And edges where the list's double border meets a neighbor use the correct
+      mixed single/double junction glyph
     When I press Tab to focus the detail pane
-    Then the detail border/title become highlighted and the list's dim
+    Then the detail border becomes double/accent and the list's reverts to single
     And every region keeps the exact same width and height as before
 ```
 
