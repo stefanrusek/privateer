@@ -90,7 +90,7 @@ export function modelCacheDir(): string {
 }
 
 /** Token budgets: thinking mode needs room for the reasoning prefix. */
-const MAX_NEW_TOKENS = 128;
+const MAX_NEW_TOKENS = 320;
 const MAX_NEW_TOKENS_THINKING = 768;
 
 export class TransformersInferenceEngine implements InferenceEngine {
@@ -157,9 +157,20 @@ export class TransformersInferenceEngine implements InferenceEngine {
       const decoded: string[] = this.tokenizer.batch_decode(newTokens, {
         skip_special_tokens: true,
       });
+      if (process.env.P9R_DEBUG !== undefined) {
+        process.stderr.write(
+          `[engine] decoded(${String((decoded[0] ?? '').length)}ch): ${JSON.stringify((decoded[0] ?? '').slice(0, 500))}\n`,
+        );
+      }
       const text = stripCodeFence(stripThinkBlock(decoded[0] ?? ''));
 
-      const toolCalls = extractToolCalls(text);
+      let toolCalls = extractToolCalls(text);
+      if (toolCalls.length === 0) {
+        // Small models sometimes conflate the JSON-action format with the
+        // tool protocol and emit {"action":"<tool_name>", ...} — recover it
+        // as a tool call when the name matches an offered tool.
+        toolCalls = extractHybridToolCall(text, request.tools);
+      }
       return ok({
         content: toolCalls.length > 0 ? '' : text.trim(),
         toolCalls,
@@ -178,7 +189,13 @@ export class TransformersInferenceEngine implements InferenceEngine {
 // ---------------------------------------------------------------------------
 
 function toRawMessage(m: ChatMessage): Record<string, unknown> {
-  const base: Record<string, unknown> = { role: m.role, content: m.content };
+  // Small models tend to parrot tool results verbatim instead of composing
+  // the final action — append the format reminder to every tool result.
+  const content =
+    m.role === 'tool'
+      ? `${m.content}\n\nUsing this data, respond now with ONLY a JSON action object, e.g. {"action":"answer","text":"..."}.`
+      : m.content;
+  const base: Record<string, unknown> = { role: m.role, content };
   if (m.toolCalls !== undefined) {
     // Qwen3's template renders `tool_call.function.{name,arguments}` and
     // accepts `arguments` as a raw JSON string.
@@ -228,6 +245,52 @@ function stripThinkBlock(text: string): string {
 const TOOL_CALL_RE = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
 
 /**
+ * Recover a tool call from the hybrid {"action":"<tool_name>", ...args}
+ * shape some small models produce when both the JSON-action response format
+ * and the tool protocol are in context.
+ */
+function extractHybridToolCall(
+  text: string,
+  tools: readonly ToolDefinition[],
+): ToolCall[] {
+  try {
+    const parsed: unknown = JSON.parse(text.trim());
+    if (typeof parsed !== 'object' || parsed === null) {
+      return [];
+    }
+    const { action, name, ...rest } = parsed as Record<string, unknown>;
+    const candidate = typeof action === 'string' ? action : name;
+    if (typeof candidate !== 'string') {
+      return [];
+    }
+    // Exact match, else unique prefix match ("list" → "list_resources").
+    const matched =
+      tools.find((tool) => tool.name === candidate) ??
+      (tools.filter((tool) => tool.name.startsWith(candidate)).length === 1
+        ? tools.find((tool) => tool.name.startsWith(candidate))
+        : undefined);
+    if (matched === undefined) {
+      return [];
+    }
+    const args =
+      typeof rest.arguments === 'object' && rest.arguments !== null
+        ? rest.arguments
+        : typeof rest.parameters === 'object' && rest.parameters !== null
+          ? rest.parameters
+          : rest;
+    return [
+      {
+        id: 'call-0',
+        name: matched.name,
+        arguments: JSON.stringify(args),
+      },
+    ];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Parse `<tool_call>{"name":…,"arguments":…}</tool_call>` blocks emitted by
  * the model into boundary {@link ToolCall}s. Malformed blocks are skipped.
  */
@@ -243,12 +306,20 @@ function extractToolCalls(text: string): ToolCall[] {
       if (typeof parsed !== 'object' || parsed === null) {
         continue;
       }
-      const record = parsed as Record<string, unknown>;
-      const name = record.name;
+      // Small models drift between {"name", "arguments"},
+      // {"action", "parameters"}, and flat {"action", ...args} — accept all.
+      const {
+        name: rawName,
+        action,
+        arguments: nestedArgs,
+        parameters,
+        ...rest
+      } = parsed as Record<string, unknown>;
+      const name = typeof rawName === 'string' ? rawName : action;
       if (typeof name !== 'string' || name.length === 0) {
         continue;
       }
-      const args = record.arguments ?? {};
+      const args = nestedArgs ?? parameters ?? rest;
       calls.push({
         id: `call-${String(calls.length)}`,
         name,

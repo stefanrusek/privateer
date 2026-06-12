@@ -33,11 +33,38 @@ import type {
 const DEFAULT_MODEL_ID = 'onnx-community/gemma-3n-E2B-it-ONNX';
 const DTYPE = 'q4';
 
-/** Display name for the first-run screen (Spec 04 §13). */
-export const AGENT_MODEL_DISPLAY_NAME = 'Gemma 3n E2B (quantized)';
+/** Metadata for the selectable agent models (first-run chooser + screen). */
+export interface AgentModelInfo {
+  readonly id: string;
+  readonly displayName: string;
+  /** Approximate download size for the progress bar. */
+  readonly totalBytes: number;
+}
 
-/** Approximate download size in bytes for the first-run progress bar. */
-export const AGENT_MODEL_TOTAL_BYTES = 3_100_000_000;
+export const AGENT_MODELS: Record<'gemma' | 'qwen', AgentModelInfo> = {
+  gemma: {
+    id: 'onnx-community/gemma-3n-E2B-it-ONNX',
+    displayName: 'Gemma 3n E2B (quantized)',
+    totalBytes: 3_100_000_000,
+  },
+  qwen: {
+    id: 'onnx-community/Qwen3-0.6B-ONNX',
+    displayName: 'Qwen3 0.6B (quantized)',
+    totalBytes: 580_000_000,
+  },
+};
+
+/** Metadata for a model id, falling back to the default's entry. */
+export function agentModelInfo(modelId: string): AgentModelInfo {
+  const known = Object.values(AGENT_MODELS).find((m) => m.id === modelId);
+  return (
+    known ?? {
+      id: modelId,
+      displayName: modelId.split('/').pop() ?? modelId,
+      totalBytes: 1_000_000_000,
+    }
+  );
+}
 
 /**
  * Whether the agent model files are already cached on disk (Spec 07 §11.2 —

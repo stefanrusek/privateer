@@ -8,7 +8,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK response bodies lack precise types */
 
 import https from 'node:https';
-import { KubeConfig, ApiextensionsV1Api } from '@kubernetes/client-node';
+import { KubeConfig } from '@kubernetes/client-node';
 import type { V1CustomResourceDefinition } from '@kubernetes/client-node';
 import type {
   KubeClient,
@@ -98,9 +98,29 @@ export async function buildKubeRequestOptions(
 
 export class KubeClientAdapter implements KubeClient {
   private readonly kc: KubeConfig;
+  /** Discovered CRD path info: kind → group/version/plural. */
+  private readonly crdPaths = new Map<
+    string,
+    { group: string; version: string; plural: string }
+  >();
 
   constructor(kc: KubeConfig) {
     this.kc = kc;
+  }
+
+  /**
+   * Register discovered CRDs so their kinds resolve to the right API group
+   * paths (e.g. Kafka → /apis/kafka.strimzi.io/v1/kafkas).
+   */
+  registerCrds(crds: CrdDefinition[]): void {
+    for (const crd of crds) {
+      const version = crd.versions[0] ?? 'v1';
+      this.crdPaths.set(crd.kind, {
+        group: crd.group,
+        version,
+        plural: crd.plural,
+      });
+    }
   }
 
   /** Construct from the default kubeconfig (~/.kube/config or in-cluster). */
@@ -395,19 +415,34 @@ export class KubeClientAdapter implements KubeClient {
   }
 
   async discoverCrds(): Promise<Result<CrdDefinition[], KubeError>> {
+    // Raw https (the SDK client drops TLS material under Bun's fetch).
     try {
-      const apiext = this.kc.makeApiClient(ApiextensionsV1Api);
-      const list = await apiext.listCustomResourceDefinition();
-      const crds: CrdDefinition[] = list.items.map(
-        (crd: V1CustomResourceDefinition) => {
-          const group = crd.spec.group;
-          const kind = crd.spec.names.kind;
-          const plural = crd.spec.names.plural;
-          const namespaced = crd.spec.scope === 'Namespaced';
-          const versions = crd.spec.versions.map((v) => v.name);
-          return { group, kind, plural, namespaced, versions };
-        },
+      const server = this.kc.getCurrentCluster()?.server ?? '';
+      const { status, body: rawBody } = await this.doRequest(
+        'GET',
+        `${server}/apis/apiextensions.k8s.io/v1/customresourcedefinitions`,
       );
+      if (status < 200 || status >= 300) {
+        const parsed = JSON.parse(rawBody) as { message?: string };
+        return err(
+          mapError({ statusCode: status, body: { message: parsed.message } }),
+        );
+      }
+      const body = JSON.parse(rawBody) as {
+        items?: V1CustomResourceDefinition[];
+      };
+      const crds: CrdDefinition[] = (body.items ?? []).map((crd) => {
+        const group = crd.spec.group;
+        const kind = crd.spec.names.kind;
+        const plural = crd.spec.names.plural;
+        const namespaced = crd.spec.scope === 'Namespaced';
+        // Served versions only, storage version first — this is the order
+        // registerCrds relies on when picking the API path.
+        const served = crd.spec.versions.filter((v) => v.served);
+        served.sort((a, b) => Number(b.storage) - Number(a.storage));
+        const versions = served.map((v) => v.name);
+        return { group, kind, plural, namespaced, versions };
+      });
       return ok(crds);
     } catch (e) {
       return err(mapError(e));
@@ -527,6 +562,10 @@ export class KubeClientAdapter implements KubeClient {
   }
 
   private apiPrefix(kind: string): string {
+    const crd = this.crdPaths.get(kind);
+    if (crd !== undefined) {
+      return `/apis/${crd.group}/${crd.version}`;
+    }
     const coreKinds = new Set([
       'Pod',
       'Node',
@@ -567,6 +606,10 @@ export class KubeClientAdapter implements KubeClient {
   }
 
   private plural(kind: string): string {
+    const crd = this.crdPaths.get(kind);
+    if (crd !== undefined) {
+      return crd.plural;
+    }
     const overrides: Record<string, string> = {
       NetworkPolicy: 'networkpolicies',
       HorizontalPodAutoscaler: 'horizontalpodautoscalers',

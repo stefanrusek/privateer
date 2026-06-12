@@ -39,7 +39,8 @@ import { normalize } from '../../resources/normalize.js';
 import { StateStore } from '../../store/state-store.js';
 import { StreamManager } from '../../k8s/stream-manager.js';
 import { evaluateAllRules } from '../../health/registry.js';
-import { EMPTY_CAPS } from '../../health/types.js';
+import { EMPTY_CAPS, type RuleCaps } from '../../health/types.js';
+import { detectKafka } from '../../health/kafka-detection.js';
 import {
   SIDEBAR_CATEGORIES,
   flattenSidebarNav,
@@ -335,6 +336,11 @@ export class LiveController {
   private prometheus: PrometheusHttpAdapter | null = null;
   private metricsServer: MetricsServerAdapter | null = null;
   private readonly sessions = new SessionBuffer();
+  private kafkaDetected: ReturnType<typeof detectKafka> = {
+    deploymentType: 'none',
+    mode: 'unknown',
+  };
+  private kafkaLagByTopic = new Map<string, number>();
   private promTunnel: SystemTunnel | null = null;
   private metricsRange = createRangeSelector();
   private charts: ChartSeries | null = null;
@@ -714,6 +720,49 @@ export class LiveController {
     if (process.env.P9R_DEBUG !== undefined) {
       process.stderr.write('[streams] starting\n');
     }
+    void this.startStreamsWithCrds();
+  }
+
+  /**
+   * Discover CRDs first so CRD kinds (Kafka, KafkaTopic, …) resolve to the
+   * right API paths and the Kafka core watches open when Strimzi is present
+   * (Spec 01 §3.1, Spec 03 §7).
+   */
+  private async startStreamsWithCrds(): Promise<void> {
+    let kafkaKinds = new Set<string>();
+    const crds = await this.client.discoverCrds();
+    if (crds.ok) {
+      this.client.registerCrds(crds.value);
+      // Seed the store with CRD objects so Strimzi detection and the CRD
+      // table work without a separate watch.
+      const now = this.clock.now();
+      for (const crd of crds.value) {
+        this.store.applyEvent(this.app.context, {
+          type: 'ADDED',
+          apiVersion: 'apiextensions.k8s.io/v1',
+          kind: 'CustomResourceDefinition',
+          namespace: null,
+          name: `${crd.plural}.${crd.group}`,
+          receivedAt: now,
+          object: {
+            apiVersion: 'apiextensions.k8s.io/v1',
+            kind: 'CustomResourceDefinition',
+            metadata: { name: `${crd.plural}.${crd.group}` },
+            spec: {
+              group: crd.group,
+              names: { kind: crd.kind, plural: crd.plural },
+            },
+          },
+        });
+      }
+      if (crds.value.some((crd) => crd.group === 'kafka.strimzi.io')) {
+        kafkaKinds = new Set(['Kafka', 'KafkaTopic']);
+      }
+    }
+    this.openStreams(kafkaKinds);
+  }
+
+  private openStreams(kafkaKinds: ReadonlySet<string>): void {
     this.streams = new StreamManager(
       this.client,
       this.clock,
@@ -727,7 +776,7 @@ export class LiveController {
         this.setBadge(kindToLabel(kind), count, true);
       },
     );
-    this.streams.start();
+    this.streams.start(kafkaKinds);
   }
 
   private onResourceEvent(event: ResourceEvent): void {
@@ -1378,9 +1427,56 @@ export class LiveController {
       nodesTotal: nodes.length,
       namespaceCount: namespaces.length,
     };
-    const rules = evaluateAllRules(this.store, ctx, EMPTY_CAPS);
+    this.kafkaDetected = detectKafka(this.store, ctx);
+    const caps: RuleCaps = {
+      ...EMPTY_CAPS,
+      strimziPresent: this.kafkaDetected.deploymentType === 'strimzi',
+      kafkaExporter: this.metricsCaps.kafkaExporter,
+      strimziJmx: this.metricsCaps.strimziJmx,
+    };
+    const rules = evaluateAllRules(this.store, ctx, caps);
     this.health = { ...this.health, summary, rules };
+    if (this.metricsCaps.kafkaExporter) {
+      void this.refreshKafkaLag();
+    }
     this.bump();
+  }
+
+  /** Max consumer lag per topic from Prometheus (Spec 06 §5/§7). */
+  private async refreshKafkaLag(): Promise<void> {
+    const prom = this.prometheus;
+    if (prom === null) {
+      return;
+    }
+    const result = await prom.query('max by (topic) (kafka_consumergroup_lag)');
+    if (result.ok) {
+      this.kafkaLagByTopic = new Map(
+        result.value.map((sample) => [sample.labels.topic ?? '', sample.value]),
+      );
+      this.bump();
+    }
+  }
+
+  /** Kafka section data for the health dashboard (Spec 06 §5). */
+  kafkaSection(): {
+    detected: boolean;
+    deploymentType: 'strimzi' | 'bare' | 'none';
+    exporterAvailable: boolean;
+    topics: { name: string; maxLag: number; trend: 'stable' }[];
+  } {
+    const detected = this.kafkaDetected.deploymentType !== 'none';
+    return {
+      detected,
+      deploymentType: this.kafkaDetected.deploymentType,
+      exporterAvailable: this.metricsCaps.kafkaExporter,
+      topics: detected
+        ? this.store.list(this.app.context, 'KafkaTopic').map((topic) => ({
+            name: topic.name,
+            maxLag: this.kafkaLagByTopic.get(topic.name) ?? 0,
+            trend: 'stable' as const,
+          }))
+        : [],
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -1961,7 +2057,19 @@ export class LiveController {
               : ('warn' as const),
           title: r.rule.title(r.result),
         })),
-      kafkaClusters: [],
+      kafkaClusters:
+        this.kafkaDetected.deploymentType === 'none'
+          ? []
+          : this.store.list(this.app.context, 'Kafka').map((cluster) => ({
+              clusterName: cluster.name,
+              brokerCount: 1,
+              topicCount: this.store.list(this.app.context, 'KafkaTopic')
+                .length,
+              lagSummary:
+                this.kafkaLagByTopic.size === 0
+                  ? 'lag unknown'
+                  : `max lag ${String(Math.max(0, ...this.kafkaLagByTopic.values()))}`,
+            })),
       allResourceKinds: [...LABEL_TO_KIND.values()],
     };
     const system = buildSystemPrompt(promptCtx, this.store);
@@ -2007,6 +2115,11 @@ export class LiveController {
       // timeout — force-off until a faster device is detected.
       thinking: false,
       onToolCall: (toolName, params) => {
+        if (process.env.P9R_DEBUG !== undefined) {
+          process.stderr.write(
+            `[agent] tool ${toolName} ${JSON.stringify(params)}\n`,
+          );
+        }
         this.setHints([`> ${humanizeToolCall(toolName, params)}`]);
       },
       tools: this.toolsEnabled
@@ -2038,6 +2151,11 @@ export class LiveController {
         this.finishExchange(text, null, result.message);
         break;
       case 'parseError':
+        if (process.env.P9R_DEBUG !== undefined) {
+          process.stderr.write(
+            `[agent] parseError raw: ${result.raw.slice(0, 400)}\n`,
+          );
+        }
         this.finishExchange(
           text,
           null,

@@ -31,6 +31,8 @@ export const LABEL_TO_KIND: ReadonlyMap<string, string> = new Map([
   ['Nodes', 'Node'],
   ['Namespaces', 'Namespace'],
   ['CustomResourceDefinitions', 'CustomResourceDefinition'],
+  ['Kafkas', 'Kafka'],
+  ['KafkaTopics', 'KafkaTopic'],
 ]);
 
 /** Singular kind → sidebar leaf label. */

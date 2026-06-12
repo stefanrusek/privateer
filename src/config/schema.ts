@@ -16,6 +16,8 @@ export interface P9rConfig {
   agentModel: string;
   /** Inference timeout in seconds (Spec 07 §9 default: 15). */
   agentTimeoutSeconds: number;
+  /** Whether the local agent is enabled (`agent.enabled`, default true). */
+  agentEnabled: boolean;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -67,6 +69,7 @@ export function parseConfig(raw: RawConfig): P9rConfig {
     },
     agentModel: asString(agent.model, 'gemma-4-E2B-it-onnx'),
     agentTimeoutSeconds: asNumber(agent.timeoutSeconds, 15),
+    agentEnabled: asBool(agent.enabled, true),
   };
 
   const activeContext = raw.activeContext;

@@ -1,0 +1,45 @@
+ns: [ ▾]  search: []
+[1m  Overview[0m               [1m══ Cluster Health — [36mdocker-desktop[39m ══[0m
+[1m▼ Workloads[0m              Nodes: 1/1 ready   Namespaces: 9 [31m✕ 4 errors[39m  ○ 1 pending
+  Deployments[37m 11[39m
+  StatefulSets[37m 0[39m
+  DaemonSets[37m 2[39m           [2m─────────────────────────────────────────────────────────────────[0m
+  ReplicaSets[90m 12[39m         [31m✕ ERROR [39m11 pods have no memory limit set [4m[36m[show][0m
+  Jobs[90m 0[39m                 [31m✕ ERROR [39m1 topic has replication factor of 1 (no fault tolerance) [4m[36m[show][0m
+  CronJobs[90m 0[39m             [33m⚠ [31mE[33mWARN  [39m7 pods have no memory request set [4m[36m[show][0mesent but operator absent) [4m[36m[show][0m
+  Pods[37m 23[39m                [33m⚠ [39m [33mWARN  [39m8 deployments have only 1 replica [4m[36m[show][0mequest [4m[36m[show][0m
+[1m▶ Networking[0m             [33m⚠ [39m [33mWARN  [39m12 pods have no liveness probe [4m[36m[show][0mudget [4m[36m[show][0m
+[1m▶ Configuration[0m          [33m⚠ [39m [33mWARN  [39m18 pods have no startup probe [4m[36m[show]w][0m
+[1m▶ Storage[0m                [33m⚠ [39m [33mWARN  [39m9 namespaces have no NetworkPolicy [4m[36m[show][0mion [4m[36m[show][0mnothing monitored) [4m[36m[show][0m
+[1m▶ Access Control[0m         [33m⚠ [39m [33mWARN  [39m1 topic has no consumer groups (possibly orphaned) [4m[36m[show][0m [4m[36m[show][0m
+[1m▶ Nodes[0m                  [90m○ SUPR  [39mUnmanaged Opaque Secrets check suppressed (no secrets operator detected)
+[1m▶ Namespaces[0m             [2m20 passing rules [0;4m[36m[show passing][0m
+[1m▶ Custom Resources[0m       [2m─────────────────────────────────────────────────────────────────[0m
+                         [32m●[39m  orders  [32mAll consumer groups healthy[39m
+                         [1mAgent[0m
+                         [1m[37m> what pods exist in the kafka namespace?[0m
+                           The Kafka namespace contains 5 pods, with 1 error and 4 pods in a healthy state. The pods are distributed across different
+                         namespaces, including kube-system, kafka, demo, monitoring, staging, local-path-storage, default, kube-node-lease, and
+                         kube-public. The specific details of the pods are not provided in the current data, but the presence of an error in the Kafka
+                          namespace indicates that some of the Kafka services are not functioning properly.
+
+                         [4m[36m[Clear history][0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ctx: docker-desktop  ns:   Overview  [90m[·][39m  [2m⌖ detail[0m  [2mSpace agent[0m  [2m/ search[0m  [2m? help[0m  [2mq quit[0m
+

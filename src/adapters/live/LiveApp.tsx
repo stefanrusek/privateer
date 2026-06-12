@@ -115,12 +115,7 @@ export function LiveApp({
           rules={health.rules}
           showPassing={health.showPassing}
           metrics={controller.metricsOverview()}
-          kafka={{
-            detected: false,
-            deploymentType: 'none',
-            exporterAvailable: false,
-            topics: [],
-          }}
+          kafka={controller.kafkaSection()}
           onNavigateWarnings={() => {
             controller.navigateToPodsWithStatus('warning');
           }}

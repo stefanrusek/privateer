@@ -1,0 +1,45 @@
+ns: [ ▾]  search: [w
+[1m  Overview[0m        eb        [1m Name                             Namespace      Ready   Phase      RestartNode            Age      CPU        Memory
+▼ Workloads[0m       ]          [1m  [0m                                                                        [1m [0m
+  Deployments[37m 11[39m            [1m[32m●[39mweb-6b4dff767b-6jqtx             demo           1/1     Running    1      desktop-control-        5
+[0m  StatefulSets[37m 0[39m             [1m  [0m                                                                        [1m…[0m
+  DaemonSets[37m 2[39m              [32m●[39mweb-6b4dff767b-grgld             demo           1/1     Running    1      desktop-control-        5
+  ReplicaSets[90m 12[39m                                                                                       …
+  Jobs[90m 0[39m                    [32m●[39mweb-6b4dff767b-zhldl             demo           1/1     Running    1      desktop-control-        5
+  CronJobs[90m 0[39m                                                                                           …
+[32m> Pods[37m 23[39m
+[1m▶ Networking[0m
+[1m▶ Configuration[0m
+[1m▶ Storage[0m
+[1m▶ Access Control[0m
+[1m▶ Nodes[0m
+[1m▶ Namespaces[0m
+[1m▶ Custom Resources[0m
+
+                            [1mweb-6b4dff767b-6jqtx[0m   [Overview] [YAML] [Events] [Logs] [1;4m[Metrics][0m [2m · [0m [Agent]   ✕
+                            [1mMetrics — web-6b4dff767b-6jqtx[0m
+                            [2m[20m][0m [1m[1h][0m [2m[4h][0m [2m[1d][0m [2m[2d][0m
+
+                            [1mCPU Usage
+[0m                            [2mNo data[0m
+
+                            [1mMemory Usage[0m
+                            [2mNo data[0m
+
+                            [1mNetwork I/O[0m
+                            [2mNo data[0m
+
+                            [1mRestart Count[0m
+                            [2mNo data[0m
+
+
+
+
+
+
+
+
+
+
+ctx: docker-desktop  ns:   Pods  [90m[·][39m  [2m⌖ detail[0m  [2mSpace agent[0m  [2m/ search[0m  [2m? help[0m  [2mq quit[0m
+
