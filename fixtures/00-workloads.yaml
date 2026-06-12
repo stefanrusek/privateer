@@ -1,0 +1,129 @@
+# p9r test fixtures — demo workloads
+# Gives the TUI realistic data: a healthy deployment + service, a
+# CrashLoopBackOff pod (exercises error status, health rules, and
+# "crashing pods" agent queries), config + secret resources, and a second
+# namespace for namespace-filter testing.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: demo
+  labels:
+    app: web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: demo
+spec:
+  selector:
+    app: web
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crasher
+  namespace: demo
+  labels:
+    app: crasher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crasher
+  template:
+    metadata:
+      labels:
+        app: crasher
+    spec:
+      containers:
+        - name: busybox
+          image: busybox:1.36
+          command:
+            [
+              'sh',
+              '-c',
+              'echo "fixture crasher: simulating startup failure"; sleep 5; exit 1',
+            ]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: demo
+data:
+  LOG_LEVEL: info
+  FEATURE_FLAGS: 'alpha,beta'
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+  namespace: demo
+type: Opaque
+stringData:
+  password: hunter2
+  api-key: fixture-not-a-real-key
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: staging
+  labels:
+    app: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi

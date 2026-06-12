@@ -1,0 +1,61 @@
+{
+  "name": "p9r",
+  "version": "0.1.0",
+  "description": "Privateer — a single-binary Kubernetes TUI (Bun · Ink · local LLM agent)",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "p9r": "./bin/p9r.ts"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "scripts": {
+    "start": "bun run bin/p9r.ts",
+    "build": "bun build ./bin/p9r.ts --compile --outfile dist/p9r",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:grep": "bash scripts/grep-gate.sh",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:envtest": "vitest run -c vitest.envtest.config.ts",
+    "envtest:setup": "bash scripts/setup-envtest.sh",
+    "bdd": "bun --bun cucumber-js",
+    "gate": "bun run format:check && bun run lint && bun run lint:grep && bun run typecheck && bun run test && bun run bdd",
+    "fixtures:up": "bash scripts/fixtures.sh up",
+    "fixtures:down": "bash scripts/fixtures.sh down"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@kubernetes/client-node": "^1.0.0",
+    "@zenobius/ink-mouse": "^1.0.3",
+    "ansi-escapes": "^7.0.0",
+    "date-fns": "^4.1.0",
+    "ink": "^5.1.0",
+    "js-yaml": "^4.1.0",
+    "react": "^18.3.1",
+    "sharp": "file:./stubs/sharp"
+  },
+  "devDependencies": {
+    "@cucumber/cucumber": "^11.2.0",
+    "@eslint/js": "^9.17.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.5",
+    "@types/react": "^18.3.18",
+    "@vitest/coverage-v8": "^2.1.8",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "fast-check": "^3.23.2",
+    "ink-testing-library": "^4.0.0",
+    "prettier": "^3.4.2",
+    "react-devtools-core": "^7.0.1",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.19.1",
+    "vitest": "^2.1.8"
+  },
+  "overrides": {
+    "sharp": "file:./stubs/sharp"
+  }
+}

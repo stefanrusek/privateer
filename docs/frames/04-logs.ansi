@@ -1,0 +1,45 @@
+ns: [ ▾]  search: [w
+[1m  Overview[0m        eb        [1m Name                             Namespace      Ready   Phase      RestartNode            Age      CPU        Memory
+▼ Workloads[0m       ]          [1m  [0m                                                                        [1m [0m
+  Deployments[37m 11[39m            [1m[32m●[39mweb-6b4dff767b-6jqtx             demo           1/1     Running    1      desktop-control-        5
+[0m  StatefulSets[37m 0[39m             [1m  [0m                                                                        [1m…[0m
+  DaemonSets[37m 2[39m              [32m●[39mweb-6b4dff767b-grgld             demo           1/1     Running    1      desktop-control-        5
+  ReplicaSets[90m 12[39m                                                                                       …
+  Jobs[90m 0[39m                    [32m●[39mweb-6b4dff767b-zhldl             demo           1/1     Running    1      desktop-control-        5
+  CronJobs[90m 0[39m                                                                                           …
+[32m> Pods[37m 23[39m
+[1m▶ Networking[0m
+[1m▶ Configuration[0m
+[1m▶ Storage[0m
+[1m▶ Access Control[0m
+[1m▶ Nodes[0m
+[1m▶ Namespaces[0m
+[1m▶ Custom Resources[0m
+
+                            [1mweb-6b4dff767b-6jqtx[0m   [Overview] [YAML] [Events] [1;4m[Logs][0m [Metrics] [2m · [0m [Agent]   ✕
+                            [1mLogs — web-6b4dff767b-6jqtx / nginx[0m
+                            [2mTimestamps: on  Wrap: off[0mtamps] [Wrap] [100 lines ▾] [Download]
+                            [2m────────────────────────────────────────[0m
+                            [37m2026-06-12T02:05:19.615762799Z /docker-entrypoint.sh: /docker-entrypoint.d/ is not empty, will attempt to perform [39m
+                            [37m2026-06-12T02:05:19.615811174Z /docker-entrypoint.sh: Looking for shell scripts in /docker-entrypoint.d/[39m
+                            [37m2026-06-12T02:05:20.596896091Z /docker-entrypoint.sh: Launching /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh[39m
+                            [37m2026-06-12T02:05:22.461487592Z 10-listen-on-ipv6-by-default.sh: info: Getting the checksum of [39m
+                            [37m2026-06-12T02:05:31.332290805Z 10-listen-on-ipv6-by-default.sh: info: Enabled listen on IPv6 in [39m
+                            [37m/etc/nginx/conf.d/default.conf[39m
+                            [37m2026-06-12T02:05:31.332378721Z /docker-entrypoint.sh: Sourcing /docker-entrypoint.d/15-local-resolvers.envsh[39m
+                            [37m2026-06-12T02:05:31.332382805Z /docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh[39m
+                            [37m2026-06-12T02:05:33.051395541Z /docker-entrypoint.sh: Configuration complete; ready for start upker-processes.sh[39m
+                            [37m2026-06-12T02:05:36.444556043Z 2026/06/12 02:05:33 [notice] 1#1: using the "epoll" event method[39m
+                            [37m2026-06-12T02:05:36.919553835Z 2026/06/12 02:05:33 [notice] 1#1: nginx/1.27.5[39m
+                            [37m2026-06-12T02:05:36.919643043Z 2026/06/12 02:05:33 [notice] 1#1: built by gcc 12.2.0 (Debian 12.2.0-14) [39m
+                            [37m2026-06-12T02:05:36.919660126Z 2026/06/12 02:05:33 [notice] 1#1: getrlimit(RLIMIT_NOFILE): 1048576:1048576[39m
+                            [37m2026-06-12T02:05:36.919662543Z 2026/06/12 02:05:33 [notice] 1#1: start worker processes[39m
+                            [37m2026-06-12T02:05:37.393225335Z 2026/06/12 02:05:33 [notice] 1#1: start worker process 33[39m
+                            [37m2026-06-12T02:05:37.725691002Z 2026/06/12 02:05:33 [notice] 1#1: start worker process 34[39m
+                            [37m2026-06-12T02:05:37.725802627Z 2026/06/12 02:05:33 [notice] 1#1: start worker process 35[39m
+                            [37m2026-06-12T02:05:37.725809085Z 2026/06/12 02:05:33 [notice] 1#1: start worker process 37[39m
+                            [37m2026-06-12T02:05:37.725811377Z 2026/06/12 02:05:33 [notice] 1#1: start worker process 38[39m
+                            [37m2026-06-12T02:05:38.371617210Z 2026/06/12 02:05:33 [notice] 1#1: start worker process 39[39m
+                            [37m2026-06-12T02:05:38.433260127Z 2026/06/12 02:05:33 [notice] 1#1: start worker process 40[39m
+ctx: docker-desktop  ns:   Pods  [90m[·][39m  [2m⌖ detail[0m  [2mSpace agent[0m  [2m/ search[0m  [2m? help[0m  [2mq quit[0m
+
