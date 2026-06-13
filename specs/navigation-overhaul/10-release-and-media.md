@@ -13,7 +13,8 @@ README; repo media assets.
 
 ## 1. Version bump
 
-Per `CLAUDE.md`, the version lives in **four** places and all must move together:
+Per `CLAUDE.md`, the version lives in the locations below and all must move
+together:
 
 - `package.json` `"version"`
 - `src/version.ts` `VERSION` (what `p9r version` prints)
@@ -23,9 +24,21 @@ Per `CLAUDE.md`, the version lives in **four** places and all must move together
 Target: **`0.2.0` → `0.3.0`** (a feature minor; pre-1.0). After bumping,
 `bun run gate` must be green (the two feature files assert the exact string).
 
-This chunk **prepares** the release; cutting the tag (`git tag v0.3.0 …`) and
-running `.github/workflows/release.yml` is the human-run step in the `CLAUDE.md`
-runbook, **not** automated here.
+### Cut the release (the `CLAUDE.md` runbook, in scope)
+
+This chunk runs the full release per `CLAUDE.md`, not just the bump:
+
+1. Bump all four files; `bun run gate`; commit; push to `main`.
+2. `git tag v0.3.0 && git push origin v0.3.0` — the tag triggers
+   `.github/workflows/release.yml`, which cross-compiles every target and
+   publishes the GitHub release.
+3. **Verify:** download an artifact and confirm `p9r version` reports `0.3.0`.
+
+> Execution-time note (not a spec carve-out): pushing to `main` and tagging are
+> consequential, outward actions. Whoever/whatever executes this chunk follows
+> the runbook as written; if the executor operates under a feature-branch
+> restriction, it gets that gate lifted before steps 1–2 rather than skipping
+> them. The **spec scope includes the release**.
 
 ## 2. Screenshots
 
@@ -125,15 +138,18 @@ Feature: Media assets
 ```
 
 ## Out of scope
-- Cutting the git tag / running the release workflow (human-run per the
-  `CLAUDE.md` runbook).
-- Uploading the social preview to GitHub settings (manual; no API).
+- Uploading the social preview to GitHub settings (manual; **no API exists** for
+  it — this is the one genuinely human step, and only because GitHub provides no
+  programmatic path).
 - Recording infrastructure in CI — the demo is produced in a session with the
   sandbox cluster, and the resulting assets are committed.
 
 ## Done when
 - The version is `0.3.0` in all four locations; `p9r version` prints it; the gate
   is green.
+- The release is cut per the `CLAUDE.md` runbook: pushed to `main`, tagged
+  `v0.3.0`, the release workflow has published artifacts, and a downloaded
+  artifact reports `p9r 0.3.0`.
 - `docs/demo.gif` (+ its committed tape/cast) and the refreshed screenshots are
   committed and referenced by the README; the README keymap/features match the
   shipped behavior.
