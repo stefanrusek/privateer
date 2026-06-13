@@ -69,7 +69,7 @@ this conversation.
 | 03 | `03-detail-scroll-viewport.md`         | Detail scroll viewport         | 01, 02         | DRAFT  |
 | 04 | `04-mouse-interaction.md`              | Mouse: registry, components, dispatch | 01, 02, 03 | DRAFT  |
 | 05 | `05-list-horizontal-scroll.md`         | List horizontal scroll         | 01, 02         | DRAFT  |
-| 06 | `06-inline-logs-container-picker.md`   | Inline Logs container picker   | 02, 04         | TODO   |
+| 06 | `06-inline-logs-container-picker.md`   | Inline Logs container picker   | 02, 04         | DRAFT  |
 | 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03, 04 | TODO   |
 | 08 | `08-context-switching-polish.md`       | Context-switching polish       | 01             | TODO   |
 | 09 | `09-help-overlay-revamp.md`            | `?` help overlay revamp        | 01, 03, 05, 07 | TODO   |
