@@ -36,7 +36,7 @@ The chosen design (agreed with the user):
    press/wheel handler. The dispatcher finds the **topmost** registered entry
    containing the point and delegates. This kills the per-widget coordinate
    math.
-3. **Three components, layered.**
+3. **Four components, layered.**
    - `<Button>` — a discrete, **non-nestable leaf** widget (tabs, `✕`, header
      chips, picker items, YAML save/cancel). It **measures its own rendered
      rect** (Yoga) and registers it; clicking it fires `onClick`. Measuring —
@@ -50,6 +50,14 @@ The chosen design (agreed with the user):
      (`rowInContent + scrollOffset`) **itself**, so per-row geometry is local
      and survives layout changes. Rows are **not** Buttons (a 200-row list must
      not churn 200 registry entries per render).
+   - `<DropdownButton>` — a `<Button>` trigger **plus** an anchored overlay list
+     (a `SelectableList` of item `<Button>`s on the overlay layer). The single
+     reusable "click/key opens a list, pick an item" widget. **Optional
+     type-to-filter** for long/dynamic lists. Used by the Logs container &
+     line-limit pickers (chunk 06, no filter — short lists) and the header
+     **namespace** filter (filter **on** — long, dynamic). The header **context**
+     indicator is a plain `<Button>` (not a DropdownButton) because contexts are
+     few and the context switcher carries reconnect/error state (chunk 08).
 4. **Uniform dispatch contract.** Every registered entry exposes `{ rect,
    layer, handlePress(localX, localY), handleWheel?(dir) }`. The dispatcher's
    only job is "find topmost entry at (x,y), translate to local coords,
@@ -118,6 +126,10 @@ returned `Action`.
   an abstract `{ left, top, width, height, parent }` node so it is unit-tested
   with a **fake** tree — no real Yoga needed in tests. This is the only piece of
   geometry the framework computes for us; everything else is frame-derived.
+- **`accelerator.ts`** — pure label/key helpers: `renderAccelerator(label, key)`
+  → the segments to underline, and `matchAccelerator(buttons, keypress)` → the
+  button to fire. Used by `Button`/`DropdownButton` and read by the chunk-09 help
+  overlay so advertised keys can't drift from real ones.
 
 ## Adapter wiring (`src/adapters/live/**`, excluded — thin glue, BDD-exercised)
 
@@ -130,12 +142,15 @@ returned `Action`.
   responsibility today, just consolidated). `1003h` (any-motion) stays **off**.
   Removes `MouseProvider`/`useMouse` and the `@zenobius/ink-mouse` dependency
   (drop it from `package.json` + lockfile).
-- **`Button.tsx` / `FocusableRegion.tsx` / `SelectableList.tsx`** — thin React
-  wrappers: refs + `useEffect` that register/unregister entries and (for
-  `Button`) call `measure.ts` against `ref.current.yogaNode` on mount/layout.
-  All *decisions* live in the pure modules above; these only wire refs, effects,
-  and callbacks. They render their children (Button adds no chrome; the bordered
-  grid is still drawn by chunk 02's frame renderer).
+- **`Button.tsx` / `FocusableRegion.tsx` / `SelectableList.tsx` /
+  `DropdownButton.tsx`** — thin React wrappers: refs + `useEffect` that
+  register/unregister entries and (for `Button`) call `measure.ts` against
+  `ref.current.yogaNode` on mount/layout. All *decisions* live in the pure
+  modules above; these only wire refs, effects, and callbacks. They render their
+  children (Button adds no chrome; the bordered grid is still drawn by chunk 02's
+  frame renderer). `DropdownButton` is pure composition over the other three: a
+  trigger `Button` + an open/closed flag + an anchored overlay `SelectableList`;
+  the anchor/up-vs-down placement reuses the trigger's measured rect.
 - **Registry instance** — owned by the controller. The controller registers the
   **frame-derived** entries (the five region rects and the two handle segments)
   whenever `computeFrame` changes; components register the **measured** Button
@@ -150,7 +165,7 @@ stdin/mode lifecycle remain in `src/adapters/**`.
 
 ## Components in detail
 
-### `<Button onClick label? id>`
+### `<Button onClick label? id? accelerator?>`
 - Leaf only. **Buttons must not contain Buttons** — the design forbids nesting
   (overlapping equal-layer rects make "topmost" ambiguous). Honor this in the
   component tree; on a detected nested Button, log to `~/.config/p9r/debug.log`
@@ -159,9 +174,41 @@ stdin/mode lifecycle remain in `src/adapters/**`.
   handlePress: () => onClick() }`. Re-measures on terminal resize / content
   change; unregisters on unmount.
 - **Adopters this chunk:** detail **tab labels**, the detail **`✕`** close
-  button, the header **context** / **namespace** / **search** chips. (Chunk 06's
-  inline Logs-container picker items and chunk 07's YAML **Save/Cancel** become
-  Buttons in those chunks — "for free" once this exists.)
+  button, the header **context** chip (→ context switcher) and **search** chip
+  (→ focus search). (Chunk 06's Logs toolbar and chunk 07's YAML **Save/Cancel**
+  adopt Buttons in those chunks — "for free" once this exists. The header
+  **namespace** chip is a `DropdownButton`, below.)
+
+### Accelerator keys (discoverability)
+- A `Button`/`DropdownButton` may declare an **`accelerator`** — a single key
+  that is a **letter within its label**. The label renders that letter
+  **underlined** so the key is self-documenting (e.g. `[Co̲ntainer ▾]`,
+  `[100 l̲ines ▾]`). Pressing the key while the owning region/tab is active fires
+  the same handler a click would; clicking and the key are interchangeable.
+- Accelerators must be **unused in their active scope** and prefer lowercase
+  (we advertise vim-style keys). Pure helpers render the underlined label and
+  map a keypress to the matching accelerator; the help overlay (chunk 09) reads
+  the same registry so it can never drift from the real keys.
+- **Fallback when the key isn't in the label** (e.g. a toggle that flips between
+  "Live"/"Paused"): render the key as an underlined **prefix badge** —
+  `p̲:Paused` — so the accelerator is still shown. Prefer an in-word letter when
+  one is available and free.
+
+### `<DropdownButton trigger items selectedIndex onSelect filterable? accelerator?>`
+- Composition over the primitives: the `trigger` is a `<Button>` (with optional
+  `accelerator`); opening it renders an **anchored overlay** `SelectableList` of
+  item `<Button>`s on the overlay layer (higher than base regions, with a
+  full-area backdrop — see "Overlays"). The anchor sits directly under the
+  trigger's measured rect, flipping **upward** when there isn't room below.
+- `filterable` adds a one-line type-to-filter at the top of the overlay (for
+  long, dynamic lists); when off, the list is shown as-is (short lists).
+- Keyboard while open: `↑/↓` (`j/k` when not filtering) move; `Enter` selects;
+  `Esc` closes; click selects; outside-click closes via the backdrop.
+- **Adopters:** the header **namespace** chip (`filterable`), and — in chunk 06 —
+  the Logs **container** (`accelerator: 'o'`) and **line-limit**
+  (`accelerator: 'l'`) pickers (both unfiltered). This **retires the full-screen
+  `PickerOverlay` for the namespace picker**; `PickerOverlay` remains only for
+  the exec container selection (out of scope here).
 
 ### `<FocusableRegion regionId rect focused onWheel>`
 - Receives its `rect` from `computeFrame` (no measuring). Registers
@@ -202,8 +249,9 @@ optionally hovered) handle segment renders accent-highlighted (chunk 02's frame
 already supports per-segment accent).
 
 ### Clicks
-- **Context** Button → open context switcher; **namespace** Button → open
-  namespace picker; **search** Button → `mode:'search'`.
+- **Context** Button → open the context switcher; **namespace** DropdownButton →
+  open its anchored, filterable namespace list; **search** Button →
+  `mode:'search'`.
 - **Detail tab** Button → switch to that tab and focus detail.
 - **`✕`** Button → close the detail pane (newly wired).
 - **Region / row** (FocusableRegion / SelectableList) → focus, and for lists
@@ -297,6 +345,26 @@ Feature: Buttons dispatch clicks
 ```
 
 ```gherkin
+Feature: DropdownButton and accelerator keys
+
+  Scenario: A DropdownButton opens an anchored list
+    When I click the namespace chip in the header
+    Then a list opens anchored under the chip
+    And it is not a full-screen overlay
+
+  Scenario: A filterable DropdownButton filters as I type
+    Given the namespace DropdownButton is open over many namespaces
+    When I type part of a namespace name
+    Then the list narrows to matching entries
+
+  Scenario: An accelerator key activates its button
+    Given a button labelled "[Co̲ntainer ▾]" with accelerator "o" is active
+    When I press "o"
+    Then the same action fires as clicking it
+    And the "o" in the label is rendered underlined
+```
+
+```gherkin
 Feature: Region and row clicks via the registry
 
   Scenario: Clicking a region focuses it
@@ -332,6 +400,10 @@ Feature: Region and row clicks via the registry
   focus; the two visible borders drag-resize with a latch and persist; clicking
   a tab/`✕`/context/namespace does the right thing; region/row clicks
   focus/select/open; overlays capture clicks above the base regions.
-- `<Button>` (non-nestable), `<FocusableRegion>`, and `<SelectableList>` exist
-  and are the only way mouse targets are registered.
+- `<Button>` (non-nestable), `<FocusableRegion>`, `<SelectableList>`, and
+  `<DropdownButton>` exist and are the only way mouse targets are registered.
+- `<DropdownButton>` backs the header **namespace** filter (anchored, filterable
+  — retiring the full-screen `PickerOverlay` for namespaces) and is reused by the
+  Logs toolbar in chunk 06; **accelerator keys** render underlined and fire the
+  same handler as a click, sourced from one registry the help overlay reads.
 - `bun run gate` is green.

@@ -27,11 +27,15 @@ this conversation.
   region is highlighted, others dim. The header shows the current context left
   of the namespace. Width/height math accounts for borders.
 - **Mouse:** a single SGR stdin stream feeds a **hit-region registry**
-  (ink-mouse removed). Three components register targets — `<Button>` (discrete
-  non-nestable leaves), `<FocusableRegion>` (root-level focusable layouts), and
-  `<SelectableList>` (row model for the list/sidebar). Wheel routes by cursor
-  geometry; the two shared border lines are drag-resize handles; clicking the
-  context/namespace/tabs/✕ are all Buttons.
+  (ink-mouse removed). Four components register targets — `<Button>` (discrete
+  non-nestable leaves), `<FocusableRegion>` (root-level focusable layouts),
+  `<SelectableList>` (row model for the list/sidebar), and `<DropdownButton>`
+  (trigger + anchored, optionally filterable overlay list). Wheel routes by
+  cursor geometry; the two shared border lines are drag-resize handles. Discrete
+  widgets carry **accelerator keys** (the trigger letter is underlined in the
+  label). The header **namespace** filter and the Logs container/line-limit are
+  `DropdownButton`s; the header **context** chip is a plain `<Button>` opening the
+  dedicated context switcher (chunk 08).
 - **Detail scrolling:** a real scroll viewport on every detail tab. Logs:
   scrolling up pauses live-tail and walks the ring buffer; returning to the
   bottom resumes tail.
@@ -69,7 +73,7 @@ this conversation.
 | 03 | `03-detail-scroll-viewport.md`         | Detail scroll viewport         | 01, 02         | DRAFT  |
 | 04 | `04-mouse-interaction.md`              | Mouse: registry, components, dispatch | 01, 02, 03 | DRAFT  |
 | 05 | `05-list-horizontal-scroll.md`         | List horizontal scroll         | 01, 02         | DRAFT  |
-| 06 | `06-inline-logs-container-picker.md`   | Inline Logs container picker   | 02, 04         | DRAFT  |
+| 06 | `06-inline-logs-container-picker.md`   | Logs toolbar dropdowns & accelerators | 02, 04   | DRAFT  |
 | 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03, 04 | TODO   |
 | 08 | `08-context-switching-polish.md`       | Context-switching polish       | 01             | TODO   |
 | 09 | `09-help-overlay-revamp.md`            | `?` help overlay revamp        | 01, 03, 05, 07 | TODO   |
