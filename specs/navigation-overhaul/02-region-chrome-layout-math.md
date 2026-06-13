@@ -65,11 +65,12 @@ The header cell shows, left to right:
 2. **Namespace** filter (e.g. `ns: default`).
 3. **Search** field (right-aligned, e.g. `/web`).
 
-- The context and namespace are **distinct clickable sub-regions**; this chunk
-  exposes their coordinate ranges from the geometry module. The click behavior
-  — context → context switcher, namespace → namespace picker — is wired in
-  chunk 04. (Today only `n` opens the namespace picker and `!ctx` opens the
-  switcher.)
+- The context and namespace are **distinct clickable chips**. In chunk 04 they
+  are rendered as measured `<Button>`s (context → context switcher, namespace →
+  namespace picker, search → focus search), so this chunk does **not** need to
+  expose their coordinate ranges — it only needs to render the three pieces as
+  separate inline elements the Buttons can wrap. (Today only `n` opens the
+  namespace picker and `!ctx` opens the switcher.)
 - The context string is the single source already in `state.context`.
 
 ## Region titles & focus highlight
@@ -173,8 +174,9 @@ the Ink renderer is thin adapter glue.
   `CHART_WIDTH = 64`); the divider is removed.
 - `controller.sidebarWidthCols()` and AppRoot's sidebar width call the module —
   one formula.
-- Mouse hit-testing (chunk 04) consumes `Rect`s, `handles`, and the header
-  context/namespace sub-region coordinates.
+- Mouse hit-testing (chunk 04) consumes the region `Rect`s and the `handles`
+  segments; the header context/namespace/search chips are measured `<Button>`s
+  in chunk 04, not frame coordinates.
 
 ## Content fits its pane (wrap fixes)
 
@@ -232,9 +234,9 @@ Feature: Header shows and exposes context + namespace
     Given the current context is "docker-desktop" and the namespace is "default"
     Then the header shows the context to the left of "ns: default"
 
-  Scenario: Context and namespace are distinct clickable regions
-    Then computeFrame exposes separate coordinate ranges for the context and
-      the namespace within the header
+  Scenario: Context and namespace are distinct clickable chips
+    Then the header renders the context and the namespace as separate inline
+      elements that chunk 04 can wrap as individual Buttons
 ```
 
 ```gherkin
@@ -273,8 +275,8 @@ Feature: One geometry source
 ## Out of scope (handled elsewhere)
 
 - Mouse behavior: drag-resize on the handle segments, header context/namespace
-  clicks, and wheel routing — all chunk 04 (this chunk only exposes the
-  coordinates).
+  clicks, and wheel routing — all chunk 04 (this chunk only exposes the region
+  rects and handle segments).
 - List horizontal scrolling when content legitimately exceeds the pane — chunk
   05.
 - Detail-content vertical scrolling — chunk 03.
@@ -285,8 +287,9 @@ Feature: One geometry source
 - All five regions render inside one collapsed bordered grid with correct
   junctions and titles; the focused region is highlighted with zero layout
   movement on focus change.
-- The header shows the current context left of the namespace, and the frame
-  exposes context/namespace/handle coordinates.
+- The header shows the current context left of the namespace as separate inline
+  chips (wrappable as Buttons in chunk 04), and the frame exposes the handle
+  segment coordinates.
 - `src/ui/layout-geometry.ts` is the single geometry source, 100% covered;
   `tableWidth()`/`visibleHeight()` and all sizing derive from it; no magic
   width floors/offsets remain (`max(60,…)`, `−2`, `termCols−36`,

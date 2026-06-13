@@ -25,9 +25,12 @@ this conversation.
   (Option A: full-width header/command bar, full-height sidebar). The focused
   region is highlighted, others dim. The header shows the current context left
   of the namespace. Width/height math accounts for borders.
-- **Mouse:** wheel routes by cursor geometry; the two shared border lines are
-  drag-resize handles; clicking the context opens the switcher and clicking the
-  namespace opens the namespace picker.
+- **Mouse:** a single SGR stdin stream feeds a **hit-region registry**
+  (ink-mouse removed). Three components register targets — `<Button>` (discrete
+  non-nestable leaves), `<FocusableRegion>` (root-level focusable layouts), and
+  `<SelectableList>` (row model for the list/sidebar). Wheel routes by cursor
+  geometry; the two shared border lines are drag-resize handles; clicking the
+  context/namespace/tabs/✕ are all Buttons.
 - **Detail scrolling:** a real scroll viewport on every detail tab. Logs:
   scrolling up pauses live-tail and walks the ring buffer; returning to the
   bottom resumes tail.
@@ -63,25 +66,25 @@ this conversation.
 | 01 | `01-focus-keyboard-routing.md`         | Focus & keyboard routing model | —              | DRAFT  |
 | 02 | `02-region-chrome-layout-math.md`      | Region chrome & layout math    | —              | DRAFT  |
 | 03 | `03-detail-scroll-viewport.md`         | Detail scroll viewport         | 01, 02         | DRAFT  |
-| 04 | `04-mouse-interaction.md`              | Mouse: wheel, drag-resize, header clicks | 02, 03 | DRAFT  |
+| 04 | `04-mouse-interaction.md`              | Mouse: registry, components, dispatch | 01, 02, 03 | DRAFT  |
 | 05 | `05-list-horizontal-scroll.md`         | List horizontal scroll         | 01, 02         | TODO   |
-| 06 | `06-inline-logs-container-picker.md`   | Inline Logs container picker   | 02             | TODO   |
-| 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03     | TODO   |
+| 06 | `06-inline-logs-container-picker.md`   | Inline Logs container picker   | 02, 04         | TODO   |
+| 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03, 04 | TODO   |
 | 08 | `08-context-switching-polish.md`       | Context-switching polish       | 01             | TODO   |
 | 09 | `09-help-overlay-revamp.md`            | `?` help overlay revamp        | 01, 03, 05, 07 | TODO   |
 
 ## Ordering & dependencies
 
 ```
-01 ─┬─> 03 ─┬─> 04
-    │       └─> 07
-02 ─┘   └────────> (03 also needs 02)
+01 ─┬─> 03 ─> 04 ─┬─> 06
+02 ─┘             └─> 07   (07 also needs 01, 02, 03)
 01 ─> 05
-02 ─> 06
 01 ─> 08
 01,03,05,07 ─> 09
 ```
 
-Critical path: **01 → 02 → 03 → {04, 07}**. Widest parallelism after 03:
-**04, 05, 06, 08** can proceed independently; **09** is sequenced last so it
-documents the final keymap.
+Critical path: **01 → 02 → 03 → 04 → 07 → 09**. Chunk 04 (the mouse
+infrastructure: registry + `<Button>`/`<FocusableRegion>`/`<SelectableList>`) is
+now a hub — 06's inline picker items and 07's Save/Cancel adopt `<Button>` from
+it. Widest parallelism is after 02: **05 and 08** can proceed independently of
+the 03→04 spine; **09** is sequenced last so it documents the final keymap.
