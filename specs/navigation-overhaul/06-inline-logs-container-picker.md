@@ -44,8 +44,11 @@ silent cycle afterward.
    the dropdown opens automatically and no lines stream until the user picks.
    (`buildContainerPicker` already returns `defaultIndex: -1` for this case;
    `options.length === 0` keeps today's "✗ No containers found" hint.)
-4. **`c` opens the dropdown** (replacing the silent blind-cycle), so keyboard
-   users get the same discoverable picker the clickable button gives mouse users.
+4. **Shift+`C` opens the dropdown** (replacing the silent `c` blind-cycle), so
+   keyboard users get the same discoverable picker the clickable button gives
+   mouse users. Plain **`c` is reserved for the global context switcher**
+   (chunk 08), so the container opener is the shifted key; the dropdown's primary
+   path is the clickable `[container ▾]` button regardless.
 
 The generic full-screen `PickerOverlay` stays in place for the **namespace
 picker** and the **exec** container selection — those are out of scope here.
@@ -76,7 +79,8 @@ picker** and the **exec** container selection — those are out of scope here.
   `Esc` closes without changing the container; a **click outside** the dropdown
   closes it (chunk 04's overlay backdrop). No type-to-filter (container lists are
   short).
-- `c` toggles the dropdown open/closed.
+- Shift+`C` toggles the dropdown open/closed. The old plain-`c` blind-cycle is
+  removed (plain `c` belongs to the context switcher, chunk 08).
 
 ### What stays the same
 - The **previous-instance** logs feature stays on the `P` key + the
@@ -137,10 +141,16 @@ Feature: Inline container dropdown
     Then a dropdown opens anchored under it
     And the rest of the UI is still visible (not a full-screen modal)
 
-  Scenario: c opens the dropdown
+  Scenario: Shift+C opens the dropdown
+    Given the Logs tab is focused and streaming
+    When I press "C"
+    Then the container dropdown opens
+
+  Scenario: Plain c does not open the dropdown
     Given the Logs tab is focused and streaming
     When I press "c"
-    Then the container dropdown opens
+    Then the container dropdown does NOT open
+    And the keystroke is left for the global context switcher
 
   Scenario: Selecting a container switches the stream
     Given the container dropdown is open
@@ -179,8 +189,9 @@ Feature: Inline container dropdown
   immediately with **no full-screen modal**; the all-terminated case auto-opens
   the inline dropdown; the no-containers case hints and stops.
 - `[container ▾]` is a clickable `<Button>` that opens an inline dropdown
-  anchored under it; `c` opens it too; ↑/↓/Enter/Esc and click work; outside
-  clicks close it; the dropdown floats over the logs without covering the UI.
+  anchored under it; Shift+`C` opens it too (plain `c` is left for the context
+  switcher); ↑/↓/Enter/Esc and click work; outside clicks close it; the dropdown
+  floats over the logs without covering the UI.
 - The dropdown shows phase dots + `(init)` labels and marks the current
   container; selecting switches the stream.
 - Dropdown rendering + phase-color logic live in pure, 100%-covered modules; the
