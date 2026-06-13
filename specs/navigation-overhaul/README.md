@@ -46,6 +46,9 @@ this conversation.
   reconnect/error feedback during a switch; remember namespace + selected kind
   per context (persisted).
 - **Help:** rebuild the `?` overlay to be accurate and grouped by region/tab.
+- **Release & media:** bump the version (0.2.0 → 0.3.0), refresh screenshots,
+  add a reproducible animated demo, update the README keymap, and produce the
+  GitHub social preview.
 - **Bugs fixed:** list wrap-by-one; metrics-tab wrapping; Logs container picker
   rendered as a full-screen modal instead of inside the detail area; `/` in the
   Logs tab leaking to the global pod filter; wheel/arrows scrolling the list
@@ -77,6 +80,7 @@ this conversation.
 | 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03, 04 | DRAFT  |
 | 08 | `08-context-switching-polish.md`       | Context-switching polish       | 01             | TODO   |
 | 09 | `09-help-overlay-revamp.md`            | `?` help overlay revamp        | 01, 03, 05, 07 | TODO   |
+| 10 | `10-release-and-media.md`              | Version bump, screenshots, demo & social preview | 01–09 | DRAFT |
 
 ## Ordering & dependencies
 
@@ -86,10 +90,12 @@ this conversation.
 01 ─> 05
 01 ─> 08
 01,03,05,07 ─> 09
+01..09 ─> 10
 ```
 
-Critical path: **01 → 02 → 03 → 04 → 07 → 09**. Chunk 04 (the mouse
-infrastructure: registry + `<Button>`/`<FocusableRegion>`/`<SelectableList>`) is
-now a hub — 06's inline picker items and 07's Save/Cancel adopt `<Button>` from
-it. Widest parallelism is after 02: **05 and 08** can proceed independently of
-the 03→04 spine; **09** is sequenced last so it documents the final keymap.
+Critical path: **01 → 02 → 03 → 04 → 07 → 09 → 10**. Chunk 04 (the mouse
+infrastructure: registry + `<Button>`/`<FocusableRegion>`/`<SelectableList>`/
+`<DropdownButton>`) is a hub — 06's dropdowns and 07's action buttons adopt it.
+Widest parallelism is after 02: **05 and 08** can proceed independently of the
+03→04 spine; **09** documents the final keymap; **10** is the release/media
+wrap-up and depends on everything before it (it captures the finished UI).
