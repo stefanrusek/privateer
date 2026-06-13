@@ -18,7 +18,8 @@ this conversation.
 ## Scope at a glance
 
 - **Keyboard model:** `Tab`/`Shift+Tab` cycle regions; arrows act within the
-  focused region. List `←/→` = horizontal scroll (all columns together).
+  focused region. List `←/→` = horizontal scroll (natural-width viewport; the
+  status dot + `Name` columns stay pinned, the rest pan together).
   Detail `←/→` = switch tabs, `↑/↓` = scroll content.
 - **Focus indicator & frame:** all regions (header, sidebar, list, detail,
   command bar) are bordered, with borders **collapsed** into one connected grid
@@ -67,7 +68,7 @@ this conversation.
 | 02 | `02-region-chrome-layout-math.md`      | Region chrome & layout math    | —              | DRAFT  |
 | 03 | `03-detail-scroll-viewport.md`         | Detail scroll viewport         | 01, 02         | DRAFT  |
 | 04 | `04-mouse-interaction.md`              | Mouse: registry, components, dispatch | 01, 02, 03 | DRAFT  |
-| 05 | `05-list-horizontal-scroll.md`         | List horizontal scroll         | 01, 02         | TODO   |
+| 05 | `05-list-horizontal-scroll.md`         | List horizontal scroll         | 01, 02         | DRAFT  |
 | 06 | `06-inline-logs-container-picker.md`   | Inline Logs container picker   | 02, 04         | TODO   |
 | 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03, 04 | TODO   |
 | 08 | `08-context-switching-polish.md`       | Context-switching polish       | 01             | TODO   |

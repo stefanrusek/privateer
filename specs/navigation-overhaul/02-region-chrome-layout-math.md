@@ -180,11 +180,12 @@ the Ink renderer is thin adapter glue.
 
 ## Content fits its pane (wrap fixes)
 
-1. **List:** `ResourceTable` gets `totalWidth = list.width` exactly. Column
-   resolution (`resolveWidth`, ResourceTable.tsx ~39) must guarantee
-   **Σ column widths ≤ totalWidth** at every width — distribute rounding
-   remainder; truncate the flex column if needed. No wrap, detail open or
-   closed.
+1. **List:** `ResourceTable` gets `list.width` as its pane width. Columns render
+   at **stable natural widths** and the pane is a **horizontal viewport**
+   (chunk 05): the row is **clipped** to `list.width`, never squeezed and never
+   wrapped, detail open or closed. (This supersedes the earlier "Σ column widths
+   ≤ totalWidth / truncate the flex column" approach — see chunk 05 for the
+   natural-width + pinned-column model.)
 2. **Metrics charts:** thread `detail.width` into `MetricsTab`; charts and text
    fit within it (`renderTimeseriesChart({ width })` is already
    width-parameterized).
