@@ -67,10 +67,9 @@ switchStatus: { ctx: string; phase: 'connecting' }
              | null
 ```
 
-- On selecting a context, set `phase:'connecting'`; the header shows
-  `… connecting to <ctx>` (and the switcher may stay open showing the spinner,
-  or close to the connecting header — see "Open question" — recommended: close
-  and show the header affordance).
+- On selecting a context, the switcher **closes immediately** and the header
+  shows `… connecting to <ctx>` — the switcher's job is done once a choice is
+  made; the connecting state lives in the header, not a lingering modal spinner.
 - **Connected:** the first successful stream sync (the existing stream/connection
   signal that drives `TableModel.loadState`) clears `switchStatus` to `null`.
 - **Error** (auth/network/unreachable): set `phase:'error'` with the reason and
@@ -134,7 +133,8 @@ Feature: Connecting and error feedback
 
   Scenario: Switching shows a connecting state then settles
     Given I pick a different, reachable context
-    Then the header shows it connecting
+    Then the switcher closes immediately
+    And the header shows it connecting
     And when the first sync arrives the connecting state clears
 
   Scenario: A failed switch surfaces an error with a way out

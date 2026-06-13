@@ -79,7 +79,7 @@ this conversation.
 | 06 | `06-inline-logs-container-picker.md`   | Logs toolbar dropdowns & accelerators | 02, 04   | DRAFT  |
 | 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03, 04 | DRAFT  |
 | 08 | `08-context-switching-polish.md`       | Context-switching polish       | 01, 04         | DRAFT  |
-| 09 | `09-help-overlay-revamp.md`            | `?` help overlay revamp        | 01, 03, 05, 07 | TODO   |
+| 09 | `09-help-overlay-revamp.md`            | `?` help overlay & keymap registry | 01,03,04,05,06,07,08 | DRAFT |
 | 10 | `10-release-and-media.md`              | Version bump, screenshots, demo & social preview | 01–09 | DRAFT |
 
 ## Ordering & dependencies
@@ -89,7 +89,7 @@ this conversation.
 02 ─┘             └─> 07   (07 also needs 01, 02, 03)
 01 ─> 05
 01,04 ─> 08
-01,03,05,07 ─> 09
+01,03,04,05,06,07,08 ─> 09
 01..09 ─> 10
 ```
 
