@@ -78,7 +78,7 @@ this conversation.
 | 05 | `05-list-horizontal-scroll.md`         | List horizontal scroll         | 01, 02         | DRAFT  |
 | 06 | `06-inline-logs-container-picker.md`   | Logs toolbar dropdowns & accelerators | 02, 04   | DRAFT  |
 | 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03, 04 | DRAFT  |
-| 08 | `08-context-switching-polish.md`       | Context-switching polish       | 01             | TODO   |
+| 08 | `08-context-switching-polish.md`       | Context-switching polish       | 01, 04         | DRAFT  |
 | 09 | `09-help-overlay-revamp.md`            | `?` help overlay revamp        | 01, 03, 05, 07 | TODO   |
 | 10 | `10-release-and-media.md`              | Version bump, screenshots, demo & social preview | 01–09 | DRAFT |
 
@@ -88,7 +88,7 @@ this conversation.
 01 ─┬─> 03 ─> 04 ─┬─> 06
 02 ─┘             └─> 07   (07 also needs 01, 02, 03)
 01 ─> 05
-01 ─> 08
+01,04 ─> 08
 01,03,05,07 ─> 09
 01..09 ─> 10
 ```
@@ -96,6 +96,7 @@ this conversation.
 Critical path: **01 → 02 → 03 → 04 → 07 → 09 → 10**. Chunk 04 (the mouse
 infrastructure: registry + `<Button>`/`<FocusableRegion>`/`<SelectableList>`/
 `<DropdownButton>`) is a hub — 06's dropdowns and 07's action buttons adopt it.
-Widest parallelism is after 02: **05 and 08** can proceed independently of the
-03→04 spine; **09** documents the final keymap; **10** is the release/media
-wrap-up and depends on everything before it (it captures the finished UI).
+Widest parallelism is after 02: **05** is independent of the 03→04 spine, and
+**06/07/08** fan out from 04; **09** documents the final keymap; **10** is the
+release/media wrap-up and depends on everything before it (it captures the
+finished UI).
