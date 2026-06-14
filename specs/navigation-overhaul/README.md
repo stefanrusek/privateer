@@ -63,8 +63,10 @@ this conversation.
   (`src/adapters/**` excluded — thin wiring only; logic goes in pure modules).
 - Coverage-ignore comments and the escape hatches banned by
   `scripts/grep-gate.sh` are forbidden.
-- New logic belongs in pure, fully-covered modules (`src/ui`, `src/store`,
-  `src/k8s`, `src/exec`, …); only thin glue goes in `src/adapters/`.
+- New logic belongs in pure, fully-covered modules (`src/ui`, `src/input`,
+  `src/store`, `src/k8s`, `src/exec`, …); only thin glue goes in `src/adapters/`.
+  (Chunk 04's mouse parser/registry/drag-latch already exist as tested modules
+  under `src/input/` — extend them, don't reinvent.)
 - When behavior conflicts, the canonical `spec/` wins; where this overhaul
   changes canonical behavior, the relevant `spec/spec-02-navigation-layout.md`
   (and siblings) must be updated in the same chunk.
@@ -87,9 +89,9 @@ this conversation.
 ## Ordering & dependencies
 
 ```
-01 ─┬─> 03 ─> 04 ─┬─> 06   (06 also needs 01)
+01 ─┬─> 03 ─> 04 ─┬─> 06   (06 also needs 01, 02)
 02 ─┘             └─> 07   (07 also needs 01, 02, 03)
-01 ─> 05
+01,02 ─> 05
 01,04 ─> 08
 01,03,04,05,06,07,08 ─> 09
 01..09 ─> 10
