@@ -1,6 +1,8 @@
 # Navigation Overhaul
 
-Status: **DRAFT** — spec in progress (Gate 1 not yet passed).
+Status: **Gate 1 passed** — spec hardened by a multi-agent audit + a verified
+spike. Build-order plan drafted in [`build-order-01.md`](build-order-01.md);
+**awaiting Gate 2 approval** before any implementation.
 
 ## Purpose
 
