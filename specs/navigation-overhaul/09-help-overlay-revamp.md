@@ -3,8 +3,8 @@
 **Status:** DRAFT
 **Depends on:** 01, 03, 05, 06, 07, 08 (every chunk that defines or moves a key;
 this chunk documents the **final** keymap), 04 (accelerator registry it shares)
-**Implements / amends:** `spec/spec-02-navigation-layout.md` §4 (help). Update
-where this changes behavior.
+**Implements / amends:** `spec/spec-02-navigation-layout.md` §11 (Help Overlay).
+Update where this changes behavior.
 
 ## User story
 
@@ -50,14 +50,16 @@ Everything that documents keys reads from `KEYMAP`:
 - **Sidebar:** `↑/↓` (`j/k`) move · `←` collapse/parent · `→`/`Enter`
   expand/select · `h`/`l` collapse-all / expand-all.
 - **List:** `↑/↓` (`j/k`) select · `←/→` horizontal scroll (chunk 05) · `g g`
-  top · `G` bottom · `Enter` open detail.
+  top · `G` bottom · `Enter` open detail · **and the existing action keys (no
+  chunk removes these — see `spec-02 §8.3`):** `e` YAML · `y` copy · `d` delete ·
+  and pod-only `l` logs · `x` exec · `p` port-forward.
 - **Detail (all tabs):** `←/→` previous/next tab · `↑/↓` scroll (chunk 03) ·
   `1–6` jump to tab · `Esc` close pane.
 - **Detail · Logs:** `/` search · `n`/`N` next/prev match · `o` container
   dropdown · `l` line-limit dropdown · `p` pause · `t` timestamps · `w` wrap ·
   `P` previous instance · `d` download (chunk 06).
-- **Detail · YAML:** `e` edit · *(editing)* `Ctrl+S` save (review diff) ·
-  `Ctrl+E` open `$EDITOR` · `Esc` cancel · `r` reveal (Secrets) (chunk 07).
+- **Detail · YAML:** `e` edit · `v` reveal (Secrets) · *(editing)* `Ctrl+S` save
+  (review diff) · `Ctrl+E` open `$EDITOR` · `Esc` cancel (chunk 07).
 - **Detail · Metrics:** `[` / `]` change range.
 - **Command bar:** type · `Enter` run · `Esc` cancel.
 - **Overlays (switcher / pickers / dropdowns):** `↑/↓` (`j/k`) move · `Enter`
@@ -101,7 +103,8 @@ Feature: Accurate, grouped help
   Scenario: Help is grouped by scope
     When I press "?"
     Then the overlay shows keys under headings (Global, Sidebar, List, Detail…)
-    And every key shown is a real binding from chunks 01–08
+    And every key shown is a real, currently-implemented binding (defined by
+      chunks 01–08 or inherited unchanged from the canonical spec, e.g. r/F/+/-)
 
   Scenario: Help leads with my current context
     Given the detail pane is focused on the Logs tab

@@ -4,8 +4,8 @@
 **Depends on:** 01 (`←/→` freed to no-ops in the list, ready to wire), 02
 (`computeFrame` → `list` `Rect`; the list-fit model amended here)
 **Implements / amends:** `spec/spec-02-navigation-layout.md` (list navigation),
-`spec/spec-03-resources.md` / `spec/spec-04-*` (resource table). Update the
-canonical spec where this changes behavior.
+`spec/spec-03-resource-model.md` / `spec/spec-04-core-views.md` (resource table).
+Update the canonical spec where this changes behavior.
 
 ## User story
 

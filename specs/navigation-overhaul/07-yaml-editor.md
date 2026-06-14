@@ -4,8 +4,8 @@
 **Depends on:** 01 (detail keyboard/focus model + `yamlMode` arbitration), 02
 (detail `Rect` width — no wrap/spill), 03 (read-mode scroll viewport), 04
 (`<Button>` + accelerator convention for the action bars)
-**Implements / amends:** `spec/spec-04-detail.md` §6 (YAML read/edit) and §7
-(diff/apply). Update it where this changes behavior.
+**Implements / amends:** `spec/spec-04-core-views.md` §6 (YamlTab read/edit) and
+§7 (DiffView). Update it where this changes behavior.
 
 ## User stories
 
@@ -74,11 +74,26 @@ controller**. The contract between them is tiny:
   covered**. `edit-buffer.ts`, `validate.ts`, `diff.ts` already exist and stay.
 - `src/ui/yaml-apply.ts` (new) — a pure reducer for the apply/confirm state
   machine: `ready → applying → (applied | conflict | error)`, and the
-  cancel/discard transitions. The controller drives effects from it. 100%
-  covered.
+  cancel/discard transitions. **The ENTIRE transition logic must live here** —
+  the controller (excluded from coverage) only performs the `replace`/`get`
+  effects and feeds results back in; if any transition decision leaks into the
+  controller it becomes untestable. (`status` is an exhaustive discriminated
+  union — `switch` with no `default`.)
 - `YamlEditor.tsx` / `YamlTab.tsx` (read view) / `DiffView.tsx` stay in
   `src/ui/**` and remain 100% covered (ink-testing-library, as today).
-- The `$EDITOR` subprocess + temp-file IO is the **only** new adapter glue.
+  **Preserve the test seam:** today's `YamlTab` reaches 100% only via a
+  test-only `_testInitialContent` prop that boots straight into a *dirty* edit
+  buffer — the discard-confirm and cursor-restore branches are unreachable
+  otherwise (stdin-driven dirtiness is unreliable under ink-testing-library).
+  The new `initialYaml` contract subsumes this (boot with pre-edited content),
+  but the editor MUST keep an equivalent dirty-boot seam or ~15 coverage-driving
+  tests lose their entry point. `DiffView`'s `applying`/`conflict`/`error`
+  branches become *easier* to cover once `status` is a prop.
+- The `$EDITOR` subprocess + temp-file IO is the **only** new adapter glue. It
+  reuses the suspend runner, whose `disableMouseReporting()` already satisfies
+  chunk 04's mouse-teardown invariant — **re-assert that invariant here** (test
+  that mouse modes are off during the pop-out and re-armed after). Temp file in
+  `os.tmpdir()`, best-effort `unlink` in a `finally`.
 
 ## `$EDITOR` pop-out
 
@@ -136,7 +151,7 @@ inside the editor (where letters are literal text) actions bind to `Ctrl`-combos
 
 | Context | Buttons (key shown) |
 |---------|---------------------|
-| Read | `[E̲dit]` (`e`), `[r̲eveal]` (`r`, Secrets only) |
+| Read | `[E̲dit]` (`e`), `[re̲veal]` (`v`, Secrets only) |
 | Edit | `[Apply]` (`Ctrl+S`), `[Cancel]` (`Esc`), `[Open in $EDITOR]` (`Ctrl+E`) |
 | Discard-confirm | `[Discard]` (`y`), `[Keep editing]` (`n`) |
 | Diff | `[Apply]` (`Enter`), `[Cancel]` (`Esc`) |

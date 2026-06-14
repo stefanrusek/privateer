@@ -78,7 +78,7 @@ this conversation.
 | 03 | `03-detail-scroll-viewport.md`         | Detail scroll viewport         | 01, 02         | DRAFT  |
 | 04 | `04-mouse-interaction.md`              | Mouse: registry, components, dispatch | 01, 02, 03 | DRAFT  |
 | 05 | `05-list-horizontal-scroll.md`         | List horizontal scroll         | 01, 02         | DRAFT  |
-| 06 | `06-inline-logs-container-picker.md`   | Logs toolbar dropdowns & accelerators | 02, 04   | DRAFT  |
+| 06 | `06-inline-logs-container-picker.md`   | Logs toolbar dropdowns & accelerators | 01, 02, 04 | DRAFT |
 | 07 | `07-yaml-editor.md`                    | YAML editor                    | 01, 02, 03, 04 | DRAFT  |
 | 08 | `08-context-switching-polish.md`       | Context-switching polish       | 01, 04         | DRAFT  |
 | 09 | `09-help-overlay-revamp.md`            | `?` help overlay & keymap registry | 01,03,04,05,06,07,08 | DRAFT |
@@ -87,7 +87,7 @@ this conversation.
 ## Ordering & dependencies
 
 ```
-01 ─┬─> 03 ─> 04 ─┬─> 06
+01 ─┬─> 03 ─> 04 ─┬─> 06   (06 also needs 01)
 02 ─┘             └─> 07   (07 also needs 01, 02, 03)
 01 ─> 05
 01,04 ─> 08

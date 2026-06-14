@@ -161,9 +161,26 @@ collapsed grid is therefore drawn by a **pure frame model** (part of
 box-drawing glyph for every border cell (corners, tees, crosses) given each
 segment's **line weight** (single/double) and accent. The focused region's
 segments are double-weight; mixed single/double junctions are resolved to the
-correct glyph. A thin Ink renderer paints that glyph grid and positions each
-region's content inside its `Rect`. The frame model is pure and 100%-covered;
-the Ink renderer is thin adapter glue.
+correct glyph.
+
+**Rendering mechanism (be concrete — Ink is flexbox, not a cell plotter).** Ink
+has **no** API to "draw this string at terminal cell (x, y)"; `position:'absolute'`
+is Yoga-*relative* within the box tree and there is no compositor (verified: the
+current full-screen overlays work by early-return replacement, with a code
+comment that "Ink cannot reclaim overflowed rows"). So "position content inside
+its `Rect`" must be realized one of two concrete ways — the spec picks one:
+- **(preferred) String-buffer composition:** the pure frame model emits the full
+  grid as a 2-D character buffer (border glyphs **and** blank content windows); a
+  thin renderer composites each region's already-rendered content lines into the
+  window at its `Rect`, then prints the buffer. All geometry stays pure/covered;
+  only the final print is glue.
+- **(alternative) Flex Boxes sized to Rects:** nest Ink `<Box>`es whose computed
+  width/height equal the frame's `Rect`s, carrying the glyph grid as borders.
+
+Either way, **do not** express placement as absolute terminal coordinates fed to
+Ink. Also verify (with `string-width`) the chosen single/double **junction
+glyphs are width-1** in target terminals, so switching focus weight causes zero
+reflow. The frame model is pure and 100%-covered; the renderer is thin glue.
 
 ### All consumers derive from the frame
 

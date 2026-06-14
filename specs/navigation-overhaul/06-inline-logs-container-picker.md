@@ -1,10 +1,12 @@
 # Chunk 06 — Logs toolbar: inline dropdowns & accelerators
 
 **Status:** DRAFT
-**Depends on:** 02 (`computeFrame` → `detail` `Rect`; the Logs tab renders inside
-it), 04 (`<DropdownButton>` / `<Button>` + accelerator convention + the
-hit-region registry/overlay layering used to anchor the dropdowns)
-**Implements / amends:** `spec/spec-05-logs-exec.md` §3.1 (container selection)
+**Depends on:** 01 (focus model + the `src/ui/navigation.ts` clamp helper this
+chunk reuses; the Logs tab must be focusable), 02 (`computeFrame` → `detail`
+`Rect`; the Logs tab renders inside it), 04 (`<DropdownButton>` / `<Button>` +
+accelerator convention + the hit-region registry/overlay layering used to anchor
+the dropdowns)
+**Implements / amends:** `spec/spec-05-actions.md` §3.1 (container selection)
 and §3.2 (Logs toolbar). Update it where this changes behavior.
 
 ## User story

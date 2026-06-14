@@ -101,6 +101,13 @@ the source of truth.
 `docs/social-preview.png` via **Settings → Social preview** after regenerating,
 as `docs/MEDIA.md` §3 documents.
 
+**Environment caveats (verified):** `freeze` and ImageMagick (`magick`) are **not
+installed** in the default sandbox (`tmux` is), and the captures need a cluster
+(`scripts/claude-cluster-up.sh` + `fixtures:up`) — install the tools first.
+`docs/MEDIA.md` §3's social-card command hardcodes a **macOS** font
+(`/System/Library/Fonts/Menlo.ttc`); on a Linux host substitute an available
+mono font (e.g. DejaVu Sans Mono) — update `docs/MEDIA.md` with the fallback.
+
 ## Acceptance criteria (given-when-then)
 
 ```gherkin

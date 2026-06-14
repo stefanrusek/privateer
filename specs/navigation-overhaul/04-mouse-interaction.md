@@ -79,7 +79,35 @@ flowchart LR
 The decision is **pure and fully tested**; the controller only executes the
 returned `Action`.
 
-## Pure modules (`src/ui/mouse/**`, 100% covered)
+## Reuse what already exists — do NOT reinvent (critical)
+
+The repo **already has tested, 100%-covered pure modules for the hard parts**,
+currently **orphaned** (only `src/ui/types.ts` imports a type from them; the live
+app bypasses them via ink-mouse + an inline stdin regex):
+
+- `src/input/mouse.ts` — `parseSgrMouse`, `MouseEvent`, and the
+  `MOUSE_ENABLE`/`MOUSE_DISABLE`/`suspendMouse`/`resumeMouse` mode strings. This
+  **is** the SGR parser this chunk needs; extend it (add wheel/drag normalization
+  if missing) rather than writing a new `sgr.ts`.
+- `src/input/hit-testing.ts` — a topmost-wins registry (`HitTestRegistry`). This
+  **is** the `registry.ts`/`topmostAt` this chunk needs; extend it with the
+  `layer` field if absent.
+- `src/input/drag.ts` — `DragTracker`, a press→motion→release latch. This **is**
+  the drag-latch / no-slip mechanism.
+
+So this chunk's real job is **integration, not greenfield**: wire these existing
+modules into the live path, delete ink-mouse, and add only what's genuinely new
+(the `dispatch` reducer, `ratios`, `accelerator`, `measure`, and the React
+wrappers). Treat the module names below as the *capabilities* to provide — map
+them onto `src/input/*` where it already exists.
+
+**Bug to fix while here:** `src/input/mouse.ts`'s `MOUSE_ENABLE` turns on
+`1003h` (any-motion), which directly contradicts the live code
+(`LiveApp.tsx` writes `1003l … 1002h`) and the CLAUDE.md gotcha that 1003h must
+stay suppressed. Reconcile to the live behavior (1000h + 1002h + 1006h on;
+1003h off) and hard-disable all modes on quit/suspend/exit.
+
+## Pure modules (capabilities — map onto `src/input/*`; `src/ui/**`, 100% covered)
 
 - **`sgr.ts`** — `parseSgrMouse(chunk: string): MouseEvent[]`. Decodes SGR
   reports `\e[<b;x;yM` (press/motion) and `\e[<b;x;ym` (release):
@@ -160,8 +188,29 @@ returned `Action`.
 
 Today mouse decoding is split between an **uncovered** dependency (ink-mouse) and
 the adapter. After this chunk, *all* parsing and routing decisions are in pure
-`src/ui/mouse/**` under the 100/100/100/100 bar; only ref-touching wiring and the
-stdin/mode lifecycle remain in `src/adapters/**`.
+`src/ui/**` / `src/input/**` under the 100/100/100/100 bar; only ref-touching
+wiring and the stdin/mode lifecycle remain in `src/adapters/**`.
+
+**Component placement (mandatory):** the four React wrappers (`Button`,
+`FocusableRegion`, `SelectableList`, `DropdownButton`) live in
+**`src/adapters/live/`**, *not* `src/ui/components/` where the other 22
+components live. This is deliberate: they touch `ref.current.yogaNode` and
+`useEffect`-based measure/register, which cannot be meaningfully asserted under
+`ink-testing-library`, so they belong in the coverage-excluded, eslint-relaxed
+adapter dir (the same place the stdin listener and mode toggles already live).
+Verified facts: `vitest.config.ts:31` excludes `src/adapters/**`;
+`eslint.config.mjs:110` turns `no-restricted-syntax` off there. To keep their
+*decisions* covered, any branch logic (e.g. the **nested-Button winner** rule)
+lives in pure `registry.ts`/helpers the wrapper merely calls. `measure.ts` stays
+pure and is tested against a **fake** `{left,top,width,height,parent}` node tree
+(the real `yogaNode` walk is exercised by BDD, as with all adapter glue).
+
+**Measurement note (verified):** the absolute-rect walk is sound — `ink-mouse`,
+the dependency this chunk removes, already implements exactly it
+(`getComputedLayout().left/top` summed up the `parentNode` chain). Two
+constraints: a `<Button>`'s measured ref must attach to a **`<Box>`** (an
+`ink-virtual-text` node has no `yogaNode`), and measurement must run in
+`useEffect` (post-commit) and re-run on resize/content change.
 
 ## Components in detail
 
@@ -258,7 +307,21 @@ already supports per-segment accent).
   select/open per above.
 - **Command bar** region → focus the agent input.
 
+This **supersedes the stale rows in canonical `spec-02 §9` (Mouse Support)**:
+"Command bar context | Click to open context switcher" (the context trigger is now
+the **header** chip, chunk 08) and "double-click to open detail" (now a **second
+click on the already-selected row**). Update §9 accordingly.
+
 ### Overlays & z-ordering
+**Ink has no visual compositor** — it cannot paint a floating box over
+already-rendered content via a true z-layer (verified: today's full-screen
+overlays in `AppRoot.tsx`/`LiveApp.tsx` work by **early-return replacement** of
+the whole tree, with a comment noting "Ink cannot reclaim overflowed rows"). So
+the registry's `layer` field governs **hit-test priority only**, not painting.
+A non-full-screen *anchored* overlay (a `DropdownButton` list) must therefore be
+**rendered inside the normal flex tree** — e.g. an absolutely-positioned `<Box>`
+within its region, or by reserving rows — not "drawn on top" at arbitrary cells.
+
 Modals/overlays (context switcher, namespace picker, help, confirm, and chunk
 06's container picker) register their entries on a **higher layer** plus a
 full-area backdrop entry on that layer, so (a) their Buttons/rows win
@@ -383,6 +446,27 @@ Feature: Region and row clicks via the registry
     Then that namespace is selected
     And the list row beneath the click is NOT selected
 ```
+
+## The one invariant (adversarial coverage)
+
+**Mouse modes (1000/1002/1003/1006) must be hard-disabled on EVERY exit path** so
+escape sequences never leak into the user's shell (CLAUDE.md gotcha). One
+happy-path test is insufficient for the invariant whose failure corrupts the
+user's terminal. Require adversarial tests: teardown on normal quit, on
+suspend (exec handover **and** chunk 07's `$EDITOR` pop-out), on
+crash/uncaught-exception, on `SIGINT`/`SIGTERM`, and **idempotent double
+teardown**. This invariant is owned here and **re-asserted by chunk 07** on its
+suspend path. (The existing `disableMouseReporting()` in the suspend runner
+already does the teardown — reuse it, don't reinvent.)
+
+## Implementation constraints (gate)
+
+- The `Action` union and any discriminated-union `switch` must be **exhaustive
+  with no `default`** (eslint `switch-exhaustiveness-check` is an error).
+- Optional props use `?:` (not `| undefined`) and call sites guard reads
+  (`exactOptionalPropertyTypes` is enforced repo-wide, including adapters).
+- Pure helpers stay in `src/ui/**` / `src/input/**` (never co-located inside an
+  excluded adapter wrapper, or they fall out of coverage).
 
 ## Out of scope
 - Frame geometry (chunk 02) and detail viewport math (chunk 03); this chunk

@@ -4,9 +4,9 @@
 **Depends on:** 01 (global-key routing + focus model), 04 (the header **context**
 chip is a `<Button>` that opens the switcher; switcher items are clickable
 `<Button>`s on the overlay layer)
-**Implements / amends:** `spec/spec-01-*` §6 (context switching) and
-`spec/spec-02-navigation-layout.md` §4 (the switcher). Update where this changes
-behavior.
+**Implements / amends:** `spec/spec-01-architecture.md` §6 (context switching)
+and `spec/spec-02-navigation-layout.md` §10 (Context Switcher). Update where this
+changes behavior.
 
 ## User stories
 
@@ -101,7 +101,11 @@ switchStatus: { ctx: string; phase: 'connecting' }
   fallbacks). Plus the `layout.json` `contexts` (de)serialization shape.
 - `src/ui/context-switch.ts` (new) — pure, **100% covered**: the `switchStatus`
   state machine (`connecting → connected | error`) and its transitions from the
-  stream/connection signals.
+  stream/connection signals. It is **event-driven** (stream signals), so it
+  needs no timer; **if** a connect timeout is added, drive it via the existing
+  injected `Clock` boundary (`src/boundaries/clock.ts`, as `YamlTab` does) —
+  never ambient `Date.now()` (banned outside adapters). `switchStatus` is an
+  exhaustive discriminated union (`switch` with no `default`).
 - `controller.ts` (excluded adapter) — wires `c` + the chip to open the switcher,
   drives the switch status from the stream signals, and persists/restores via the
   pure module. No state-machine or validation logic of its own.
