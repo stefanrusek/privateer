@@ -192,6 +192,74 @@ gate). The discipline is integration *safety*, not just parallelism.
   collapsed to one pathspec because zsh doesn't word-split unquoted variables;
   fixed by piping through `xargs`. A wrong shell assumption silently no-ops.
 
+## 9. Build-order design — decomposition that made the build possible
+
+The build was driven by [`spec/build-order-01.md`](../spec/build-order-01.md),
+which sequences Specs 01–08 into 22 independently-buildable chunks. The plan
+itself contains the smartest moves of the whole project — the execution
+techniques above only worked because the work was carved up this way.
+
+- **Bootstrap the enforcer before anything it enforces.** Chunk 0.1 stands up
+  the *entire* Spec 08 gate (strict tsc, ESLint flat config, grep gates for
+  ignore/disable comments, Vitest at 100% thresholds, Cucumber) on a
+  hello-world app — *before* the first feature. The stated reason: "the gate
+  must exist before the first feature chunk, or nothing enforces it." Quality
+  is guaranteed from line one instead of retrofitted.
+- **Boundaries + fakes before consumers; real adapters lag.** Chunk 0.2 lands
+  all eight boundary interfaces and a scripted fake for each, so the whole app
+  can be built and 100%-tested against fakes long before any real cluster,
+  model, or subprocess exists. Production adapters (the coverage-excluded glue)
+  come later. And the fakes are themselves unit-tested — "fakes are code;
+  they're covered too."
+- **Decouple the uncertain, heavyweight dependency from the feature.** The
+  agent was planned so that download UX, the tool dispatcher, the prompt
+  builder, and the AgentTab are all built and tested on a `FixtureEngine`
+  (Chunk 6.2) *before* the real `@huggingface/transformers` adapter (6.3) — and
+  the fast-path command bar (6.1) "is fully useful before any model exists."
+  This is precisely why discovering mid-build that the spec's "Gemma 4 E2B"
+  model doesn't exist did **not** block the agent feature: the model was
+  isolated to the last, swappable chunk.
+- **Pure cores early as the cheapest 100%-coverage wins.** Status resolvers,
+  the rule engine, and parsers (Chunks 1.3, 5.3, 6.1) are pure and
+  table-driven — "the cheapest 100%-coverage wins" — and they unblock
+  everything layered above them. Front-load the high-ROI, fully-coverable work.
+- **A runnable artifact as early as possible.** A walking skeleton launches by
+  Chunk 2.2, and the chunk-completion contract requires it keeps launching from
+  then on, "so every later chunk is verifiable in a real terminal, not just in
+  tests." Integration is continuous, not deferred to the end.
+- **A uniform chunk contract is what makes fan-out possible.** Every chunk is
+  "independently implementable and testable, completed only when the full
+  Spec 08 gate is green," with the same five-point definition of done
+  (feature-file-first, TDD loop, gate green, no new ignore comments, skeleton
+  still launches). Identical, self-verifying units with explicit dependencies
+  are exactly what let the build be handed to worktree-isolated subagents in
+  parallel (see §8).
+- **Compute the critical path and the parallelism frontier up front.** The plan
+  ships a dependency graph, names the critical path
+  (`0.1 → 0.2 → 1.1 → 2.1/2.2 → 2.3 → 3.1 → 5.1 → 5.3 → 6.2 → 6.3 → 7.1`), and
+  the widest parallelism point ("after 3.1, chunks 3.2/3.3/4.1/4.2/4.3 are
+  mutually independent"). That's scheduler input for an unattended pipeline,
+  not prose.
+- **Place real-cluster tests surgically.** `@envtest` (real apiserver) is
+  reserved for the handful of behaviors fakes genuinely can't reproduce — watch
+  resumption via resourceVersion, 403 via impersonation, the 409
+  reload-and-re-edit conflict — while all *logic* is tested against fakes. The
+  irreducibly flaky real paths (exec WebSocket, kind `@cluster` smoke) are
+  marked **non-gating**. Determinism where possible, reality only where
+  necessary.
+- **Spot infrastructure reuse in the dependency graph.** Metrics discovery
+  (5.1) depends on the port-forward manager (4.3) because "the system tunnel
+  reuses forward machinery" — one subprocess-lifecycle path serves two
+  features, caught at planning time rather than rebuilt.
+- **Name the one invariant that must never break.** The plan singles out the
+  secret-redaction invariant for *adversarial* fixtures in the agent
+  tool-dispatch chunk (6.2), elevating the security-critical property above
+  ordinary coverage.
+- **Make time injectable everywhere it matters.** Idle-stream close, row
+  animations, round caps, and download progress are all planned against a fake
+  `Clock` — the same discipline the spec enforces by banning `Date.now()` —
+  so time-dependent behavior is deterministically testable.
+
 ---
 
 *Caveat on provenance:* these were distilled from session transcripts; some
