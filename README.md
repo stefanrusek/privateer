@@ -89,17 +89,14 @@ the download entirely; navigation and `!commands` still work.
 
 | Key | Action |
 | --- | --- |
-| `Tab` / `Shift+Tab` | Move between regions (sidebar · list · detail) |
-| `↑` `↓` (or `j` `k`) | Move within the focused region |
-| `←` `→` | Detail: switch tabs · List: scroll columns · Sidebar: collapse/expand |
-| `Enter` | Open the detail pane (Overview · YAML · Events · Logs · Metrics · Agent) |
 | `Space` | Ask the agent anything (`crashing pods`, `how many pods are running?`) |
 | `!` | Commands: `!ns demo`, `!ctx`, `!pods`, `!q` |
 | `/` | Filter the resource list |
-| `c` / `n` | Switch context / namespace |
+| `n` | Namespace picker |
+| `Enter` | Open the detail pane (Overview · YAML · Events · Logs · Metrics · Agent) |
 | `l` / `x` / `p` / `d` | Logs / exec / port-forward / delete the selected pod |
-| `e` | Edit YAML (diff before apply) |
 | `F` | Port-forward manager |
+| `e` | Edit YAML (diff before apply) |
 | `[` `]` | Cycle metrics time range |
 | `?` | Full keybinding reference |
 
