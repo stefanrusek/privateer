@@ -46,9 +46,11 @@ this conversation.
   reconnect/error feedback during a switch; remember namespace + selected kind
   per context (persisted).
 - **Help:** rebuild the `?` overlay to be accurate and grouped by region/tab.
-- **Release & media:** bump the version (0.2.0 → 0.3.0), refresh screenshots,
-  add a reproducible animated demo, update the README keymap, and produce the
-  GitHub social preview.
+- **Release & media:** bump the version (0.2.0 → 0.3.0) and cut the release;
+  re-capture the `docs/frames/*.ansi` screens against the new UI and regenerate
+  the README demo APNG + GitHub social card via the existing `docs/MEDIA.md`
+  pipeline (`freeze` + ImageMagick); update the README keymap from chunk 09's
+  registry.
 - **Bugs fixed:** list wrap-by-one; metrics-tab wrapping; Logs container picker
   rendered as a full-screen modal instead of inside the detail area; `/` in the
   Logs tab leaking to the global pod filter; wheel/arrows scrolling the list
