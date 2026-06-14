@@ -114,3 +114,26 @@ then `send-keys` / `capture-pane -p`. Use the key name `Space` (not `' '`);
 inject SGR mouse with `send-keys -l $'\e[<0;x;yM'`. Stdin tests use
 `test/ink-stdin.ts` `safeWrite` (waits for Ink's readable listener) — writing
 directly causes chronic flakes. BDD can flake under heavy host CPU load.
+
+## Working on this codebase
+
+[docs/PROCESS-NOTES.md](docs/PROCESS-NOTES.md) catalogs the non-obvious
+techniques that made this build work — verify-by-reconstruction, root-causing
+to system/VM signals, bypassing misbehaving libraries at a lower level,
+black-box driving the TUI under tmux, and the multi-agent integration-safety
+discipline. Worth a read before the obvious approach stalls.
+
+The `fable-planner` skill (`.claude/skills/fable-planner/`) turns those notes
+into an actionable playbook for planning decompositions and implementing/
+debugging rigorously — invoke it (or let it auto-trigger) when carving work
+into a build order, building against the strict gate, or when a fix "should
+work" but doesn't. It complements `spec-driven-development` (which owns the
+spec→plan→build gates).
+
+## README media
+
+The README's animated demo and the GitHub social card are regenerated from
+the committed terminal captures in `docs/frames/*.ansi`. The full
+pipeline — capturing screens under tmux, rendering with `freeze`, and
+assembling the APNG / social card with ImageMagick — is documented step by
+step with the exact commands in [docs/MEDIA.md](docs/MEDIA.md).
