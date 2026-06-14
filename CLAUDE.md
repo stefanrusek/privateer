@@ -106,3 +106,11 @@ then `send-keys` / `capture-pane -p`. Use the key name `Space` (not `' '`);
 inject SGR mouse with `send-keys -l $'\e[<0;x;yM'`. Stdin tests use
 `test/ink-stdin.ts` `safeWrite` (waits for Ink's readable listener) — writing
 directly causes chronic flakes. BDD can flake under heavy host CPU load.
+
+## README media
+
+The README's animated demo and the GitHub social card are regenerated from
+the committed terminal captures in `docs/frames/*.ansi`. The full
+pipeline — capturing screens under tmux, rendering with `freeze`, and
+assembling the APNG / social card with ImageMagick — is documented step by
+step with the exact commands in [docs/MEDIA.md](docs/MEDIA.md).
