@@ -101,6 +101,21 @@ modules into the live path, delete ink-mouse, and add only what's genuinely new
 wrappers). Treat the module names below as the *capabilities* to provide — map
 them onto `src/input/*` where it already exists.
 
+**Spike result (verified, throwaway harness under Bun 1.3.11 + Ink 5.1 +
+React 18.3):** the Yoga absolute-rect walk works exactly — a ref'd `<Box>` nested
+under a 2-tall header and beside a 10-wide sidebar measured `{x:10, y:2, w:30,
+h:8}` by summing `yogaNode.getComputedLeft/Top` up the `parentNode` chain. And
+`parseSgrMouse` decoded down/up/scrollUp/scrollDown/drag/move correctly. The
+spec's central bet is proven. **Two integration deltas the implementer must
+handle (not respec, just wire):**
+1. `parseSgrMouse(seq)` returns a **single `MouseEvent | null` per SGR sequence**,
+   not an array. Add a thin splitter that breaks a stdin chunk into sequences and
+   maps each (chunk 04 wants "tolerant of multiple reports in one chunk").
+2. It keeps **1-based** terminal coordinates and uses event types
+   `down|up|move|drag|scrollUp|scrollDown` (not `press|release|wheel`). **Reuse
+   these types**; pick ONE coordinate base consistent with `computeFrame`'s
+   `Rect`s and convert at a single seam.
+
 **Bug to fix while here:** `src/input/mouse.ts`'s `MOUSE_ENABLE` turns on
 `1003h` (any-motion), which directly contradicts the live code
 (`LiveApp.tsx` writes `1003l … 1002h`) and the CLAUDE.md gotcha that 1003h must
