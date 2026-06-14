@@ -115,6 +115,13 @@ to system/VM signals, bypassing misbehaving libraries at a lower level,
 black-box driving the TUI under tmux, and the multi-agent integration-safety
 discipline. Worth a read before the obvious approach stalls.
 
+The `fable-planner` skill (`.claude/skills/fable-planner/`) turns those notes
+into an actionable playbook for planning decompositions and implementing/
+debugging rigorously — invoke it (or let it auto-trigger) when carving work
+into a build order, building against the strict gate, or when a fix "should
+work" but doesn't. It complements `spec-driven-development` (which owns the
+spec→plan→build gates).
+
 ## README media
 
 The README's animated demo and the GitHub social card are regenerated from
