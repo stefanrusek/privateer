@@ -104,3 +104,30 @@ Widest parallelism is after 02: **05** is independent of the 03→04 spine, and
 **06/07/08** fan out from 04; **09** documents the final keymap; **10** is the
 release/media wrap-up and depends on everything before it (it captures the
 finished UI).
+
+## Build-order notes (recorded for the Gate-2 plan)
+
+These chunk files stay as **coherent behavior units**; the **build-order plan**
+(written at Gate 2) will turn them into the recommendations below — captured here
+so they survive a hand-off. They come out of a four-agent audit of this spec set.
+
+- **Split chunk 02** into **02a** (geometry math — `computeFrame`/Rects/handles,
+  rewire `tableWidth`/`visibleHeight`/chart width, **keep the current Ink
+  chrome**) and **02b** (the collapsed-grid glyph renderer). Keeps the walking
+  skeleton launchable through the render rewrite.
+- **Split chunk 04** into **04a** (SGR parse + registry + dispatch + ratios;
+  **wire the existing `src/input/{mouse,hit-testing,drag}.ts`**, remove
+  ink-mouse; frame-derived hit-testing only) and **04b** (the measured
+  `<Button>`/`<FocusableRegion>`/`<SelectableList>`/`<DropdownButton>` wrappers +
+  `measure.ts` + accelerators). This quarantines the Yoga-measurement risk in a
+  swappable sub-chunk and lets wheel/drag/region-click land before any
+  measurement.
+- **Relax 04 ← 03 to a soft dep:** 04 only needs 03's `scrollBy` seam (for the
+  wheel handler), so give it a stub and let 03 and 04a run in parallel.
+- **Spike: DONE.** The riskiest assumption — Yoga absolute-rect measurement under
+  Bun + Ink 5 — was proven in a throwaway harness (result recorded in chunk 04);
+  no go/no-go risk remains for 04b.
+- **Reuse, don't reinvent:** chunk 04's parser/registry/drag-latch already exist
+  and are tested under `src/input/` — the chunk integrates them.
+- **One invariant (adversarial):** mouse modes hard-disabled on every exit/
+  suspend path (owned by 04, re-asserted by 07).
