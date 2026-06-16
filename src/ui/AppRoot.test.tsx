@@ -123,11 +123,14 @@ describe('AppRoot', () => {
   });
 
   it('shows > marker for active kind in sidebar', () => {
+    // The bordered chrome clips the sidebar to the body height, so give it a
+    // tall terminal where every leaf (and its active-kind marker) is visible.
     const { lastFrame } = render(
       React.createElement(AppRoot, {
         state: defaultState,
         callbacks: defaultCallbacks,
         contextFilter: '',
+        terminalSize: { columns: 120, rows: 200 },
       }),
     );
     expect(lastFrame()).toContain('>');
@@ -177,6 +180,7 @@ describe('AppRoot', () => {
         callbacks: defaultCallbacks,
         contextFilter: '',
         cursorKind: 'Pods',
+        terminalSize: { columns: 120, rows: 200 },
       }),
     );
     expect(lastFrame()).toContain('Pods');

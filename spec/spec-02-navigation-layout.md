@@ -17,23 +17,33 @@
 
 ## 2. Overall Layout
 
+All five regions are bordered and the borders **collapse** into one connected
+grid (Option A): a full-width header across the top, a full-width command bar
+across the bottom, a full-height sidebar on the left, and the list stacked above
+the detail pane in the right column. Adjacent regions share a single border line
+with correct box-drawing junctions (`┬ ┴ ├ ┤ ┼`).
+
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  Left Sidebar     │  Namespace Filter  [all ▾]  Search [      ] │
-│  (resource tree)  ├──────────────────────────────────────────────│
-│                   │                                              │
-│                   │  Resource List (center top)                  │
-│                   │                                              │
-│  ~20% width       │                                              │
-│  resizable        ├──────── drag handle ──────────────────────── │
-│                   │                                              │
-│                   │  Detail / Edit Pane (center bottom)          │
-│                   │  [hidden when nothing selected]              │
-│                   │                                              │
-├───────────────────┴──────────────────────────────────────────────│
-│  Command Bar                                                     │
-└──────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ docker-desktop  ns: [default ▾]                          /<search>  │  header (full width)
+├──────────────────┬─────────────────────────────────────────────────┤
+│  Left Sidebar    │  Resource List (center top)                      │
+│  (resource tree) │                                                  │
+│  ~20% width      ├───────────────────────────────────────────────── │  ← list│detail line (V resize)
+│  resizable       │  Detail / Edit Pane (center bottom)              │
+│                  │  [hidden when nothing selected]                  │
+├──────────────────┴─────────────────────────────────────────────────┤
+│  Command Bar                                                        │  (full width)
+└────────────────────────────────────────────────────────────────────┘
+         ↑ sidebar│right line = horizontal resize handle
 ```
+
+The **focused** region is drawn with a **double-line, accent-coloured** border
+and a bold title; unfocused regions are single dim lines. Because a double-line
+glyph occupies exactly one cell, switching focus changes only border weight,
+colour, and title style — **never any region's position or size** (no reflow).
+When detail is closed the list fills the right column and there is no list│detail
+line; the sidebar│right line (the horizontal-resize handle) always exists.
 
 ### Region summary
 
@@ -64,8 +74,18 @@ dimensions clamp toward documented minimums and content is **truncated**, never
 wrapped. The list and the metrics charts therefore never wrap or spill at any
 terminal size, detail pane open or closed. Ratios are clamped (sidebar
 0.1–0.4, vertical 0.2–0.8) and the sidebar inner width is floored at 18
-columns. (The collapsed-grid *renderer* that draws these `Rect`s with
-box-drawing glyphs is a later concern; this section governs the math only.)
+columns.
+
+The collapsed-grid **renderer** is the pure frame model `src/ui/frame.ts`:
+`computeBorderGrid({ frame, columns, rows, focus })` emits a 2-D grid of
+box-drawing glyphs (border cells and blank content windows), drawing the
+focused region's border ring at double weight and resolving mixed
+single/double junctions (`╞ ╡ ╤ ╧ ╪ ╫ ╟ ╢ ╓ ╖ ╘ ╛` …, falling back to the
+all-single shape for the few 3-way-mixed corners Unicode lacks). Every junction
+glyph is verified width-1 so switching focus weight causes zero reflow. The thin
+Ink renderer (`src/ui/components/FrameChrome.tsx`) slices this grid into bands
+and strips and composites each region's content into its window — it carries no
+glyph or geometry decisions of its own.
 
 ---
 
@@ -129,11 +149,18 @@ Resources are grouped into logical categories matching how Lens organizes them. 
 
 ## 4. Header Bar
 
-Single row above the center pane. Always visible.
+Full-width single row across the top of the collapsed grid. Always visible. It
+shows, left to right: the **current context**, the **namespace** filter, and the
+**search** field (right-aligned).
 
 ```
- Namespace: [all namespaces ▾]    Search: [                    ]
+ docker-desktop  ns: [default ▾]                          /<search>
 ```
+
+- The **context** chip sits to the left of the namespace and is rendered as a
+  distinct inline element (chunk 04 wraps it as a `<Button>` that opens the
+  context switcher; today `!ctx`/`c` open it). Its value is `state.context`.
+- The **namespace** and **search** are the inline elements described below.
 
 ### 4.1 Namespace Filter
 

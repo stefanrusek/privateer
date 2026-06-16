@@ -7,7 +7,6 @@
 import React from 'react';
 import { Box } from 'ink';
 import type { AppState } from './types.js';
-import { Layout } from './components/Layout.js';
 import { Sidebar } from './components/Sidebar.js';
 import { Header } from './components/Header.js';
 import { CommandBar } from './components/CommandBar.js';
@@ -15,6 +14,8 @@ import { ContextSwitcher } from './components/ContextSwitcher.js';
 import { HelpOverlay } from './components/HelpOverlay.js';
 import { SIDEBAR_CATEGORIES } from './sidebar-data.js';
 import { computeFrame } from './layout-geometry.js';
+import { computeBorderGrid, focusedRegion } from './frame.js';
+import { FrameChrome } from './components/FrameChrome.js';
 
 export interface AppRootCallbacks {
   onSelectKind: (kind: string) => void;
@@ -74,9 +75,18 @@ export function AppRoot({
     verticalRatio: state.verticalRatio,
     showDetail: state.showDetail,
   });
-  const sidebarWidthCols = frame.sidebar.width;
   const sidebarViewport =
     terminalSize === undefined ? {} : { viewportHeight: frame.sidebar.height };
+
+  // The collapsed-grid border glyphs come from the pure frame model; the
+  // focused region's border is double-weight + accent with zero layout movement
+  // (Spec 02 §"Region titles & focus highlight").
+  const grid = computeBorderGrid({
+    frame,
+    columns: terminalSize?.columns ?? 80,
+    rows: terminalSize?.rows ?? 24,
+    focus: focusedRegion(state.focus, state.headerFocus !== null),
+  });
 
   // Full-screen overlays replace the main layout entirely so the frame never
   // grows taller than the terminal (Ink cannot reclaim overflowed rows).
@@ -98,12 +108,12 @@ export function AppRoot({
 
   return (
     <Box flexDirection="column">
-      <Layout
-        sidebarWidth={sidebarWidthCols}
-        verticalSplit={state.verticalRatio}
-        showDetail={state.showDetail}
+      <FrameChrome
+        frame={frame}
+        grid={grid}
         renderHeader={() => (
           <Header
+            context={state.context}
             namespace={state.namespace}
             allNamespaces={[...state.allNamespaces]}
             search={state.search}
