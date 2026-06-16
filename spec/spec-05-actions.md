@@ -31,24 +31,32 @@
 
 ### 3.1 Container Selection
 
-On triggering logs for a pod:
+On triggering logs for a pod, the **default container streams immediately** —
+there is no blocking full-screen modal (navigation-overhaul chunk 06). Container
+switching happens through the inline `[Container ▾]` dropdown in the toolbar
+(§3.3), anchored under its trigger and floating over the log lines without
+covering the rest of the UI.
 
-**Single running container** → open LogsTab directly, no picker.
+- **Default selection:** the single running container if only one is running;
+  otherwise the first running container. That container starts streaming at once.
+- **All terminated / waiting** (no running container, post-mortem) → nothing
+  streams and the inline `[Container ▾]` dropdown **auto-opens** so the user can
+  pick a container; lines stream only after a choice.
+- **No containers at all** → show the hint `✗ No containers found` and stop.
 
-**Multiple containers** → show inline picker in the command bar:
+Each dropdown entry shows a phase dot, the container name (init containers listed
+after regular ones, labeled `(init)`), and a marker on the currently streamed
+container:
 
-```
- Container: [order-api ●] [envoy-proxy ●] [config-reloader ○]  Escape to cancel
-```
+- `●` green = running
+- `●` yellow = waiting / initializing
+- `●` grey = terminated
 
-- `●` green = currently running
-- `●` yellow = waiting / initializing  
-- `○` grey = terminated
-- Default selection: the single running container if only one is running; otherwise first running container
-- Arrow keys or click to select, Enter to confirm
-- Init containers shown after regular containers, labeled `(init)`
-
-**All terminated** (post-mortem) → picker shown with all containers greyed, no default selection.
+Arrow keys (`↑`/`↓`, or `j`/`k`) or click move the highlight, `Enter` or click
+selects (switching the stream and closing the dropdown), `Esc` or an outside
+click closes it unchanged. The accelerator `o` (the underlined letter in
+`[Co̲ntainer ▾]`) opens/closes the dropdown. Plain `c` is **not** a container key
+— it is reserved for the global context switcher.
 
 ### 3.2 LogsTab Layout
 
@@ -67,9 +75,16 @@ On triggering logs for a pod:
 
 ### 3.3 Log Controls
 
-#### Container switcher (`[order-api ▾]`)
-- Dropdown to switch between containers without closing the tab
-- Same picker UI as §3.1 but inline in the toolbar
+Each toolbar control is reachable by **click** and by an **accelerator key**
+(the underlined letter in its label): container `o`, line-limit `l`, pause `p`,
+timestamps `t`, wrap `w`, download `d`. Previous-instance keeps the shifted `P`
+(it is a modal reload, not a toolbar pick — see §3.3 "Previous container logs").
+
+#### Container switcher (`[Co̲ntainer ▾]`)
+- Inline `DropdownButton` to switch containers without closing the tab; opens
+  with the `o` accelerator or a click (§3.1). Anchored under its trigger, it
+  floats over the log lines (which keep streaming behind it) and never covers
+  the rest of the UI — there is no full-screen modal.
 
 #### Live toggle (`[● Live]` / `[○ Paused]`)
 - Default: Live (tailing the stream)
@@ -87,8 +102,8 @@ On triggering logs for a pod:
 - When on: lines wrap at pane width
 - State persisted per session
 
-#### Line limit / since picker (`[100 lines ▾]`)
-Dropdown with options:
+#### Line limit / since picker (`[100 l̲ines ▾]`)
+Inline `DropdownButton` (accelerator `l`, or click) with options:
 - Last 100 lines (default)
 - Last 500 lines
 - Last 1000 lines
@@ -116,8 +131,9 @@ Uses `previous: true` flag in the logs API call. Only shown if a previous termin
 - `Escape` clears search and returns focus to log stream
 - Search works on buffered lines only (not historical lines outside the current line limit)
 
-#### Download (`[Download]`)
-- Writes current log buffer to `~/Downloads/p9r-logs-<podname>-<container>-<timestamp>.txt`
+#### Download (`[Do̲wnload]`)
+- Accelerator `d` (or click); writes current log buffer to
+  `~/Downloads/p9r-logs-<podname>-<container>-<timestamp>.txt`
 - Brief `✓ Saved to ~/Downloads/…` confirmation in command bar
 - No dialog — immediate action
 
@@ -139,7 +155,9 @@ Uses `previous: true` flag in the logs API call. Only shown if a previous termin
 
 ### 4.1 Container Selection
 
-Same logic as logs (§3.1) — auto-select single running container, picker for multiple.
+Same container model as logs (auto-select the single running container, choose
+among multiple), but exec keeps the **full-screen container picker** (the inline
+toolbar dropdown of §3.1/§3.3 is logs-only).
 
 ### 4.2 Command Specification
 

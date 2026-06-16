@@ -21,7 +21,14 @@ import {
   jumpTab,
   type TabId,
 } from '../../ui/detail-tabs.js';
-import { nextRegion, regionOrder } from '../../ui/navigation.js';
+import { nextRegion, regionOrder, clampIndex } from '../../ui/navigation.js';
+import {
+  buildContainerItems,
+  buildLineLimitItems,
+  LOGS_TOOLBAR_ACCELERATORS,
+  type LogsContainerItem,
+  type LogsLineLimitItem,
+} from '../../ui/logs-toolbar.js';
 import {
   clampOffset,
   maxOffset,
@@ -217,6 +224,22 @@ export interface LogsViewState {
   searchFocused: boolean;
   newLinesAvailable: boolean;
   confirmation: string | undefined;
+  /** Container dropdown items (B06); current container marked. */
+  containerItems: readonly LogsContainerItem[];
+  /** Index of the streamed container within `containerItems`. */
+  containerIndex: number;
+  /** Whether the inline container dropdown is open. */
+  containerPickerOpen: boolean;
+  /** Highlighted index while the container dropdown is open. */
+  containerPickerIndex: number;
+  /** Line-limit dropdown items (B06); current limit marked. */
+  lineLimitItems: readonly LogsLineLimitItem[];
+  /** Index of the current limit within `lineLimitItems`. */
+  lineLimitIndex: number;
+  /** Whether the inline line-limit dropdown is open. */
+  lineLimitOpen: boolean;
+  /** Highlighted index while the line-limit dropdown is open. */
+  lineLimitPickerIndex: number;
 }
 
 /** Modal picker state (namespace dropdown, container picker). */
@@ -373,6 +396,14 @@ export class LiveController {
     newLines: number;
     /** Scroll offset into the ring buffer; honored only while paused. */
     offset: number;
+    /** Inline container dropdown open state (B06; not the generic picker). */
+    containerPickerOpen: boolean;
+    /** Highlighted index in the container dropdown while it is open. */
+    containerPickerIndex: number;
+    /** Inline line-limit dropdown open state (B06). */
+    lineLimitOpen: boolean;
+    /** Highlighted index in the line-limit dropdown while it is open. */
+    lineLimitIndex: number;
     confirmation: string | undefined;
     stop: (() => void) | null;
   } | null = null;
@@ -797,6 +828,12 @@ export class LiveController {
       ...ranged,
       matches: ranged.matches.map((m) => m - projection.offset),
     };
+    const containerItems = buildContainerItems(l.containers, l.container);
+    const lineLimitItems = buildLineLimitItems(l.limit);
+    const containerIndex = l.containers.findIndex(
+      (c) => c.name === l.container,
+    );
+    const lineLimitIndex = LINE_OPTIONS.findIndex((o) => o.id === l.limit);
     return {
       podName: l.podName,
       container: l.container,
@@ -810,6 +847,14 @@ export class LiveController {
       searchFocused: l.searchFocused,
       newLinesAvailable: l.newLines > 0,
       confirmation: l.confirmation,
+      containerItems,
+      containerIndex: containerIndex < 0 ? 0 : containerIndex,
+      containerPickerOpen: l.containerPickerOpen,
+      containerPickerIndex: l.containerPickerIndex,
+      lineLimitItems,
+      lineLimitIndex: lineLimitIndex < 0 ? 0 : lineLimitIndex,
+      lineLimitOpen: l.lineLimitOpen,
+      lineLimitPickerIndex: l.lineLimitIndex,
     };
   }
 
@@ -2374,6 +2419,15 @@ export class LiveController {
   // Logs (Spec 05 §3)
   // -------------------------------------------------------------------------
 
+  /**
+   * Open Logs for a pod (B06 / Spec 05 §3.1, amended). No blocking full-screen
+   * picker: compute the container set and **stream the default container
+   * immediately**. Three cases follow `buildContainerPicker`:
+   *   - `options.length === 0` → "✗ No containers found" hint, stop.
+   *   - `defaultIndex >= 0` → stream `options[defaultIndex]` right away.
+   *   - `defaultIndex < 0` (all terminated/waiting) → stream nothing and
+   *     auto-open the inline container dropdown.
+   */
   private initLogs(resource: ResourceObject): void {
     if (
       this.logs !== null &&
@@ -2383,13 +2437,14 @@ export class LiveController {
       return;
     }
     this.stopLogs();
-    this.pickContainer(resource, 'Logs — choose container', (container) => {
-      this.startLogsFor(resource, container);
-    });
-  }
-
-  private startLogsFor(resource: ResourceObject, container: string): void {
     const picker = buildContainerPicker(resource.raw);
+    if (picker.options.length === 0) {
+      this.setHints(['✗ No containers found']);
+      return;
+    }
+    const hasDefault = picker.defaultIndex >= 0;
+    const index = Math.max(picker.defaultIndex, 0);
+    const container = picker.options[index]?.name ?? '';
     this.logs = {
       podName: resource.name,
       namespace: resource.namespace ?? '',
@@ -2406,10 +2461,21 @@ export class LiveController {
       searchFocused: false,
       newLines: 0,
       offset: 0,
+      containerPickerOpen: !hasDefault,
+      containerPickerIndex: index,
+      lineLimitOpen: false,
+      lineLimitIndex: LINE_OPTIONS.findIndex(
+        (o) => o.id === DEFAULT_LINE_OPTION,
+      ),
       confirmation: undefined,
       stop: null,
     };
-    this.startLogStream();
+    if (hasDefault) {
+      this.startLogStream();
+    } else {
+      // All containers terminated/waiting: wait for the user to choose one.
+      this.bump();
+    }
   }
 
   private startLogStream(): void {
@@ -2522,6 +2588,15 @@ export class LiveController {
       return true;
     }
 
+    // An open inline dropdown (B06) captures navigation keys before scrolling:
+    // ↑/↓ (and j/k) move the highlight, Enter selects, Esc closes unchanged.
+    if (l.containerPickerOpen) {
+      return this.handleContainerDropdownKey(input, key);
+    }
+    if (l.lineLimitOpen) {
+      return this.handleLineLimitDropdownKey(input, key);
+    }
+
     // Viewport scrolling (Spec 03): motion keys walk the ring buffer; scrolling
     // up off the bottom pauses the tail, returning to the bottom resumes it.
     if (this.scrollLogs(input, key)) {
@@ -2576,26 +2651,223 @@ export class LiveController {
       }
       return true;
     }
-    if (input === 'L') {
-      const ids = LINE_OPTIONS.map((o) => o.id);
-      const next = ids[(ids.indexOf(l.limit) + 1) % ids.length];
-      l.limit = next ?? DEFAULT_LINE_OPTION;
-      this.startLogStream();
+    // `o` opens/closes the inline container dropdown (B06; plain `c` is reserved
+    // for the chunk-08 context switcher — no blind container cycle anymore).
+    if (input === LOGS_TOOLBAR_ACCELERATORS['logs.container']) {
+      this.toggleContainerDropdown();
       return true;
     }
-    if (input === 'c' && l.containers.length > 1) {
-      const names = l.containers.map((c) => c.name);
-      const next = names[(names.indexOf(l.container) + 1) % names.length];
-      l.container = next ?? l.container;
-      this.startLogStream();
+    // `l` opens/closes the inline line-limit dropdown (replaces the `L` cycle).
+    if (input === LOGS_TOOLBAR_ACCELERATORS['logs.lineLimit']) {
+      this.toggleLineLimitDropdown();
       return true;
     }
-    if (input === 'D') {
+    if (input === LOGS_TOOLBAR_ACCELERATORS['logs.download']) {
       void this.downloadCurrentLogs();
       return true;
     }
     return false;
   }
+
+  // -------------------------------------------------------------------------
+  // Inline Logs dropdowns (B06). The open/highlight state lives on the logs
+  // model (separate from the generic `this.picker`); these methods toggle it,
+  // move the highlight via the pure `clampIndex`, and apply the selection by
+  // reusing the existing container-switch / line-limit stream-restart paths.
+  // -------------------------------------------------------------------------
+
+  /** Toggle the container dropdown (accelerator `o`). */
+  private toggleContainerDropdown(): void {
+    this.setContainerDropdownOpen(!(this.logs?.containerPickerOpen ?? false));
+  }
+
+  /** Toggle the line-limit dropdown (accelerator `l`). */
+  private toggleLineLimitDropdown(): void {
+    this.setLineLimitDropdownOpen(!(this.logs?.lineLimitOpen ?? false));
+  }
+
+  /**
+   * Set the container dropdown's open state. Opening resets the highlight to the
+   * current container and closes the line-limit dropdown (only one open at a
+   * time). Click parity uses this so it never re-toggles after a selection.
+   */
+  setContainerDropdownOpen = (open: boolean): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.containerPickerOpen = open;
+    if (open) {
+      l.lineLimitOpen = false;
+      const idx = l.containers.findIndex((c) => c.name === l.container);
+      l.containerPickerIndex = idx < 0 ? 0 : idx;
+    }
+    this.bump();
+  };
+
+  /** Set the line-limit dropdown's open state (mirror of the container one). */
+  setLineLimitDropdownOpen = (open: boolean): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.lineLimitOpen = open;
+    if (open) {
+      l.containerPickerOpen = false;
+      const idx = LINE_OPTIONS.findIndex((o) => o.id === l.limit);
+      l.lineLimitIndex = idx < 0 ? 0 : idx;
+    }
+    this.bump();
+  };
+
+  /** Keyboard handling while the container dropdown is open. */
+  private handleContainerDropdownKey(input: string, key: InkKey): boolean {
+    const l = this.logs;
+    if (l === null) {
+      return false;
+    }
+    if (key.escape) {
+      l.containerPickerOpen = false;
+      this.bump();
+      return true;
+    }
+    if (key.return) {
+      this.selectContainerByIndex(l.containerPickerIndex);
+      return true;
+    }
+    if (key.downArrow || input === 'j') {
+      l.containerPickerIndex = clampIndex(
+        l.containerPickerIndex,
+        1,
+        l.containers.length,
+      );
+      this.bump();
+      return true;
+    }
+    if (key.upArrow || input === 'k') {
+      l.containerPickerIndex = clampIndex(
+        l.containerPickerIndex,
+        -1,
+        l.containers.length,
+      );
+      this.bump();
+      return true;
+    }
+    return true;
+  }
+
+  /** Keyboard handling while the line-limit dropdown is open. */
+  private handleLineLimitDropdownKey(input: string, key: InkKey): boolean {
+    const l = this.logs;
+    if (l === null) {
+      return false;
+    }
+    if (key.escape) {
+      l.lineLimitOpen = false;
+      this.bump();
+      return true;
+    }
+    if (key.return) {
+      this.selectLineLimitByIndex(l.lineLimitIndex);
+      return true;
+    }
+    if (key.downArrow || input === 'j') {
+      l.lineLimitIndex = clampIndex(l.lineLimitIndex, 1, LINE_OPTIONS.length);
+      this.bump();
+      return true;
+    }
+    if (key.upArrow || input === 'k') {
+      l.lineLimitIndex = clampIndex(l.lineLimitIndex, -1, LINE_OPTIONS.length);
+      this.bump();
+      return true;
+    }
+    return true;
+  }
+
+  /**
+   * Switch the streamed container to `containers[index]` and close the dropdown.
+   * No-op (just closes) if the index is out of range or already current.
+   */
+  selectContainerByIndex = (index: number): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.containerPickerOpen = false;
+    const chosen = l.containers[index];
+    if (chosen === undefined) {
+      this.bump();
+      return;
+    }
+    if (chosen.name !== l.container) {
+      l.container = chosen.name;
+      l.previous = false;
+      this.startLogStream();
+    } else {
+      this.bump();
+    }
+  };
+
+  /**
+   * Set the line limit to `LINE_OPTIONS[index]` and restart the stream; close
+   * the dropdown. No-op restart if the index is out of range.
+   */
+  selectLineLimitByIndex = (index: number): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.lineLimitOpen = false;
+    const chosen = LINE_OPTIONS[index];
+    if (chosen === undefined) {
+      this.bump();
+      return;
+    }
+    l.limit = chosen.id;
+    this.startLogStream();
+  };
+
+  /** Toggle a Logs toolbar control by its registry id (mouse-click parity). */
+  logsToolbarAction = (id: string): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    switch (id) {
+      case 'logs.container':
+        this.toggleContainerDropdown();
+        return;
+      case 'logs.lineLimit':
+        this.toggleLineLimitDropdown();
+        return;
+      case 'logs.pause':
+        l.live = !l.live;
+        if (l.live) {
+          l.newLines = 0;
+          l.offset = this.logsBottomOffset();
+        }
+        this.bump();
+        return;
+      case 'logs.timestamps':
+        l.timestamps = !l.timestamps;
+        this.bump();
+        return;
+      case 'logs.wrap':
+        l.wrap = !l.wrap;
+        l.offset = clampOffset(
+          l.offset,
+          l.ring.toArray().length,
+          this.logsViewportHeight(),
+        );
+        this.bump();
+        return;
+      case 'logs.download':
+        void this.downloadCurrentLogs();
+        return;
+      default:
+        return;
+    }
+  };
 
   /** The offset that pins the Logs viewport to the newest lines. */
   private logsBottomOffset(): number {

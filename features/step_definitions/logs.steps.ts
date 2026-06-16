@@ -23,6 +23,12 @@ import {
 } from '../../src/logs/line-options.js';
 import { downloadLogs } from '../../src/logs/download.js';
 import { LogsTab } from '../../src/ui/components/LogsTab.js';
+import {
+  buildContainerItems,
+  buildLineLimitItems,
+  type LogsContainerItem,
+  type LogsLineLimitItem,
+} from '../../src/ui/logs-toolbar.js';
 
 // ---------------------------------------------------------------------------
 // World augmentation
@@ -50,6 +56,10 @@ declare module '../support/world.js' {
     logsSearch: SearchState;
     logsConfirmation: string | undefined;
     logsFrame: string;
+    logsContainerItems: LogsContainerItem[];
+    logsLineLimitItems: LogsLineLimitItem[];
+    logsContainerDropdownOpen: boolean;
+    logsStreamedContainer: string | undefined;
   }
 }
 
@@ -71,6 +81,10 @@ Before(function (this: PrivateerWorld) {
   this.logsSearch = emptySearch();
   this.logsConfirmation = undefined;
   this.logsFrame = '';
+  this.logsContainerItems = [];
+  this.logsLineLimitItems = [];
+  this.logsContainerDropdownOpen = false;
+  this.logsStreamedContainer = undefined;
 });
 
 // ---------------------------------------------------------------------------
@@ -231,7 +245,32 @@ When('I open logs for the pod', function (this: PrivateerWorld) {
     this.logsSelectedContainer =
       this.logsPicker.options[this.logsPicker.defaultIndex]?.name ?? '';
   }
+  // B06: no full-screen modal. With a default we stream it immediately and the
+  // inline dropdown stays closed; with no default we stream nothing and the
+  // inline container dropdown auto-opens.
+  const hasDefault = this.logsPicker.defaultIndex >= 0;
+  this.logsContainerDropdownOpen = !hasDefault;
+  this.logsStreamedContainer = hasDefault
+    ? this.logsPicker.options[this.logsPicker.defaultIndex]?.name
+    : undefined;
 });
+
+When(
+  'I build the inline container dropdown items',
+  function (this: PrivateerWorld) {
+    this.logsContainerItems = buildContainerItems(
+      this.logsPicker.options,
+      this.logsSelectedContainer,
+    );
+  },
+);
+
+When(
+  'I build the line-limit dropdown items for {string}',
+  function (this: PrivateerWorld, current: string) {
+    this.logsLineLimitItems = buildLineLimitItems(current as LineOptionId);
+  },
+);
 
 When(
   'the stream delivers the log line {string}',
@@ -382,5 +421,64 @@ Then(
       saved,
       `Expected a saved file under "${prefix}", got:\n${[...this.logsFileSink.files.keys()].join('\n')}`,
     );
+  },
+);
+
+Then(
+  'logs stream the default container {string} immediately',
+  function (this: PrivateerWorld, name: string) {
+    assert.equal(this.logsStreamedContainer, name);
+  },
+);
+
+Then(
+  'no container streams until I choose one',
+  function (this: PrivateerWorld) {
+    assert.equal(this.logsStreamedContainer, undefined);
+  },
+);
+
+Then('the inline container dropdown is open', function (this: PrivateerWorld) {
+  assert.ok(this.logsContainerDropdownOpen, 'expected the dropdown to be open');
+});
+
+Then(
+  'the inline container dropdown is closed',
+  function (this: PrivateerWorld) {
+    assert.ok(
+      !this.logsContainerDropdownOpen,
+      'expected the dropdown to be closed',
+    );
+  },
+);
+
+Then(
+  'container dropdown item {string} has a green dot and is marked current',
+  function (this: PrivateerWorld, name: string) {
+    const item = this.logsContainerItems.find((i) => i.id === name);
+    assert.ok(item !== undefined, `no dropdown item for "${name}"`);
+    assert.equal(item.dotColor, 'green');
+    assert.ok(item.current, 'expected the item to be marked current');
+    assert.ok(item.label.includes('✓'), 'expected a current marker in label');
+  },
+);
+
+Then(
+  'container dropdown item {string} has a gray dot and is not marked',
+  function (this: PrivateerWorld, name: string) {
+    const item = this.logsContainerItems.find((i) => i.id === name);
+    assert.ok(item !== undefined, `no dropdown item for "${name}"`);
+    assert.equal(item.dotColor, 'gray');
+    assert.ok(!item.current, 'expected the item NOT to be marked current');
+    assert.ok(!item.label.includes('✓'), 'expected no current marker in label');
+  },
+);
+
+Then(
+  'the line-limit dropdown marks {string} as current',
+  function (this: PrivateerWorld, id: string) {
+    const marked = this.logsLineLimitItems.filter((i) => i.current);
+    assert.equal(marked.length, 1, 'expected exactly one current limit');
+    assert.equal(marked[0]?.id, id);
   },
 );

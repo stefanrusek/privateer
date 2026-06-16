@@ -6,7 +6,7 @@
  * search bar. Frame-tested to 100%.
  */
 
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import { colorizeLine } from '../../logs/colorize.js';
 import type { LogLineColor } from '../../logs/colorize.js';
@@ -45,6 +45,12 @@ export interface LogsTabProps {
   newLinesAvailable: boolean;
   /** A transient confirmation message (e.g. "✓ Saved to ~/Downloads/…"). */
   confirmation?: string;
+  /**
+   * The interactive toolbar (B06): the measured `<DropdownButton>` /
+   * `<Button>` widgets the live app injects. When omitted, a static
+   * (non-interactive) toolbar is rendered — used by frame tests.
+   */
+  toolbar?: ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +132,7 @@ export function LogsTab(props: LogsTabProps): React.ReactElement {
     searchFocused,
     newLinesAvailable,
     confirmation,
+    toolbar,
   } = props;
 
   const matchLine = currentMatchLine(search);
@@ -139,12 +146,16 @@ export function LogsTab(props: LogsTabProps): React.ReactElement {
   return (
     <Box flexDirection="column">
       <Text bold>{title}</Text>
-      <Toolbar
-        container={container}
-        live={live}
-        lineLimitLabel={lineLimitLabel}
-        previous={previous}
-      />
+      {toolbar !== undefined ? (
+        toolbar
+      ) : (
+        <Toolbar
+          container={container}
+          live={live}
+          lineLimitLabel={lineLimitLabel}
+          previous={previous}
+        />
+      )}
       <Text dimColor>{stateHints.join('  ')}</Text>
       <Text dimColor>{'─'.repeat(40)}</Text>
       <Box flexDirection="column">

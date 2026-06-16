@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   nextRegion,
   regionOrder,
+  clampIndex,
   REGION_ORDER_WITH_DETAIL,
   REGION_ORDER_NO_DETAIL,
 } from './navigation.js';
@@ -65,5 +66,29 @@ describe('nextRegion with a region outside the cycle', () => {
     expect(nextRegion([] as readonly FocusRegion[], 'sidebar', false)).toBe(
       'sidebar',
     );
+  });
+});
+
+describe('clampIndex', () => {
+  it('steps forward within bounds', () => {
+    expect(clampIndex(0, 1, 3)).toBe(1);
+    expect(clampIndex(1, 1, 3)).toBe(2);
+  });
+
+  it('steps backward within bounds', () => {
+    expect(clampIndex(2, -1, 3)).toBe(1);
+  });
+
+  it('clamps at the bottom', () => {
+    expect(clampIndex(0, -1, 3)).toBe(0);
+  });
+
+  it('clamps at the top', () => {
+    expect(clampIndex(2, 1, 3)).toBe(2);
+  });
+
+  it('returns 0 for an empty list', () => {
+    expect(clampIndex(0, 1, 0)).toBe(0);
+    expect(clampIndex(5, -1, 0)).toBe(0);
   });
 });

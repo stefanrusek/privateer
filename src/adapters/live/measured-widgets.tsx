@@ -332,6 +332,15 @@ export interface DropdownButtonProps {
   onSelect: (index: number) => void;
   /** Adds a one-line type-to-filter for long/dynamic lists. */
   filterable?: boolean;
+  /**
+   * Controlled open state (B06). When provided, the parent owns open/closed
+   * (so a keyboard accelerator and click share one source of truth) and
+   * `onOpenChange` is fired instead of mutating local state. When omitted, the
+   * dropdown keeps its own local open state.
+   */
+  open?: boolean;
+  /** Fired when the trigger toggles a controlled dropdown. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -353,11 +362,24 @@ export function DropdownButton({
   selectedIndex,
   onSelect,
   filterable = false,
+  open: controlledOpen,
+  onOpenChange,
 }: DropdownButtonProps): React.ReactElement {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
   const [filter, setFilter] = useState('');
   const triggerRef = useRef<DOMElement>(null);
   const registry = registryFromContext();
+
+  // Controlled when `controlledOpen` is supplied; otherwise local state.
+  const controlled = controlledOpen !== undefined;
+  const open = controlled ? controlledOpen : localOpen;
+  const setOpen = (next: boolean): void => {
+    if (controlled) {
+      onOpenChange?.(next);
+    } else {
+      setLocalOpen(next);
+    }
+  };
 
   const visible = filterable
     ? items.filter((it) =>
@@ -385,7 +407,7 @@ export function DropdownButton({
           label={label}
           {...(accelerator !== undefined ? { accelerator } : {})}
           onClick={() => {
-            setOpen((o) => !o);
+            setOpen(!open);
           }}
         />
       </Box>

@@ -52,3 +52,26 @@ export function nextRegion(
   const [first] = rotated;
   return first ?? current;
 }
+
+/**
+ * Step a selection index by `delta` (e.g. ±1 for ↑/↓) and clamp it into
+ * `[0, length-1]`. An empty list (`length <= 0`) clamps to 0. Used by inline
+ * dropdowns (chunk 06) so the controller does no index arithmetic of its own.
+ */
+export function clampIndex(
+  index: number,
+  delta: number,
+  length: number,
+): number {
+  if (length <= 0) {
+    return 0;
+  }
+  const next = index + delta;
+  if (next < 0) {
+    return 0;
+  }
+  if (next > length - 1) {
+    return length - 1;
+  }
+  return next;
+}

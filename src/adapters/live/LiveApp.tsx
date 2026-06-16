@@ -23,6 +23,7 @@ import {
   DropdownButton,
   type DropdownItem,
 } from './measured-widgets.js';
+import { LOGS_TOOLBAR_ACCELERATORS } from '../../ui/logs-toolbar.js';
 import type { TabDef } from '../../ui/components/DetailPane.js';
 
 /**
@@ -182,6 +183,82 @@ export function LiveApp({
         if (logs === null) {
           return <Text dimColor>Logs are only available for pods.</Text>;
         }
+        // B06: the toolbar's [Container ▾] / [NNN lines ▾] are measured
+        // DropdownButtons (open state controlled by the controller so the `o`/`l`
+        // accelerators and clicks share one source of truth); the toggles are
+        // accelerator Buttons. Rendered inline inside the detail pane — never a
+        // full-screen modal.
+        const containerLabel = `Container${logs.previous ? ' (previous)' : ''}`;
+        const logsToolbar = (
+          <Box flexDirection="row" gap={1}>
+            <DropdownButton
+              id="logs.container"
+              label={containerLabel}
+              accelerator={LOGS_TOOLBAR_ACCELERATORS['logs.container']}
+              items={logs.containerItems.map((it) => ({
+                id: it.id,
+                label: it.label,
+              }))}
+              selectedIndex={
+                logs.containerPickerOpen
+                  ? logs.containerPickerIndex
+                  : logs.containerIndex
+              }
+              onSelect={controller.selectContainerByIndex}
+              open={logs.containerPickerOpen}
+              onOpenChange={controller.setContainerDropdownOpen}
+            />
+            <Button
+              id="logs.pause"
+              label={logs.live ? '● Live' : '○ Paused'}
+              accelerator={LOGS_TOOLBAR_ACCELERATORS['logs.pause']}
+              onClick={() => {
+                controller.logsToolbarAction('logs.pause');
+              }}
+            />
+            <Button
+              id="logs.timestamps"
+              label="Timestamps"
+              accelerator={LOGS_TOOLBAR_ACCELERATORS['logs.timestamps']}
+              onClick={() => {
+                controller.logsToolbarAction('logs.timestamps');
+              }}
+            />
+            <Button
+              id="logs.wrap"
+              label="Wrap"
+              accelerator={LOGS_TOOLBAR_ACCELERATORS['logs.wrap']}
+              onClick={() => {
+                controller.logsToolbarAction('logs.wrap');
+              }}
+            />
+            <DropdownButton
+              id="logs.lineLimit"
+              label={logs.lineLimitLabel}
+              accelerator={LOGS_TOOLBAR_ACCELERATORS['logs.lineLimit']}
+              items={logs.lineLimitItems.map((it) => ({
+                id: it.id,
+                label: it.label,
+              }))}
+              selectedIndex={
+                logs.lineLimitOpen
+                  ? logs.lineLimitPickerIndex
+                  : logs.lineLimitIndex
+              }
+              onSelect={controller.selectLineLimitByIndex}
+              open={logs.lineLimitOpen}
+              onOpenChange={controller.setLineLimitDropdownOpen}
+            />
+            <Button
+              id="logs.download"
+              label="Download"
+              accelerator={LOGS_TOOLBAR_ACCELERATORS['logs.download']}
+              onClick={() => {
+                controller.logsToolbarAction('logs.download');
+              }}
+            />
+          </Box>
+        );
         return (
           <LogsTab
             podName={logs.podName}
@@ -195,6 +272,7 @@ export function LiveApp({
             search={logs.search}
             searchFocused={logs.searchFocused}
             newLinesAvailable={logs.newLinesAvailable}
+            toolbar={logsToolbar}
             {...(logs.confirmation !== undefined
               ? { confirmation: logs.confirmation }
               : {})}

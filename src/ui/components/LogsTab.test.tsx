@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
+import { Text } from 'ink';
 import { LogsTab } from './LogsTab.js';
 import type { LogsTabProps } from './LogsTab.js';
 import { emptySearch, runSearch } from '../../logs/search.js';
@@ -39,6 +40,20 @@ describe('LogsTab', () => {
     expect(frame).toContain('[Wrap]');
     expect(frame).toContain('[100 lines ▾]');
     expect(frame).toContain('[Download]');
+  });
+
+  it('renders the injected toolbar slot instead of the static toolbar', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        LogsTab,
+        props({ toolbar: React.createElement(Text, null, 'CUSTOM-TOOLBAR') }),
+      ),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('CUSTOM-TOOLBAR');
+    // The static toolbar's controls are replaced by the slot.
+    expect(frame).not.toContain('[Timestamps]');
+    expect(frame).not.toContain('[Download]');
   });
 
   it('shows the Live indicator when live', () => {
