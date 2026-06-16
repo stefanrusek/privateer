@@ -15,56 +15,32 @@ import { ConfirmDialog } from '../../ui/components/ConfirmDialog.js';
 import { LogsTab } from '../../ui/components/LogsTab.js';
 import { PortForwardManager } from '../../ui/components/PortForwardManager.js';
 import { MetricsTab } from '../../ui/components/MetricsTab.js';
-import { MouseProvider, useMouse } from '@zenobius/ink-mouse';
 import { PickerOverlay } from '../../ui/components/PickerOverlay.js';
 import { LiveController } from './controller.js';
 
-/** Routes global mouse events into the controller's geometry hit-testing. */
+/**
+ * The single mouse path: one `process.stdin` listener feeds every raw read to
+ * the controller, which splits it into SGR events and routes them through the
+ * pure dispatcher. ink-mouse is gone — no second parser, no 1003h tug-of-war.
+ * The controller's `MouseLifecycle` owns enabling reporting and the idempotent
+ * teardown (also driven by quit/suspend/exit elsewhere).
+ */
 function MouseRouter({ controller }: { controller: LiveController }): null {
-  const { events } = useMouse();
   useEffect(() => {
-    // ink-mouse turns on any-motion tracking (1003h), which we don't use —
-    // motion events flood the stream and leak into the shell on unclean
-    // exits. Click (1000h) + SGR (1006h) stay on; motion modes go off.
-    // Button-held motion (1002h) is silent on hover and gives us drag
-    // events for the pane splitter.
-    process.stdout.write('\x1b[?1003l\x1b[?1015l\x1b[?1002h');
-    const onClick = (
-      position: { x: number; y: number },
-      action: 'press' | 'release' | null,
-    ): void => {
-      if (action === 'press') {
-        controller.handleMouseClick(position.x, position.y);
-      }
-    };
-    const onScroll = (
-      position: { x: number; y: number },
-      direction: 'scrollup' | 'scrolldown' | null,
-    ): void => {
-      if (direction !== null) {
-        controller.handleMouseScroll(position.x, direction);
-      }
-    };
-    // ink-mouse's drag event proved unreliable; parse SGR drag (button 32,
-    // reported under mode 1002) and release straight off stdin.
+    const lifecycle = controller.mouseLifecycle();
+    lifecycle.enable();
     const onData = (chunk: Buffer | string): void => {
-      const text = chunk.toString();
-      for (const match of text.matchAll(/\[<32;(\d+);(\d+)M/g)) {
-        controller.handleMouseDrag(Number(match[1]), Number(match[2]), true);
-      }
-      if (/\[<0;\d+;\d+m/.test(text)) {
-        controller.handleMouseDrag(0, 0, false);
-      }
+      controller.handleStdinChunk(chunk.toString());
     };
     process.stdin.on('data', onData);
-    events.on('click', onClick);
-    events.on('scroll', onScroll);
     return () => {
       process.stdin.off('data', onData);
-      events.off('click', onClick);
-      events.off('scroll', onScroll);
+      // Unmount happens on quit and on suspend/exec-handover; tear the modes
+      // down here too. tearDown() is idempotent, so the belt-and-braces guards
+      // in launch.adapter never double-write.
+      lifecycle.tearDown();
     };
-  }, [controller, events]);
+  }, [controller]);
   return null;
 }
 
@@ -325,7 +301,7 @@ export function LiveApp({
   }
 
   return (
-    <MouseProvider>
+    <>
       <MouseRouter controller={controller} />
       <Box
         height={rows}
@@ -365,6 +341,6 @@ export function LiveApp({
             : {})}
         />
       </Box>
-    </MouseProvider>
+    </>
   );
 }

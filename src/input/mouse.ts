@@ -33,11 +33,22 @@ export interface MouseEvent {
   ctrl: boolean;
 }
 
-/** Enable SGR any-motion mouse reporting on the terminal. */
-export const MOUSE_ENABLE = '\x1b[?1003h\x1b[?1006h';
+/**
+ * Enable mouse reporting: click tracking (1000h) + button-held motion (1002h,
+ * gives drag events for the pane splitter while staying silent on hover) + SGR
+ * extended coordinates (1006h). Any-motion tracking (1003h) is deliberately
+ * **off** — it floods the stream and leaks escape sequences into the user's
+ * shell on unclean exits (CLAUDE.md mouse gotcha).
+ */
+export const MOUSE_ENABLE = '\x1b[?1000h\x1b[?1002h\x1b[?1006h';
 
-/** Disable SGR any-motion mouse reporting on the terminal. */
-export const MOUSE_DISABLE = '\x1b[?1003l\x1b[?1006l';
+/**
+ * Disable **every** mouse reporting mode. Includes 1003h/1015h even though we
+ * never enable them, so a terminal another tool left in any-motion/urxvt mode is
+ * cleaned up too — escape sequences must never leak into the shell.
+ */
+export const MOUSE_DISABLE =
+  '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l';
 
 /**
  * Suspend mouse reporting via an injected writer. Used for exec-handover
@@ -68,6 +79,31 @@ const WHEEL_BIT = 0b01000000; // bit 6 (64)
 const SGR_MOUSE_RE = new RegExp(
   `^${String.fromCodePoint(0x1b)}\\[<(\\d+);(\\d+);(\\d+)([Mm])$`,
 );
+
+// A global, non-anchored variant for splitting a chunk that may carry several
+// reports (terminals coalesce rapid events into one read) plus interleaved
+// non-mouse bytes.
+const SGR_MOUSE_SPLIT_RE = new RegExp(
+  `${String.fromCodePoint(0x1b)}\\[<\\d+;\\d+;\\d+[Mm]`,
+  'g',
+);
+
+/**
+ * Split one stdin read into its constituent SGR mouse events. A single read can
+ * carry several reports (terminals deliver rapid motion as one chunk — CLAUDE.md
+ * gotcha) interleaved with unrelated bytes; this extracts every SGR sequence in
+ * order and parses each one. Non-mouse bytes are ignored.
+ */
+export function parseSgrMouseChunk(chunk: string): MouseEvent[] {
+  const events: MouseEvent[] = [];
+  for (const match of chunk.matchAll(SGR_MOUSE_SPLIT_RE)) {
+    const evt = parseSgrMouse(match[0]);
+    if (evt !== null) {
+      events.push(evt);
+    }
+  }
+  return events;
+}
 
 /**
  * Parse one SGR mouse sequence into a structured MouseEvent. Returns null if

@@ -15,7 +15,6 @@ import type { AppState, FocusRegion } from '../../ui/types.js';
 import type { TableModel } from '../../ui/resource-table-model.js';
 import type { ColumnDef } from '../../resources/columns.js';
 import {
-  getAvailableTabs,
   navigableTabsFor,
   prevTab,
   nextTab,
@@ -34,7 +33,21 @@ import {
   type ScrollState,
 } from '../../ui/scroll-viewport.js';
 import { projectLogsView, offsetForMatch } from '../../ui/logs-view.js';
-import { computeFrame, type Frame } from '../../ui/layout-geometry.js';
+import {
+  computeFrame,
+  type Frame,
+  type Segment,
+} from '../../ui/layout-geometry.js';
+import {
+  dispatch as dispatchMouse,
+  type Action as MouseAction,
+  type DragLatch,
+  type Entry as HitEntry,
+  type RegistrySnapshot,
+} from '../../input/dispatch.js';
+import { sidebarRatioFromX, verticalRatioFromY } from '../../input/ratios.js';
+import { parseSgrMouseChunk, type MouseEvent } from '../../input/mouse.js';
+import { MouseLifecycle } from './mouse-lifecycle.js';
 import type { PickerItem } from '../../ui/components/PickerOverlay.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
 import type { ClusterSummary } from '../../ui/components/HealthDashboard.js';
@@ -281,6 +294,31 @@ const ANIMATION_TICK_MS = 250;
 const HEALTH_INTERVAL_MS = 60_000;
 const BADGE_INTERVAL_MS = 60_000;
 const DEFAULT_VISIBLE_HEIGHT = 20;
+/** Lines the detail wheel scrolls per wheel notch (Spec 02 §9). */
+const WHEEL_LINES = 3;
+
+/** Flatten a frame border {@link Segment} into a 1-wide hit-test rectangle. */
+function segmentRect(seg: Segment): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} {
+  if (seg.orientation === 'vertical') {
+    return {
+      x: seg.position,
+      y: seg.start,
+      width: 1,
+      height: seg.end - seg.start + 1,
+    };
+  }
+  return {
+    x: seg.start,
+    y: seg.position,
+    width: seg.end - seg.start + 1,
+    height: 1,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Controller
@@ -401,6 +439,9 @@ export class LiveController {
   private healthDebounce: (() => void) | null = null;
   private readonly noAgent: boolean;
   private readonly onExit: () => void;
+  // Owns the mouse-mode lifecycle; tearDown() is the single idempotent function
+  // every exit/suspend path calls so escape sequences never leak (Spec 01 §3.5).
+  private readonly mouse = new MouseLifecycle();
 
   constructor(options: LaunchOptions, onExit: () => void) {
     this.onExit = onExit;
@@ -2308,6 +2349,8 @@ export class LiveController {
     }
     this.stopLogs();
     this.dispose();
+    // Hard-disable mouse modes before handing the terminal back (Spec 01 §3.5).
+    this.mouse.tearDown();
     this.onExit();
   }
 
@@ -2865,15 +2908,13 @@ export class LiveController {
   // -------------------------------------------------------------------------
 
   // -------------------------------------------------------------------------
-  // Mouse routing (Spec 01 §3.5, Spec 02 §5) — coordinates are 1-based SGR.
-  // The adapter owns the layout geometry, so hit-testing is plain math:
-  // row 1 = header, rows 2.. = sidebar (left) / list+detail (right),
-  // last row = command bar.
+  // Mouse routing (Spec 01 §3.5, Spec 04 / B04a). One SGR stdin stream →
+  // parseSgrMouseChunk → the pure `dispatch` reducer over a frame-derived
+  // registry snapshot → an Action this controller executes. No geometry
+  // arithmetic lives in the handlers; coordinates are 0-based (matching
+  // computeFrame) after the single 1-based→0-based conversion in
+  // handleStdinChunk.
   // -------------------------------------------------------------------------
-
-  private sidebarWidthCols(): number {
-    return this.frame().sidebar.width;
-  }
 
   /** Replicates the Sidebar component's cursor-centered window math. */
   private sidebarWindow(): {
@@ -2905,195 +2946,288 @@ export class LiveController {
     return { keys, offset, clippedTop: offset > 0 };
   }
 
-  handleMouseClick(x: number, y: number): void {
+  // The drag-resize latch: once a press lands on a border handle, every drag
+  // routes to it until release (no slip). Pure dispatch decides; we hold state.
+  private dragLatch: DragLatch = null;
+
+  /**
+   * Build the frame-derived hit-test registry snapshot for the current layout:
+   * the focusable regions (sidebar, list, detail, command bar) plus the two
+   * draggable border handles. B04b's measured `<Button>` / `<SelectableList>`
+   * wrappers will register their entries onto this same snapshot model.
+   *
+   * The sidebar is modeled as a `list` so a press maps to a row index against
+   * its cursor-centered window; the resource list carries its scroll offset and
+   * the selected index so the dispatcher can decide select-vs-open-detail
+   * without any geometry of its own.
+   */
+  private registry(): RegistrySnapshot {
+    const frame = this.frame();
+    const entries: HitEntry[] = [];
+
+    // Sidebar: a list whose rowOffset folds in the window offset and the
+    // optional "↑ …" clipped-top indicator row.
+    const win = this.sidebarWindow();
+    entries.push({
+      kind: 'list',
+      region: 'sidebar',
+      rect: frame.sidebar,
+      layer: 0,
+      rowOffset: win.offset - (win.clippedTop ? 1 : 0),
+    });
+
+    // Resource list: rowOffset = the table's scroll offset; selectedIndex
+    // drives the second-click-opens-detail rule.
+    const listEntry: HitEntry = {
+      kind: 'list',
+      region: 'list',
+      rect: frame.list,
+      layer: 0,
+      rowOffset: this.table?.scrollOffset ?? 0,
+      ...(this.app.focus === 'list'
+        ? { selectedIndex: this.selectedIndex }
+        : {}),
+    };
+    entries.push(listEntry);
+
+    if (frame.detail !== null) {
+      entries.push({
+        kind: 'region',
+        region: 'detail',
+        rect: frame.detail,
+        layer: 0,
+      });
+    }
+    entries.push({
+      kind: 'region',
+      region: 'commandbar',
+      rect: frame.commandBar,
+      layer: 0,
+    });
+
+    // The two shared border lines, as draggable handles. The dispatcher applies
+    // a ±1-cell grab tolerance, so the thin lines are easy to grab.
+    entries.push({
+      kind: 'handle',
+      handle: 'sidebar',
+      rect: segmentRect(frame.handles.sidebar),
+      layer: 0,
+    });
+    if (frame.handles.vertical !== null) {
+      entries.push({
+        kind: 'handle',
+        handle: 'vertical',
+        rect: segmentRect(frame.handles.vertical),
+        layer: 0,
+      });
+    }
+    return entries;
+  }
+
+  /** The session's mouse-mode lifecycle (enable / idempotent teardown). */
+  mouseLifecycle(): MouseLifecycle {
+    return this.mouse;
+  }
+
+  /**
+   * Parse one raw stdin read into its SGR mouse events and route each. A single
+   * read may carry several reports (terminals coalesce rapid motion — CLAUDE.md
+   * gotcha); {@link parseSgrMouseChunk} splits them. SGR coordinates are 1-based;
+   * we subtract 1 at this single seam so everything downstream is 0-based and
+   * agrees with `computeFrame`.
+   */
+  handleStdinChunk(chunk: string): void {
+    for (const event of parseSgrMouseChunk(chunk)) {
+      this.handleMouseEvent({ ...event, x: event.x - 1, y: event.y - 1 });
+    }
+  }
+
+  /**
+   * Route one parsed SGR mouse event (already 0-based). Overlays (confirm/help/
+   * context switcher/port-forward manager/picker) swallow mouse input for now;
+   * otherwise the pure {@link dispatchMouse} reducer decides the action and we
+   * execute it.
+   */
+  handleMouseEvent(event: MouseEvent): void {
     if (
       this.confirm !== null ||
       this.app.helpOpen ||
       this.app.contextSwitcherOpen ||
-      this.pfManagerOpen
+      this.pfManagerOpen ||
+      this.picker !== null
     ) {
       return;
     }
-    const contentTop = 2; // row 1 is the header
-    const lastRow = this.terminalRows;
-    if (y < contentTop || y >= lastRow) {
-      if (y >= lastRow) {
-        // Command bar click focuses agent input (Spec 02 §7).
-        this.commandOpen = true;
-        this.inputText = '';
-        this.app = { ...this.app, mode: 'command', focus: 'commandbar' };
-        this.bump();
-      }
-      return;
-    }
+    const result = dispatchMouse(event, this.registry(), this.dragLatch);
+    this.dragLatch = result.latch;
+    this.executeMouseAction(result.action);
+  }
 
-    if (x <= this.sidebarWidthCols()) {
-      const win = this.sidebarWindow();
-      let row = y - contentTop + win.offset;
-      if (win.clippedTop) {
-        row -= 1; // the "↑ …" indicator occupies the first visible line
-      }
-      const key = win.keys[row];
-      if (key === undefined) {
+  private executeMouseAction(action: MouseAction): void {
+    switch (action.kind) {
+      case 'none':
+        return;
+      case 'focusRegion': {
+        if (action.region === 'commandbar') {
+          // Command bar click focuses the agent input (Spec 02 §7).
+          this.commandOpen = true;
+          this.inputText = '';
+          this.app = { ...this.app, mode: 'command', focus: 'commandbar' };
+          this.bump();
+          return;
+        }
+        this.setFocus(action.region);
         return;
       }
-      this.cursorKind = key;
+      case 'selectRow': {
+        if (action.region === 'sidebar') {
+          this.clickSidebarRow(action.index);
+          return;
+        }
+        this.clickListRow(action.index, false);
+        return;
+      }
+      case 'openDetailRow': {
+        if (action.region === 'sidebar') {
+          this.clickSidebarRow(action.index);
+          return;
+        }
+        this.clickListRow(action.index, true);
+        return;
+      }
+      case 'buttonPress':
+        // Measured buttons land in B04b; nothing registers them yet.
+        return;
+      case 'beginDrag':
+        this.setFocus(action.handle === 'sidebar' ? 'sidebar' : 'detail');
+        return;
+      case 'dragTo': {
+        this.applyDragRatio(action.handle, action.x, action.y);
+        return;
+      }
+      case 'endDrag':
+        this.saveLayout();
+        return;
+      case 'wheel': {
+        this.wheelRegion(action.region, action.dir);
+        return;
+      }
+    }
+  }
+
+  /** Apply a sidebar-row press: focus, select the kind, toggle a category. */
+  private clickSidebarRow(index: number): void {
+    const win = this.sidebarWindow();
+    const key = win.keys[index];
+    if (key === undefined) {
       this.setFocus('sidebar');
-      if (key === 'Overview') {
-        this.selectKind('Overview');
-      } else if (SIDEBAR_CATEGORIES.some((cat) => cat.id === key)) {
-        this.toggleCategory(key);
-      } else {
-        this.selectKind(key);
-        this.setFocus('list');
-      }
-      this.bump();
       return;
     }
-
-    // Right side: list on top, detail below when open.
-    const contentRows = Math.max(8, this.terminalRows - 3);
-    const listRows = this.app.showDetail
-      ? Math.max(4, Math.round(contentRows * (1 - this.app.verticalRatio)))
-      : contentRows;
-    const inDetail = this.app.showDetail && y >= contentTop + listRows;
-
-    if (inDetail) {
-      const detailTop = contentTop + listRows;
-      if (this.detail !== null && y === detailTop) {
-        this.clickDetailTabBar(x);
-      }
-      this.setFocus('detail');
-      this.bump();
-      return;
+    this.cursorKind = key;
+    this.setFocus('sidebar');
+    if (key === 'Overview') {
+      this.selectKind('Overview');
+    } else if (SIDEBAR_CATEGORIES.some((cat) => cat.id === key)) {
+      this.toggleCategory(key);
+    } else {
+      this.selectKind(key);
+      this.setFocus('list');
     }
+    this.bump();
+  }
 
-    // List region: row at contentTop is the column header.
+  /** Apply a resource-list press: select the row, or open detail when asked. */
+  private clickListRow(index: number, openDetail: boolean): void {
     if (this.table === null) {
       this.setFocus('list');
-      this.bump();
       return;
     }
-    const rowIndex = y - contentTop - 1 + this.table.scrollOffset;
     const rows = getSortedFilteredRows(this.table);
-    if (rowIndex < 0 || rowIndex >= rows.length) {
+    if (index < 0 || index >= rows.length) {
       this.setFocus('list');
-      this.bump();
       return;
     }
-    if (this.selectedIndex === rowIndex && this.app.focus === 'list') {
-      // Second click on the selected row opens the detail pane.
-      const resource = rows[rowIndex]?.resource;
+    if (openDetail) {
+      const resource = rows[index]?.resource;
       if (resource !== undefined) {
         this.openDetail(resource, 'overview');
         return;
       }
     }
-    this.selectedIndex = rowIndex;
+    this.selectedIndex = index;
     this.setFocus('list');
     this.bump();
   }
 
-  /** Map an x coordinate on the detail tab bar to a tab id. */
-  private clickDetailTabBar(x: number): void {
-    if (this.detail === null) {
-      return;
-    }
-    const left = this.sidebarWidthCols() + 1;
-    // Mirror DetailPane's bar: "<name> [Tab1] [Tab2] … · [Agent] ✕"
-    const tabs = getAvailableTabs(
-      this.detail.resource.kind,
-      this.metricsTier === 'prometheus',
-    );
-    let cursor = left + this.detail.resource.name.length + 2;
-    for (const tab of tabs) {
-      const label =
-        tab.id === 'events' && this.detail.warningCount > 0
-          ? `Events (${String(this.detail.warningCount)})`
-          : tab.label;
-      const width = label.length + 2; // [label]
-      if (x >= cursor && x < cursor + width) {
-        this.setDetailTab(tab.id);
+  /** Re-derive and store the pane ratio implied by a drag cursor position. */
+  private applyDragRatio(
+    handle: 'sidebar' | 'vertical',
+    x: number,
+    y: number,
+  ): void {
+    if (handle === 'sidebar') {
+      this.app = {
+        ...this.app,
+        sidebarRatio: sidebarRatioFromX(this.terminalColumns, x),
+      };
+    } else {
+      if (!this.app.showDetail) {
         return;
       }
-      cursor += width + 1;
+      this.app = {
+        ...this.app,
+        verticalRatio: verticalRatioFromY(this.frame(), y),
+      };
     }
-    // Past the divider: the Agent tab.
-    if (x >= cursor && x < cursor + 10) {
-      this.setDetailTab('agent');
-    }
-  }
-
-  private draggingSplitter = false;
-
-  /** Row of the splitter between list and detail (1-based screen coords). */
-  private splitterRow(): number {
-    // Derive from the single geometry source (the list│detail handle). The
-    // frame's handle row is 0-based; mouse coordinates are 1-based SGR.
-    const handle = this.frame().handles.vertical;
-    if (handle === null) {
-      return 0;
-    }
-    return handle.position + 1;
-  }
-
-  handleMouseDrag(x: number, y: number, dragging: boolean): void {
-    log.debug({ x, y, dragging, splitter: this.splitterRow() }, 'drag');
-    if (!dragging) {
-      this.draggingSplitter = false;
-      return;
-    }
-    if (!this.app.showDetail || x <= this.sidebarWidthCols()) {
-      return;
-    }
-    if (!this.draggingSplitter) {
-      if (Math.abs(y - this.splitterRow()) > 1) {
-        return;
-      }
-      this.draggingSplitter = true;
-    }
-    const contentRows = Math.max(8, this.terminalRows - 3);
-    const listRows = Math.min(contentRows - 4, Math.max(4, y - 2));
-    const ratio = 1 - listRows / contentRows;
-    this.app = {
-      ...this.app,
-      verticalRatio: Math.min(0.8, Math.max(0.2, ratio)),
-    };
-    this.saveLayout();
     this.bump();
   }
 
-  handleMouseScroll(x: number, direction: 'scrollup' | 'scrolldown'): void {
-    if (
-      this.confirm !== null ||
-      this.app.helpOpen ||
-      this.app.contextSwitcherOpen ||
-      this.pfManagerOpen
-    ) {
-      return;
-    }
-    const delta = direction === 'scrolldown' ? 1 : -1;
-    if (x <= this.sidebarWidthCols()) {
-      const win = this.sidebarWindow();
-      const idx = Math.max(
-        0,
-        Math.min(
-          win.keys.indexOf(this.cursorKind) + delta,
-          win.keys.length - 1,
-        ),
-      );
-      this.cursorKind = win.keys[idx] ?? this.cursorKind;
-      this.bump();
-      return;
-    }
-    if (this.table !== null) {
-      const rows = getSortedFilteredRows(this.table);
-      this.selectedIndex = Math.max(
-        0,
-        Math.min(this.selectedIndex + delta, rows.length - 1),
-      );
-      this.ensureVisible();
-      this.bump();
+  /** Scroll the region under the wheel cursor (focus-independent, Spec 02 §9). */
+  private wheelRegion(region: FocusRegion, dir: 'up' | 'down'): void {
+    const delta = dir === 'down' ? 1 : -1;
+    switch (region) {
+      case 'sidebar': {
+        const win = this.sidebarWindow();
+        const idx = Math.max(
+          0,
+          Math.min(
+            win.keys.indexOf(this.cursorKind) + delta,
+            win.keys.length - 1,
+          ),
+        );
+        this.cursorKind = win.keys[idx] ?? this.cursorKind;
+        this.bump();
+        return;
+      }
+      case 'list': {
+        if (this.table === null) {
+          return;
+        }
+        const rows = getSortedFilteredRows(this.table);
+        this.selectedIndex = Math.max(
+          0,
+          Math.min(this.selectedIndex + delta, rows.length - 1),
+        );
+        this.ensureVisible();
+        this.bump();
+        return;
+      }
+      case 'detail': {
+        // Logs route through applyLogsOffset so tail pause/resume fires
+        // (Spec 03 coupling); other detail tabs have no scroll state yet.
+        if (this.detail?.tab === 'logs' && this.logs !== null) {
+          const l = this.logs;
+          const total = l.ring.toArray().length;
+          const vh = this.logsViewportHeight();
+          const start: ScrollState = {
+            offset: l.live ? maxOffset(total, vh) : l.offset,
+          };
+          this.applyLogsOffset(scrollBy(start, delta * WHEEL_LINES, total, vh));
+        }
+        return;
+      }
+      case 'commandbar':
+        return;
     }
   }
 

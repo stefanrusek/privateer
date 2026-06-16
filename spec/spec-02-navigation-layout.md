@@ -360,18 +360,26 @@ Mode is shown in the command bar (detail deferred to Spec 04).
 
 All interactive elements support mouse interaction:
 
+All mouse gestures come from a **single SGR stdin stream** parsed by
+`parseSgrMouse`/`parseSgrMouseChunk` and routed through one pure `dispatch`
+reducer over a frame-derived hit-region registry (no ink-mouse, no second
+parser). Mouse reporting enables modes 1000h (click) + 1002h (button-held
+motion) + 1006h (SGR); any-motion 1003h stays **off**; **every** mouse mode is
+hard-disabled on quit/suspend/exit so escape sequences never leak into the
+shell.
+
 | Element | Mouse action |
 |---|---|
 | Sidebar items | Click to select / expand |
-| Sidebar resize handle | Click and drag |
-| List rows | Click to select, double-click to open detail |
+| Sidebar resize handle | Click and drag (±1-cell grab tolerance, latched) |
+| List rows | Click to select; a second click on the already-selected row opens detail |
 | List column headers | Click to sort |
 | Detail pane tabs | Click to switch |
-| Detail resize handle | Click and drag |
-| Namespace dropdown | Click to open |
+| Detail resize handle | Click and drag (±1-cell grab tolerance, latched) |
+| Header **namespace** chip | Click to open the namespace picker |
+| Header **context** chip | Click to open the context switcher |
 | Search field | Click to focus |
-| Command bar context | Click to open context switcher |
-| Scroll anywhere | Mouse wheel |
+| Scroll wheel | Scrolls the region **under the cursor** (sidebar / list / detail), independent of keyboard focus; detail Logs pause/resume tail accordingly |
 
 ---
 

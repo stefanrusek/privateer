@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
 import {
   parseSgrMouse,
+  parseSgrMouseChunk,
   MOUSE_ENABLE,
   MOUSE_DISABLE,
   suspendMouse,
@@ -196,15 +197,57 @@ describe('parseSgrMouse', () => {
   });
 });
 
-describe('protocol strings', () => {
-  it('MOUSE_ENABLE contains the expected escape sequences', () => {
-    expect(MOUSE_ENABLE).toContain('\x1b[?1003h');
+describe('parseSgrMouseChunk', () => {
+  it('parses a single report in a chunk', () => {
+    const events = parseSgrMouseChunk('\x1b[<0;10;5M');
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('down');
+    expect(events[0]?.x).toBe(10);
+  });
+
+  it('parses multiple reports coalesced into one chunk (in order)', () => {
+    // Terminals deliver rapid drags as one read; all must be extracted in order.
+    const chunk = '\x1b[<32;10;5M\x1b[<32;11;6M\x1b[<0;11;6m';
+    const events = parseSgrMouseChunk(chunk);
+    expect(events.map((e) => e.type)).toEqual(['drag', 'drag', 'up']);
+    expect(events[0]?.x).toBe(10);
+    expect(events[1]?.x).toBe(11);
+    expect(events[2]?.type).toBe('up');
+  });
+
+  it('ignores interleaved non-mouse bytes', () => {
+    const chunk = 'noise\x1b[<0;3;4Mmore\x1b[<64;3;4Mtrailing';
+    const events = parseSgrMouseChunk(chunk);
+    expect(events.map((e) => e.type)).toEqual(['down', 'scrollUp']);
+  });
+
+  it('returns an empty array when the chunk has no mouse reports', () => {
+    expect(parseSgrMouseChunk('just plain text\x1b[2J')).toEqual([]);
+  });
+});
+
+describe('protocol strings (mouse mode lifecycle)', () => {
+  it('MOUSE_ENABLE turns on click (1000h), button-motion (1002h), SGR (1006h)', () => {
+    expect(MOUSE_ENABLE).toContain('\x1b[?1000h');
+    expect(MOUSE_ENABLE).toContain('\x1b[?1002h');
     expect(MOUSE_ENABLE).toContain('\x1b[?1006h');
   });
 
-  it('MOUSE_DISABLE contains the expected escape sequences', () => {
+  it('MOUSE_ENABLE does NOT turn on any-motion (1003h)', () => {
+    // 1003h floods the stream and leaks on unclean exits (CLAUDE.md gotcha).
+    expect(MOUSE_ENABLE).not.toContain('\x1b[?1003h');
+  });
+
+  it('MOUSE_DISABLE turns off every mouse mode (1000/1002/1003/1006/1015)', () => {
+    expect(MOUSE_DISABLE).toContain('\x1b[?1000l');
+    expect(MOUSE_DISABLE).toContain('\x1b[?1002l');
     expect(MOUSE_DISABLE).toContain('\x1b[?1003l');
     expect(MOUSE_DISABLE).toContain('\x1b[?1006l');
+    expect(MOUSE_DISABLE).toContain('\x1b[?1015l');
+  });
+
+  it('MOUSE_DISABLE never re-enables a mode (no "h" toggles)', () => {
+    expect(MOUSE_DISABLE).not.toMatch(/h/);
   });
 });
 
