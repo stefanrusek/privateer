@@ -76,6 +76,21 @@ describe('AppRoot', () => {
     expect(lastFrame()).toContain('test-cluster');
   });
 
+  it('renders a measured headerSlot in place of the default Header', () => {
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state: defaultState,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        headerSlot: React.createElement(Text, null, 'MEASURED-HEADER'),
+      }),
+    );
+    const frame = lastFrame();
+    expect(frame).toContain('MEASURED-HEADER');
+    // The default inline namespace chip is replaced by the slot.
+    expect(frame).not.toContain('[default ▾]');
+  });
+
   it('renders help overlay when helpOpen is true', () => {
     const state = { ...defaultState, helpOpen: true };
     const { lastFrame } = render(

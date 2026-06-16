@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   dispatch,
   pressAction,
+  pressTarget,
   topmostAt,
   type Entry,
   type DragLatch,
@@ -441,5 +442,49 @@ describe('pressAction — direct (exhaustive switch)', () => {
       region: 'list',
       index: 0,
     });
+  });
+});
+
+describe('pressTarget (nested-Button winner)', () => {
+  const regionEntry: Entry = {
+    kind: 'region',
+    region: 'detail',
+    rect: { x: 0, y: 0, width: 40, height: 10 },
+    layer: 0,
+  };
+  const tab: Entry = {
+    kind: 'button',
+    id: 'tab.yaml',
+    rect: { x: 2, y: 0, width: 6, height: 1 },
+    layer: 0,
+  };
+
+  it('returns the topmost entry when no button covers the point', () => {
+    expect(pressTarget([regionEntry, tab], 20, 5)).toBe(regionEntry);
+  });
+
+  it('lets a nested button win over the region at the same layer', () => {
+    // Region registered AFTER the button — yet the button still wins the click.
+    expect(pressTarget([tab, regionEntry], 3, 0)).toBe(tab);
+  });
+
+  it('returns null when nothing covers the point', () => {
+    expect(pressTarget([regionEntry, tab], 100, 100)).toBeNull();
+  });
+
+  it('among overlapping buttons the topmost layer wins', () => {
+    const overlay: Entry = {
+      kind: 'button',
+      id: 'item.0',
+      rect: { x: 2, y: 0, width: 6, height: 1 },
+      layer: 5,
+    };
+    expect(pressTarget([tab, overlay], 3, 0)).toBe(overlay);
+  });
+
+  it('dispatch routes a press through the nested-button winner', () => {
+    const snapshot: RegistrySnapshot = [tab, regionEntry];
+    const r = dispatch(ev({ type: 'down', x: 3, y: 0 }), snapshot, null);
+    expect(r.action).toEqual({ kind: 'buttonPress', id: 'tab.yaml' });
   });
 });

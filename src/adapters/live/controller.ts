@@ -1830,6 +1830,16 @@ export class LiveController {
     this.bump();
   };
 
+  /**
+   * Open the context switcher (B04b: the header context `<Button>` and chunk
+   * 08's `c` key both call this). Chunk 08 adds the reconnect/error state; for
+   * now it just raises the existing switcher overlay.
+   */
+  openContextSwitcher = (): void => {
+    this.app = { ...this.app, contextSwitcherOpen: true };
+    this.bump();
+  };
+
   closeHelp = (): void => {
     this.app = { ...this.app, helpOpen: false };
     this.bump();
@@ -2950,6 +2960,43 @@ export class LiveController {
   // routes to it until release (no slip). Pure dispatch decides; we hold state.
   private dragLatch: DragLatch = null;
 
+  // -------------------------------------------------------------------------
+  // Measured-widget registry (B04b). The four React wrappers (`Button`,
+  // `FocusableRegion`, `SelectableList`, `DropdownButton` in
+  // src/adapters/live/) measure their absolute rect in a `useEffect` and call
+  // registerMeasured / unregisterMeasured. registry() merges these onto the
+  // frame-derived snapshot so the *same* pure dispatcher routes them — Button
+  // entries also carry an `onClick`, looked up by id when a `buttonPress`
+  // action fires. All decisions stay pure (measure.ts / dispatch.ts); the
+  // controller only stores the entries and runs the handler.
+  // -------------------------------------------------------------------------
+  private measured = new Map<string, HitEntry>();
+  private buttonHandlers = new Map<string, () => void>();
+
+  /**
+   * Register (or replace) a measured hit-target by id. Buttons pass an
+   * `onClick`; it is invoked when the pure dispatcher returns a `buttonPress`
+   * for this id. Idempotent per id, so a re-measure on resize just overwrites.
+   */
+  registerMeasured = (entry: HitEntry, onClick?: () => void): void => {
+    const id = entry.id;
+    if (id === undefined) {
+      return;
+    }
+    this.measured.set(id, entry);
+    if (onClick !== undefined) {
+      this.buttonHandlers.set(id, onClick);
+    }
+    this.bump();
+  };
+
+  /** Remove a measured hit-target on unmount. */
+  unregisterMeasured = (id: string): void => {
+    this.measured.delete(id);
+    this.buttonHandlers.delete(id);
+    this.bump();
+  };
+
   /**
    * Build the frame-derived hit-test registry snapshot for the current layout:
    * the focusable regions (sidebar, list, detail, command bar) plus the two
@@ -3020,6 +3067,12 @@ export class LiveController {
         rect: segmentRect(frame.handles.vertical),
         layer: 0,
       });
+    }
+    // Measured widgets (tabs, ✕, header chips, dropdown overlays) register last
+    // so they win equal-layer ties; the nested-Button winner rule in
+    // pressTarget routes a click on a Button over its region to the Button.
+    for (const entry of this.measured.values()) {
+      entries.push(entry);
     }
     return entries;
   }
@@ -3095,9 +3148,11 @@ export class LiveController {
         this.clickListRow(action.index, true);
         return;
       }
-      case 'buttonPress':
-        // Measured buttons land in B04b; nothing registers them yet.
+      case 'buttonPress': {
+        // Run the handler the measured <Button> registered for this id.
+        this.buttonHandlers.get(action.id)?.();
         return;
+      }
       case 'beginDrag':
         this.setFocus(action.handle === 'sidebar' ? 'sidebar' : 'detail');
         return;

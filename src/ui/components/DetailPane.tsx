@@ -35,6 +35,14 @@ export interface DetailPaneProps {
   /** Called when the Agent tab should auto-open (Spec 04 §4.1 / Spec 07 §6). */
   onAgentTabRequest?: () => void;
   renderTabContent: (tab: TabId) => React.ReactNode;
+  /**
+   * Optional measured tab-bar slot (navigation-overhaul chunk 04 / B04b). When
+   * provided (by the live adapter), it replaces the presentational tab row with
+   * measured `<Button>`s (clickable tabs + `✕`); the default inline row is kept
+   * for tests and any non-measured host. Receives the available tabs and the
+   * active tab so the adapter can build the right Buttons.
+   */
+  renderTabBar?: (tabs: readonly TabDef[], activeTab: TabId) => React.ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +57,7 @@ export function DetailPane({
   onClose: _onClose,
   onTabChange: _onTabChange,
   renderTabContent,
+  renderTabBar,
 }: DetailPaneProps): React.ReactElement {
   const availableTabs = getAvailableTabs(resource.kind, hasPrometheus);
 
@@ -75,6 +84,15 @@ export function DetailPane({
   });
 
   const isAgentActive = activeTab === 'agent';
+
+  if (renderTabBar !== undefined) {
+    return (
+      <Box flexDirection="column">
+        {renderTabBar(availableTabs, activeTab)}
+        <Box flexDirection="column">{renderTabContent(activeTab)}</Box>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column">

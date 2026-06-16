@@ -188,6 +188,38 @@ function handleAt(
   return best;
 }
 
+/**
+ * Resolve the press target at `(x, y)` honoring the **nested-Button winner**
+ * rule (B04b): a discrete `button` entry that contains the point wins over the
+ * `region`/`list` it visually nests inside, even when both register on the same
+ * `layer`. Buttons are non-nestable leaves, so among buttons the ordinary
+ * topmost rule applies; if no button covers the point, fall through to the
+ * topmost entry of any kind.
+ *
+ * This keeps the dispatcher free of `if (isButton)` branching: a measured
+ * `<Button>` need only register a `button` entry over its region and clicks
+ * route to it automatically.
+ */
+export function pressTarget(
+  snapshot: RegistrySnapshot,
+  x: number,
+  y: number,
+): Entry | null {
+  let bestButton: Entry | null = null;
+  for (const entry of snapshot) {
+    if (entry.kind !== 'button' || !contains(entry.rect, x, y)) {
+      continue;
+    }
+    if (bestButton === null || entry.layer >= bestButton.layer) {
+      bestButton = entry;
+    }
+  }
+  if (bestButton !== null) {
+    return bestButton;
+  }
+  return topmostAt(snapshot, x, y);
+}
+
 /** The topmost `region`/`list` entry under the point (for wheel routing). */
 function regionAt(
   snapshot: RegistrySnapshot,
@@ -264,7 +296,9 @@ export function dispatch(
           latch: { handle: id },
         };
       }
-      const hit = topmostAt(snapshot, event.x, event.y);
+      // Honor the nested-Button winner rule: a measured Button over a region
+      // wins the click even at the same layer.
+      const hit = pressTarget(snapshot, event.x, event.y);
       if (hit === null) {
         return { action: { kind: 'none' }, latch };
       }

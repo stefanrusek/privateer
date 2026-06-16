@@ -17,6 +17,13 @@ import { PortForwardManager } from '../../ui/components/PortForwardManager.js';
 import { MetricsTab } from '../../ui/components/MetricsTab.js';
 import { PickerOverlay } from '../../ui/components/PickerOverlay.js';
 import { LiveController } from './controller.js';
+import {
+  MeasuredRegistryProvider,
+  Button,
+  DropdownButton,
+  type DropdownItem,
+} from './measured-widgets.js';
+import type { TabDef } from '../../ui/components/DetailPane.js';
 
 /**
  * The single mouse path: one `process.stdin` listener feeds every raw read to
@@ -258,9 +265,92 @@ export function LiveApp({
         onClose={controller.closeDetail}
         onTabChange={controller.setDetailTab}
         renderTabContent={renderTabContent}
+        renderTabBar={renderTabBar}
       />
     );
   };
+
+  // Measured detail tab bar (B04b): each tab + the ✕ close is a clickable
+  // <Button>; the controller routes the registered buttonPress to these
+  // handlers. The accelerator letter underlines the first matching label letter.
+  const renderTabBar = (
+    tabs: readonly TabDef[],
+    activeTab: TabId,
+  ): React.ReactNode => (
+    <Box flexDirection="row" gap={1}>
+      {tabs.map((tab) => (
+        <Button
+          key={tab.id}
+          id={`tab.${tab.id}`}
+          label={`[${tab.label}]`}
+          active={activeTab === tab.id}
+          onClick={() => {
+            controller.setDetailTab(tab.id);
+          }}
+        />
+      ))}
+      <Button
+        id="detail.close"
+        onClick={() => {
+          controller.closeDetail();
+        }}
+      >
+        <Text>✕</Text>
+      </Button>
+    </Box>
+  );
+
+  // Measured header (B04b): the context + search chips are plain <Button>s; the
+  // namespace is a filterable <DropdownButton>. Clicking the context chip opens
+  // the context switcher (chunk 08); the search chip focuses search.
+  const namespaceItems: DropdownItem[] = app.allNamespaces.map((ns) => ({
+    id: ns === '' ? '__all__' : ns,
+    label: ns === '' ? 'all namespaces' : ns,
+  }));
+  const headerSlot = (
+    <Box flexDirection="row">
+      <Box marginRight={1}>
+        <Button
+          id="header.context"
+          label={app.context}
+          onClick={controller.openContextSwitcher}
+        />
+      </Box>
+      <Box marginRight={2} flexDirection="row">
+        <Text>ns: </Text>
+        <DropdownButton
+          id="header.namespace"
+          label={app.namespace === '' ? 'all' : app.namespace}
+          items={namespaceItems}
+          selectedIndex={Math.max(
+            0,
+            namespaceItems.findIndex(
+              (it) =>
+                it.id === (app.namespace === '' ? '__all__' : app.namespace),
+            ),
+          )}
+          onSelect={(index) => {
+            const chosen = namespaceItems[index];
+            if (chosen !== undefined) {
+              controller.setNamespace(chosen.id === '__all__' ? '' : chosen.id);
+            }
+          }}
+          filterable
+        />
+      </Box>
+      <Box flexGrow={1} justifyContent="flex-end">
+        <Text>/</Text>
+        <Button
+          id="header.search"
+          label={app.search}
+          active={app.headerFocus === 'search'}
+          onClick={() => {
+            controller.setFocus('commandbar');
+          }}
+        />
+      </Box>
+    </Box>
+  );
 
   const termSize = controller.terminalSize();
   const rows = termSize.rows;
@@ -301,7 +391,7 @@ export function LiveApp({
   }
 
   return (
-    <>
+    <MeasuredRegistryProvider registry={controller}>
       <MouseRouter controller={controller} />
       <Box
         height={rows}
@@ -316,6 +406,7 @@ export function LiveApp({
           contextFilter={controller.getContextFilter()}
           cursorKind={snapshot.cursorKind}
           inputText={snapshot.inputText}
+          headerSlot={headerSlot}
           renderList={() => (
             <Box height={listRows} overflow="hidden" flexDirection="column">
               {renderList()}
@@ -341,6 +432,6 @@ export function LiveApp({
             : {})}
         />
       </Box>
-    </>
+    </MeasuredRegistryProvider>
   );
 }

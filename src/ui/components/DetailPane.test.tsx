@@ -66,6 +66,29 @@ describe('getAvailableTabs (re-export)', () => {
   });
 });
 
+describe('renderTabBar slot (B04b measured tab bar)', () => {
+  it('replaces the default tab row with the provided measured slot', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        DetailPane,
+        defaultProps('Pod', {
+          renderTabBar: (tabs, active) =>
+            React.createElement(
+              Text,
+              null,
+              `MEASURED-BAR:${String(tabs.length)}:${active}`,
+            ),
+        }),
+      ),
+    );
+    const frame = lastFrame();
+    expect(frame).toContain('MEASURED-BAR:');
+    // Slot receives the active tab and still renders tab content beneath it.
+    expect(frame).toContain('overview');
+    expect(frame).toContain('content:overview');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Rendering tests
 // ---------------------------------------------------------------------------

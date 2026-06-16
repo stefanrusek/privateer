@@ -52,6 +52,14 @@ export interface AppRootProps {
    * the command bar per Spec 04 §12).
    */
   commandBarContent?: React.ReactNode;
+  /**
+   * Optional measured header slot (navigation-overhaul chunk 04 / B04b). When
+   * provided (by the live adapter), it replaces the default presentational
+   * `<Header>` with measured widgets — context/search `<Button>`s and the
+   * namespace filterable `<DropdownButton>`. The default `<Header>` is retained
+   * for tests and any non-measured host.
+   */
+  headerSlot?: React.ReactNode;
 }
 
 export function AppRoot({
@@ -64,6 +72,7 @@ export function AppRoot({
   inputText = '',
   terminalSize,
   commandBarContent,
+  headerSlot,
 }: AppRootProps): React.ReactElement {
   // Sidebar width comes from the single geometry source (Spec 02 §"Single
   // source of truth"); no ad-hoc formula lives here. When the real terminal
@@ -111,17 +120,19 @@ export function AppRoot({
       <FrameChrome
         frame={frame}
         grid={grid}
-        renderHeader={() => (
-          <Header
-            context={state.context}
-            namespace={state.namespace}
-            allNamespaces={[...state.allNamespaces]}
-            search={state.search}
-            onNamespaceChange={callbacks.onNamespaceChange}
-            onSearchChange={callbacks.onSearchChange}
-            focused={state.headerFocus}
-          />
-        )}
+        renderHeader={() =>
+          headerSlot ?? (
+            <Header
+              context={state.context}
+              namespace={state.namespace}
+              allNamespaces={[...state.allNamespaces]}
+              search={state.search}
+              onNamespaceChange={callbacks.onNamespaceChange}
+              onSearchChange={callbacks.onSearchChange}
+              focused={state.headerFocus}
+            />
+          )
+        }
         renderSidebar={() => (
           <Sidebar
             items={SIDEBAR_CATEGORIES}
