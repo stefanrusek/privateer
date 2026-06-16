@@ -189,7 +189,8 @@ Displays the list of resources for the currently selected resource type, filtere
 - Single click or Enter → loads detail into center bottom pane (opens it if hidden)
 - Live updates via watch stream — new/modified/deleted rows animate subtly (no jarring redraws)
 - Sortable columns: click column header or `s` + column number to sort
-- Scrollable: mouse scroll or arrow keys / `j` / `k`
+- Vertically scrollable: mouse scroll or `↑` / `↓` / `j` / `k`
+- Horizontally scrollable: `←` / `→` pan the columns (§5.2)
 - Multi-select: deferred to v2 (reserved key: `v`, visual-select). `Space` is reserved globally for agent command bar focus.
 
 ### 5.1 Row Status Indicators
@@ -202,6 +203,32 @@ Each row has a leading status indicator column:
 | `●` yellow | Pending / Progressing |
 | `●` red | Error / CrashLoopBackOff / Failed |
 | `●` grey | Unknown / Terminating |
+
+### 5.2 Horizontal scrolling (natural-width viewport)
+
+When a resource kind has more column width than fits the list pane, the list is
+a horizontal **window** over fixed, **natural-width** columns — columns are
+never squeezed or wrapped to fit; the pane clips them and `←` / `→` pan the
+hidden ones into view.
+
+- **Natural widths** are stable and data-independent: fixed-width columns keep
+  their width; percentage-width columns (Spec 03) resolve against a constant
+  baseline (`LIST_BASELINE_WIDTH` = 120), *not* the live pane width, so the
+  layout never jitters as rows arrive or as the user scrolls.
+- The leading **status dot + `Name`** columns are **pinned**: they always render
+  at the left at their natural widths and never scroll. (A kind with no `Name`
+  column pins only the status column.) The remaining columns pan together as one
+  unit.
+- `→` advances the horizontal offset by one column, `←` retreats it; both snap
+  to column boundaries (headers stay aligned) and both clamp. The maximum offset
+  lands the final column flush against the right edge — you cannot scroll blank
+  space in past it. When the natural total fits the pane, `←` / `→` are no-ops.
+- When columns are hidden, a `‹` marker shows at the pinned/scrollable boundary
+  (more to the left) and a `›` at the right edge (more to the right); each
+  occupies one header cell and shifts no data column.
+- The horizontal offset **resets to 0 when the active kind changes** (the column
+  set differs) and **persists** across vertical scroll, selection, sort, and
+  search within the same kind.
 
 ---
 

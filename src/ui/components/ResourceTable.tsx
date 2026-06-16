@@ -11,6 +11,11 @@ import {
   getSortedFilteredRows,
   getVisibleRows,
 } from '../resource-table-model.js';
+import {
+  naturalWidths,
+  pinnedCount,
+  resolveRowWindow,
+} from '../list-horizontal.js';
 
 export interface ResourceTableProps {
   model: TableModel;
@@ -35,14 +40,6 @@ export interface ResourceTableProps {
 // ---------------------------------------------------------------------------
 // Column width resolution
 // ---------------------------------------------------------------------------
-
-function resolveWidth(width: number | string, totalWidth: number): number {
-  if (typeof width === 'number') {
-    return width;
-  }
-  const pct = parseFloat(width);
-  return Math.floor((pct / 100) * totalWidth);
-}
 
 function truncate(text: string, maxWidth: number): string {
   if (text.length <= maxWidth) {
@@ -153,10 +150,23 @@ export function ResourceTable(props: ResourceTableProps): React.ReactElement {
     totalWidth = 120,
   } = props;
 
-  const colsWithWidths = columns.map((col) => ({
-    col,
-    width: resolveWidth(col.width, totalWidth),
-  }));
+  // Natural (stable, data-independent) widths and the horizontal window for the
+  // current offset (Spec nav-05). The status dot + Name columns are pinned and
+  // never scroll; the rest pan together. Each visible column renders at its
+  // natural width minus any right-edge clip.
+  const widths = naturalWidths(columns);
+  const pinned = pinnedCount(columns);
+  const window = resolveRowWindow(
+    columns,
+    widths,
+    pinned,
+    model.horizontalOffset,
+    totalWidth,
+  );
+  const visibleCols: { col: ColumnDef; width: number }[] = [
+    ...window.pinned.map((p) => ({ col: p.col, width: p.width })),
+    ...window.scrollable.map((s) => ({ col: s.col, width: s.width - s.clip })),
+  ];
 
   // Empty/error/loading states
   if (model.loadState === 'loading') {
@@ -206,17 +216,33 @@ export function ResourceTable(props: ResourceTableProps): React.ReactElement {
     );
   }
 
-  // Header row
-  const headerCells = colsWithWidths.map(({ col, width }, i) => {
+  // Header row. The `‹`/`›` "more columns" markers (Spec nav-05) are overlaid
+  // onto the header cells without changing any column width, so the header row
+  // stays the same width as the data rows and nothing shifts.
+  const firstScrollableIndex = window.pinned.length;
+  const lastVisibleIndex = visibleCols.length - 1;
+
+  const headerCells = visibleCols.map(({ col, width }, i) => {
     const indicator = sortIndicator(col.header, model, i);
     const headerText =
       col.header.length === 0
         ? '  '
         : col.header + (indicator.length > 0 ? indicator : ' ');
 
+    // `width` is always >= 1 here (pinned widths are >= 2; a windowed scrollable
+    // column is only emitted when at least one cell of it fits), so overwriting
+    // one edge cell with a marker never shifts the column.
+    let cellText = padRight(truncate(headerText, width), width);
+    if (window.leftMore && i === firstScrollableIndex) {
+      cellText = '‹' + cellText.slice(1);
+    }
+    if (window.rightMore && i === lastVisibleIndex) {
+      cellText = cellText.slice(0, width - 1) + '›';
+    }
+
     return (
       <Text key={`hdr-${String(i)}`} bold>
-        {padRight(truncate(headerText, width), width)}
+        {cellText}
       </Text>
     );
   });
@@ -225,7 +251,7 @@ export function ResourceTable(props: ResourceTableProps): React.ReactElement {
   const visible = getVisibleRows(model, model.scrollOffset, visibleHeight);
 
   const rowElements = visible.map((row, vi) => {
-    const cells = colsWithWidths.map(({ col, width: colWidth }) => {
+    const cells = visibleCols.map(({ col, width: colWidth }) => {
       return renderCell(col, row, colWidth, nowMs);
     });
 

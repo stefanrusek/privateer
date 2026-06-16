@@ -62,8 +62,14 @@ import {
   applySearch,
   scrollDown,
   scrollUp,
+  setHorizontalOffset,
 } from '../../ui/resource-table-model.js';
 import { getColumns } from '../../resources/columns.js';
+import {
+  naturalWidths,
+  pinnedCount,
+  clampHOffset,
+} from '../../ui/list-horizontal.js';
 import { initialAppState } from '../../cli/initial-state.js';
 import { normalize } from '../../resources/normalize.js';
 import { StateStore } from '../../store/state-store.js';
@@ -3787,9 +3793,10 @@ export class LiveController {
       this.bump();
       return;
     }
-    // List `←/→` no longer move focus. Horizontal scroll arrives in chunk 05;
-    // until then they are no-ops so `Tab` is the only way to leave the list.
+    // List `←/→` pan the columns horizontally (Spec nav-05). The status dot +
+    // Name columns stay pinned; the clamp/width math lives in list-horizontal.
     if (key.leftArrow || key.rightArrow) {
+      this.scrollListHorizontal(key.rightArrow ? 1 : -1);
       return;
     }
     if (input === 'g') {
@@ -3860,6 +3867,31 @@ export class LiveController {
     if (input === 'p' && resource.kind === 'Pod') {
       this.openPortPrompt(resource);
       return;
+    }
+  }
+
+  /**
+   * Pan the list columns horizontally by `delta` columns (Spec nav-05). All
+   * width/clamp arithmetic lives in the pure `list-horizontal` module; this
+   * only reads the current pane width and stores the clamped offset.
+   */
+  private scrollListHorizontal(delta: number): void {
+    if (this.table === null) {
+      return;
+    }
+    const widths = naturalWidths(this.columns);
+    const pinned = pinnedCount(this.columns);
+    const next = clampHOffset(
+      this.columns,
+      widths,
+      pinned,
+      this.tableWidth(),
+      this.table.horizontalOffset + delta,
+    );
+    const updated = setHorizontalOffset(this.table, next);
+    if (updated !== this.table) {
+      this.table = updated;
+      this.bump();
     }
   }
 

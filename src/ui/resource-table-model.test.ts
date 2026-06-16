@@ -12,6 +12,7 @@ import {
   scrollUp,
   scrollToStart,
   scrollToEnd,
+  setHorizontalOffset,
 } from './resource-table-model.js';
 
 // ---------------------------------------------------------------------------
@@ -54,6 +55,7 @@ describe('createTableModel', () => {
     expect(model.search).toBe('');
     expect(model.connectionAttempt).toBe(0);
     expect(model.connectionMax).toBe(0);
+    expect(model.horizontalOffset).toBe(0);
   });
 
   it('creates a non-Pod model with name-asc defaults', () => {
@@ -563,5 +565,38 @@ describe('scrollToEnd', () => {
     const model = createTableModel('Deployment');
     const updated = scrollToEnd(model, 5);
     expect(updated.scrollOffset).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setHorizontalOffset (Spec nav-05)
+// ---------------------------------------------------------------------------
+
+describe('setHorizontalOffset', () => {
+  it('defaults the horizontal offset to 0 on a fresh model', () => {
+    expect(createTableModel('Pod').horizontalOffset).toBe(0);
+  });
+
+  it('stores a new horizontal offset', () => {
+    const model = createTableModel('Pod');
+    const updated = setHorizontalOffset(model, 2);
+    expect(updated.horizontalOffset).toBe(2);
+  });
+
+  it('returns the same model reference when the offset is unchanged', () => {
+    const model = setHorizontalOffset(createTableModel('Pod'), 3);
+    expect(setHorizontalOffset(model, 3)).toBe(model);
+  });
+
+  it('resets to 0 implicitly on kind change (fresh model)', () => {
+    const pods = setHorizontalOffset(createTableModel('Pod'), 4);
+    expect(pods.horizontalOffset).toBe(4);
+    // The controller rebuilds the model on kind change; a fresh model starts at 0.
+    expect(createTableModel('Deployment').horizontalOffset).toBe(0);
+  });
+
+  it('leaves vertical scroll untouched', () => {
+    const model = { ...createTableModel('Pod'), scrollOffset: 5 };
+    expect(setHorizontalOffset(model, 2).scrollOffset).toBe(5);
   });
 });

@@ -35,6 +35,12 @@ export interface TableModel {
   connectionAttempt: number;
   connectionMax: number;
   scrollOffset: number;
+  /**
+   * Horizontal column offset for the list (Spec nav-05). An index into the
+   * *scrollable* columns; the pinned status+Name columns never scroll. Reset to
+   * 0 on kind change (the controller rebuilds the model via `createTableModel`).
+   */
+  horizontalOffset: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +76,7 @@ export function createTableModel(kind: string): TableModel {
     connectionAttempt: 0,
     connectionMax: 0,
     scrollOffset: 0,
+    horizontalOffset: 0,
   };
 }
 
@@ -235,4 +242,19 @@ export function scrollToEnd(
   const sorted = getSortedFilteredRows(model);
   const maxOffset = Math.max(0, sorted.length - visibleHeight);
   return { ...model, scrollOffset: maxOffset };
+}
+
+/**
+ * Set the horizontal column offset (Spec nav-05). The caller is responsible for
+ * clamping via `list-horizontal.ts`'s `clampHOffset`; this only stores the
+ * value. Returns the same model when unchanged.
+ */
+export function setHorizontalOffset(
+  model: TableModel,
+  horizontalOffset: number,
+): TableModel {
+  if (model.horizontalOffset === horizontalOffset) {
+    return model;
+  }
+  return { ...model, horizontalOffset };
 }

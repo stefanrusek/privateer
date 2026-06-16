@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
+import stringWidth from 'string-width';
 import type { ResourceObject } from '../../core/types.js';
 import { getColumns } from '../../resources/columns.js';
 import {
@@ -577,7 +578,7 @@ describe('ResourceTable focused prop', () => {
 // totalWidth prop
 // ---------------------------------------------------------------------------
 
-describe('ResourceTable totalWidth prop', () => {
+describe('ResourceTable totalWidth prop (pane width / horizontal window)', () => {
   const longName = 'a-deployment-name-of-considerable-length';
 
   function renderWide(totalWidth?: number): string {
@@ -603,11 +604,91 @@ describe('ResourceTable totalWidth prop', () => {
     expect(renderWide()).toBe(renderWide(120));
   });
 
-  it('truncates more aggressively at a narrower totalWidth', () => {
-    // Name column is 30%: 41-char name fits at width 200 but not at 60.
-    expect(renderWide(200)).toContain(longName);
+  it('keeps the Name column at a stable natural width (Spec nav-05)', () => {
+    // Name's natural width (30% of the 120 baseline = 36) is independent of the
+    // pane width, so a 40-char name is always truncated — at any totalWidth.
+    expect(renderWide(200)).not.toContain(longName);
+    expect(renderWide(200)).toContain('…');
     expect(renderWide(60)).not.toContain(longName);
     expect(renderWide(60)).toContain('…');
+  });
+
+  it('hides later columns at a narrow pane and shows a › marker', () => {
+    // Deployment natural total is ~94; a 60-wide pane cannot fit it all, so the
+    // trailing columns are windowed off and a right-more marker appears.
+    expect(renderWide(60)).toContain('›');
+    expect(renderWide(60)).not.toContain('Age');
+    // A wide pane fits everything: the Age column shows and no markers appear.
+    expect(renderWide(200)).toContain('Age');
+    expect(renderWide(200)).not.toContain('›');
+    expect(renderWide(200)).not.toContain('‹');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Horizontal scroll (Spec nav-05)
+// ---------------------------------------------------------------------------
+
+describe('ResourceTable horizontal scroll', () => {
+  // Pod natural columns: status(2) Name(36) Namespace(18) Ready(8) Phase(12)
+  // Restarts(8) Node(18) Age(10) — total ~112. A 70-wide pane forces a window.
+  function renderPods(horizontalOffset: number, paneWidth: number): string {
+    let model = createTableModel('Pod');
+    model = applyResourceEvent(
+      model,
+      { type: 'ADDED', resource: makeResource('my-pod', 'uid-1', 'green') },
+      0,
+    );
+    model = { ...model, horizontalOffset };
+    const cols = getColumns('Pod');
+    const { lastFrame } = render(
+      React.createElement(ResourceTable, {
+        ...DEFAULT_PROPS,
+        model,
+        columns: cols,
+        totalWidth: paneWidth,
+      }),
+    );
+    return lastFrame() ?? '';
+  }
+
+  it('keeps the status dot and Name pinned at every offset', () => {
+    for (const offset of [0, 1, 2, 3]) {
+      const frame = renderPods(offset, 70);
+      expect(frame).toContain('●');
+      expect(frame).toContain('my-pod');
+      expect(frame).toContain('Name');
+    }
+  });
+
+  it('reveals later columns and a ‹ marker as the offset advances', () => {
+    const at0 = renderPods(0, 70);
+    expect(at0).toContain('Namespace');
+    expect(at0).not.toContain('‹'); // nothing hidden to the left at offset 0
+    expect(at0).toContain('›'); // more columns to the right
+
+    const at2 = renderPods(2, 70);
+    expect(at2).toContain('‹'); // columns hidden to the left now
+    // The Namespace column visible at offset 0 has scrolled off the left.
+    expect(at2).not.toContain('Namespace');
+    // A column that was off-screen-right at offset 0 is now visible.
+    expect(at2).toContain('Node');
+  });
+
+  it('shows no markers when everything fits the pane', () => {
+    const frame = renderPods(0, 200);
+    expect(frame).not.toContain('‹');
+    expect(frame).not.toContain('›');
+    expect(frame).toContain('Age');
+  });
+
+  it('never wraps and never exceeds the pane width at any offset', () => {
+    for (const offset of [0, 1, 2, 3]) {
+      const frame = renderPods(offset, 70);
+      for (const line of frame.split('\n')) {
+        expect(stringWidth(line)).toBeLessThanOrEqual(70);
+      }
+    }
   });
 });
 
