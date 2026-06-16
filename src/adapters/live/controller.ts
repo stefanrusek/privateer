@@ -23,6 +23,17 @@ import {
   type TabId,
 } from '../../ui/detail-tabs.js';
 import { nextRegion, regionOrder } from '../../ui/navigation.js';
+import {
+  clampOffset,
+  maxOffset,
+  pageBy,
+  scrollBy,
+  toBottom,
+  toTop,
+  logsLiveAfterScroll,
+  type ScrollState,
+} from '../../ui/scroll-viewport.js';
+import { projectLogsView, offsetForMatch } from '../../ui/logs-view.js';
 import { computeFrame, type Frame } from '../../ui/layout-geometry.js';
 import type { PickerItem } from '../../ui/components/PickerOverlay.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
@@ -316,6 +327,8 @@ export class LiveController {
     searchCurrent: number;
     searchFocused: boolean;
     newLines: number;
+    /** Scroll offset into the ring buffer; honored only while paused. */
+    offset: number;
     confirmation: string | undefined;
     stop: (() => void) | null;
   } | null = null;
@@ -651,6 +664,29 @@ export class LiveController {
     return this.frame().list.width;
   }
 
+  /**
+   * Rows of scrollable content the detail pane shows (Spec 03). The tab bar
+   * occupies the detail region's top row, so the generic viewport is one row
+   * shorter than the inner height.
+   */
+  private detailViewportHeight(): number {
+    const detail = this.frame().detail;
+    const inner = detail !== null ? detail.height : 0;
+    return Math.max(1, inner - 1);
+  }
+
+  /**
+   * Rows available to the Logs body specifically. Beyond the tab bar, LogsTab
+   * draws four chrome rows above the lines (title, toolbar, state hints,
+   * divider); the viewport is sized so the windowed lines never overflow.
+   */
+  private logsViewportHeight(): number {
+    return Math.max(
+      1,
+      this.detailViewportHeight() - LiveController.LOGS_CHROME_ROWS,
+    );
+  }
+
   terminalSize(): { columns: number; rows: number } {
     return { columns: this.terminalColumns, rows: this.terminalRows };
   }
@@ -678,25 +714,27 @@ export class LiveController {
     return this.commandOpen ? this.inputText : '';
   }
 
-  /** Lines shown at once in the logs tab (LogsTab renders all it is given). */
-  private static readonly LOGS_VIEW_LINES = 200;
+  /** LogsTab chrome rows above the lines (title, toolbar, hints, divider). */
+  private static readonly LOGS_CHROME_ROWS = 4;
 
   private buildLogsView(): LogsViewState | null {
     if (this.logs === null) {
       return null;
     }
     const l = this.logs;
-    const raw = l.ring.toArray();
-    const tail = raw.slice(-LiveController.LOGS_VIEW_LINES);
-    const display = l.timestamps
-      ? tail
-      : tail.map((line) => {
-          const space = line.indexOf(' ');
-          return space > 0 ? line.slice(space + 1) : line;
-        });
+    const projection = projectLogsView({
+      raw: l.ring.toArray(),
+      offset: l.offset,
+      viewportHeight: this.logsViewportHeight(),
+      timestamps: l.timestamps,
+      live: l.live,
+    });
+    // Search runs over the full projected list; the cursor stays in range.
     const base =
-      l.searchQuery === '' ? emptySearch() : runSearch(display, l.searchQuery);
-    const search: SearchState =
+      l.searchQuery === ''
+        ? emptySearch()
+        : runSearch(projection.display, l.searchQuery);
+    const ranged: SearchState =
       base.matches.length === 0
         ? base
         : {
@@ -706,10 +744,16 @@ export class LiveController {
               base.matches.length - 1,
             ),
           };
+    // Shift match indices to window coordinates so LogsTab highlights the right
+    // visible row; the count (`matches.length`, `current`) is unchanged.
+    const search: SearchState = {
+      ...ranged,
+      matches: ranged.matches.map((m) => m - projection.offset),
+    };
     return {
       podName: l.podName,
       container: l.container,
-      lines: display,
+      lines: projection.visible,
       live: l.live,
       timestamps: l.timestamps,
       wrap: l.wrap,
@@ -2302,6 +2346,7 @@ export class LiveController {
       searchCurrent: 0,
       searchFocused: false,
       newLines: 0,
+      offset: 0,
       confirmation: undefined,
       stop: null,
     };
@@ -2316,6 +2361,9 @@ export class LiveController {
     l.stop?.();
     l.ring = new RingBuffer(10_000);
     l.newLines = 0;
+    // A restarted stream tails the newest lines again.
+    l.live = true;
+    l.offset = 0;
     const adapter = new LogStreamAdapter(this.kc);
     const params = streamParamsFor(l.limit);
     l.stop = adapter.tail(
@@ -2415,31 +2463,30 @@ export class LiveController {
       return true;
     }
 
+    // Viewport scrolling (Spec 03): motion keys walk the ring buffer; scrolling
+    // up off the bottom pauses the tail, returning to the bottom resumes it.
+    if (this.scrollLogs(input, key)) {
+      return true;
+    }
+
     if (input === '/') {
       l.searchFocused = true;
       this.bump();
       return true;
     }
     if (input === 'n' && l.searchQuery !== '') {
-      const view = this.buildLogsView();
-      if (view !== null) {
-        l.searchCurrent = nextMatch(view.search).current;
-        this.bump();
-      }
+      this.jumpLogsSearch('next');
       return true;
     }
     if (input === 'N' && l.searchQuery !== '') {
-      const view = this.buildLogsView();
-      if (view !== null) {
-        l.searchCurrent = prevMatch(view.search).current;
-        this.bump();
-      }
+      this.jumpLogsSearch('prev');
       return true;
     }
     if (input === 'p') {
       l.live = !l.live;
       if (l.live) {
         l.newLines = 0;
+        l.offset = this.logsBottomOffset();
       }
       this.bump();
       return true;
@@ -2451,6 +2498,12 @@ export class LiveController {
     }
     if (input === 'w') {
       l.wrap = !l.wrap;
+      // Re-clamp the offset after a wrap change re-projects the lines.
+      l.offset = clampOffset(
+        l.offset,
+        l.ring.toArray().length,
+        this.logsViewportHeight(),
+      );
       this.bump();
       return true;
     }
@@ -2483,6 +2536,114 @@ export class LiveController {
       return true;
     }
     return false;
+  }
+
+  /** The offset that pins the Logs viewport to the newest lines. */
+  private logsBottomOffset(): number {
+    const l = this.logs;
+    if (l === null) {
+      return 0;
+    }
+    return maxOffset(l.ring.toArray().length, this.logsViewportHeight());
+  }
+
+  /**
+   * Apply a new Logs scroll offset and re-couple the live flag: at the bottom
+   * the tail resumes (and the "new lines" badge clears); above it the tail
+   * pauses. Returns whether anything changed (always true here — callers gate).
+   */
+  private applyLogsOffset(next: ScrollState): void {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    const total = l.ring.toArray().length;
+    const vh = this.logsViewportHeight();
+    const offset = clampOffset(next.offset, total, vh);
+    const live = logsLiveAfterScroll({ offset }, total, vh);
+    l.offset = offset;
+    l.live = live;
+    if (live) {
+      l.newLines = 0;
+    }
+    this.bump();
+  }
+
+  /**
+   * Handle a Logs viewport motion key (`↑/↓`, PageUp/PageDown, Home/End,
+   * `g`/`G`). Returns true when the key drove the viewport.
+   */
+  private scrollLogs(input: string, key: InkKey): boolean {
+    const l = this.logs;
+    if (l === null) {
+      return false;
+    }
+    const total = l.ring.toArray().length;
+    const vh = this.logsViewportHeight();
+    // While live the offset trails the bottom; start from there so the first
+    // up-arrow steps off the newest line rather than from a stale value.
+    const start: ScrollState = {
+      offset: l.live ? maxOffset(total, vh) : l.offset,
+    };
+    if (key.upArrow) {
+      this.applyLogsOffset(scrollBy(start, -1, total, vh));
+      return true;
+    }
+    if (key.downArrow) {
+      this.applyLogsOffset(scrollBy(start, 1, total, vh));
+      return true;
+    }
+    if (key.pageUp) {
+      this.applyLogsOffset(pageBy(start, 'up', total, vh));
+      return true;
+    }
+    if (key.pageDown) {
+      this.applyLogsOffset(pageBy(start, 'down', total, vh));
+      return true;
+    }
+    if (input === 'g') {
+      // `g` jumps to the top, `G` to the bottom (vi-style).
+      this.applyLogsOffset(toTop());
+      return true;
+    }
+    if (input === 'G') {
+      this.applyLogsOffset(toBottom(total, vh));
+      return true;
+    }
+    return false;
+  }
+
+  /** Advance the Logs search cursor and scroll the match into view. */
+  private jumpLogsSearch(dir: 'next' | 'prev'): void {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    const view = this.buildLogsView();
+    if (view === null) {
+      return;
+    }
+    const stepped =
+      dir === 'next' ? nextMatch(view.search) : prevMatch(view.search);
+    l.searchCurrent = stepped.current;
+    // Recompute against the full (non-window-shifted) projection to find the
+    // absolute match line, then scroll it into view and pause the tail.
+    const display = projectLogsView({
+      raw: l.ring.toArray(),
+      offset: l.offset,
+      viewportHeight: this.logsViewportHeight(),
+      timestamps: l.timestamps,
+      live: false,
+    }).display;
+    const matches = runSearch(display, l.searchQuery).matches;
+    const matchLine = matches[stepped.current] ?? -1;
+    const next = offsetForMatch(
+      l.offset,
+      matchLine,
+      display.length,
+      this.logsViewportHeight(),
+    );
+    this.applyLogsOffset({ offset: next });
   }
 
   private async downloadCurrentLogs(): Promise<void> {
