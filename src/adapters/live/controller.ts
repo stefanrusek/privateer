@@ -23,6 +23,7 @@ import {
   type TabId,
 } from '../../ui/detail-tabs.js';
 import { nextRegion, regionOrder } from '../../ui/navigation.js';
+import { computeFrame, type Frame } from '../../ui/layout-geometry.js';
 import type { PickerItem } from '../../ui/components/PickerOverlay.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
 import type { ClusterSummary } from '../../ui/components/HealthDashboard.js';
@@ -624,25 +625,30 @@ export class LiveController {
     }
   };
 
-  /** Rows available to the resource table (header, table header, command bar). */
-  visibleHeight(): number {
-    const usable = this.terminalRows - 5;
-    if (usable <= 0) {
-      return DEFAULT_VISIBLE_HEIGHT;
-    }
-    return Math.max(
-      3,
-      this.app.showDetail ? Math.floor(usable * 0.45) : usable,
-    );
+  /**
+   * The single layout-geometry source (Spec 02 §"Single source of truth").
+   * Every size/position below derives from this frame; the controller does no
+   * geometry arithmetic of its own.
+   */
+  frame(): Frame {
+    return computeFrame({
+      columns: this.terminalColumns,
+      rows: this.terminalRows,
+      sidebarRatio: this.app.sidebarRatio,
+      verticalRatio: this.app.verticalRatio,
+      showDetail: this.app.showDetail,
+    });
   }
 
-  /** Columns available to the resource table. */
+  /** Rows available to the resource table (= the list region inner height). */
+  visibleHeight(): number {
+    const h = this.frame().list.height;
+    return h > 0 ? h : DEFAULT_VISIBLE_HEIGHT;
+  }
+
+  /** Columns available to the resource table (= the list region inner width). */
   tableWidth(): number {
-    const sidebar = Math.max(
-      16,
-      Math.round(this.app.sidebarRatio * this.terminalColumns),
-    );
-    return Math.max(60, this.terminalColumns - sidebar - 2);
+    return this.frame().list.width;
   }
 
   terminalSize(): { columns: number; rows: number } {
@@ -2705,10 +2711,7 @@ export class LiveController {
   // -------------------------------------------------------------------------
 
   private sidebarWidthCols(): number {
-    return Math.max(
-      16,
-      Math.round(this.app.sidebarRatio * this.terminalColumns),
-    );
+    return this.frame().sidebar.width;
   }
 
   /** Replicates the Sidebar component's cursor-centered window math. */
@@ -2864,12 +2867,13 @@ export class LiveController {
 
   /** Row of the splitter between list and detail (1-based screen coords). */
   private splitterRow(): number {
-    const contentRows = Math.max(8, this.terminalRows - 3);
-    const listRows = Math.max(
-      4,
-      Math.round(contentRows * (1 - this.app.verticalRatio)),
-    );
-    return 2 + listRows;
+    // Derive from the single geometry source (the list│detail handle). The
+    // frame's handle row is 0-based; mouse coordinates are 1-based SGR.
+    const handle = this.frame().handles.vertical;
+    if (handle === null) {
+      return 0;
+    }
+    return handle.position + 1;
   }
 
   handleMouseDrag(x: number, y: number, dragging: boolean): void {

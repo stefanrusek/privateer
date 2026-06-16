@@ -45,6 +45,28 @@
 | Command bar | 1 row | No | Never hidden |
 | Header bar | 1 row | No | Never hidden |
 
+### 2.1 Geometry — single source of truth
+
+All region sizes and positions are computed by one pure module,
+`src/ui/layout-geometry.ts`. `computeFrame({ columns, rows, sidebarRatio,
+verticalRatio, showDetail })` returns the **inner content `Rect`** of every
+region (header, sidebar, list, detail, command bar) plus the two shared border
+**`Segment`** handles (sidebar│right vertical, list│detail horizontal). Every
+consumer derives from it — `controller.tableWidth()` = `frame.list.width`,
+`controller.visibleHeight()` = `frame.list.height`, the sidebar width =
+`frame.sidebar.width`, and the metrics chart width = `min(frame.detail.width,
+MAX_CHART_WIDTH)`. No consumer performs geometry arithmetic of its own.
+
+The frame is **border-aware**: it accounts for one column/row per frame edge and
+counts shared (collapsed) edges once. There is **no `max(60, …)`-style floor**
+that could exceed the real pane: when the terminal is too small, inner
+dimensions clamp toward documented minimums and content is **truncated**, never
+wrapped. The list and the metrics charts therefore never wrap or spill at any
+terminal size, detail pane open or closed. Ratios are clamped (sidebar
+0.1–0.4, vertical 0.2–0.8) and the sidebar inner width is floored at 18
+columns. (The collapsed-grid *renderer* that draws these `Rect`s with
+box-drawing glyphs is a later concern; this section governs the math only.)
+
 ---
 
 ## 3. Left Sidebar — Resource Tree

@@ -230,6 +230,9 @@ export function LiveApp({
           <MetricsTab
             resourceKind={detail.resource.kind}
             resourceName={detail.resource.name}
+            paneWidth={
+              frame.detail !== null ? frame.detail.width : frame.list.width
+            }
             tier={m.tier}
             capabilities={m.capabilities}
             cpuSeries={charts?.cpu ?? session?.cpu ?? []}
@@ -286,12 +289,11 @@ export function LiveApp({
   const termSize = controller.terminalSize();
   const rows = termSize.rows;
   const termCols = termSize.columns;
-  const contentRows = Math.max(8, rows - 3);
-  // verticalRatio is the detail pane's share of the split (Spec 02 §6.1).
-  const listRows = app.showDetail
-    ? Math.max(4, Math.round(contentRows * (1 - app.verticalRatio)))
-    : contentRows;
-  const detailRows = Math.max(4, contentRows - listRows);
+  // All region sizing derives from the single geometry source (Spec 02
+  // §"Single source of truth"); LiveApp does no layout arithmetic of its own.
+  const frame = controller.frame();
+  const listRows = frame.list.height;
+  const detailRows = frame.detail !== null ? frame.detail.height : 0;
 
   if (snapshot.picker !== null) {
     return (
@@ -345,9 +347,6 @@ export function LiveApp({
           )}
           renderDetail={() => (
             <Box height={detailRows} overflow="hidden" flexDirection="column">
-              {app.showDetail && (
-                <Text dimColor>{'╌'.repeat(Math.max(10, termCols - 36))}</Text>
-              )}
               {renderDetail()}
             </Box>
           )}

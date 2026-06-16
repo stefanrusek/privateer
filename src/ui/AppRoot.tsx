@@ -14,6 +14,7 @@ import { CommandBar } from './components/CommandBar.js';
 import { ContextSwitcher } from './components/ContextSwitcher.js';
 import { HelpOverlay } from './components/HelpOverlay.js';
 import { SIDEBAR_CATEGORIES } from './sidebar-data.js';
+import { computeFrame } from './layout-geometry.js';
 
 export interface AppRootCallbacks {
   onSelectKind: (kind: string) => void;
@@ -40,10 +41,9 @@ export interface AppRootProps {
   /** Command bar input text (rendered while the bar is focused). */
   inputText?: string;
   /**
-   * Real terminal dimensions. When provided, the sidebar width is derived
-   * from the actual column count (min 16) and the sidebar gets a viewport
-   * height of `rows - 3` (header + command bar + margin, min 5). When
-   * absent, layout assumes 80 columns and the sidebar is unwindowed.
+   * Real terminal dimensions. When provided, the sidebar width and its viewport
+   * height come from `computeFrame` (the single geometry source). When absent,
+   * layout assumes an 80×24 frame and the sidebar is unwindowed.
    */
   terminalSize?: { columns: number; rows: number };
   /**
@@ -64,14 +64,19 @@ export function AppRoot({
   terminalSize,
   commandBarContent,
 }: AppRootProps): React.ReactElement {
-  const sidebarWidthCols =
-    terminalSize === undefined
-      ? Math.round(state.sidebarRatio * 80)
-      : Math.max(16, Math.round(state.sidebarRatio * terminalSize.columns));
+  // Sidebar width comes from the single geometry source (Spec 02 §"Single
+  // source of truth"); no ad-hoc formula lives here. When the real terminal
+  // size is unknown, assume an 80×24 frame.
+  const frame = computeFrame({
+    columns: terminalSize?.columns ?? 80,
+    rows: terminalSize?.rows ?? 24,
+    sidebarRatio: state.sidebarRatio,
+    verticalRatio: state.verticalRatio,
+    showDetail: state.showDetail,
+  });
+  const sidebarWidthCols = frame.sidebar.width;
   const sidebarViewport =
-    terminalSize === undefined
-      ? {}
-      : { viewportHeight: Math.max(5, terminalSize.rows - 3) };
+    terminalSize === undefined ? {} : { viewportHeight: frame.sidebar.height };
 
   // Full-screen overlays replace the main layout entirely so the frame never
   // grows taller than the terminal (Ink cannot reclaim overflowed rows).

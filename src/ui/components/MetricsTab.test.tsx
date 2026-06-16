@@ -508,6 +508,88 @@ describe('MetricsTab — ChartPlaceholder with data', () => {
     // Should render the ASCII chart plot when data is present
     expect(lastFrame()).toContain('█');
   });
+
+  it('clamps chart lines to a narrow paneWidth (no wrap)', () => {
+    const cpuSeries = [
+      {
+        labels: {},
+        points: Array.from({ length: 80 }, (_, i) => ({
+          timestampMs: i * 1000,
+          value: 50 + i,
+        })),
+      },
+    ];
+    const { lastFrame } = render(
+      React.createElement(
+        MetricsTab,
+        baseProps({
+          resourceKind: 'Pod',
+          cpuSeries,
+          paneWidth: 24,
+        }),
+      ),
+    );
+    const frame = lastFrame() ?? '';
+    // Every rendered chart line (the ones carrying plot glyphs) stays within
+    // the 24-col pane.
+    const chartLines = frame.split('\n').filter((l) => /[█▁▂▃▄▅▆▇]/.test(l));
+    expect(chartLines.length).toBeGreaterThan(0);
+    for (const line of chartLines) {
+      expect(line.length).toBeLessThanOrEqual(24);
+    }
+  });
+
+  it('caps chart width at MAX_CHART_WIDTH on a very wide pane', () => {
+    const cpuSeries = [
+      {
+        labels: {},
+        points: Array.from({ length: 200 }, (_, i) => ({
+          timestampMs: i * 1000,
+          value: 50 + i,
+        })),
+      },
+    ];
+    const { lastFrame } = render(
+      React.createElement(
+        MetricsTab,
+        baseProps({
+          resourceKind: 'Pod',
+          cpuSeries,
+          paneWidth: 500,
+        }),
+      ),
+    );
+    const frame = lastFrame() ?? '';
+    // Capped at 64 columns regardless of the much wider pane.
+    const chartLines = frame.split('\n').filter((l) => /[█▁▂▃▄▅▆▇]/.test(l));
+    expect(chartLines.length).toBeGreaterThan(0);
+    for (const line of chartLines) {
+      expect(line.length).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it('ignores a non-positive paneWidth and falls back to the max width', () => {
+    const cpuSeries = [
+      {
+        labels: {},
+        points: [
+          { timestampMs: 0, value: 50 },
+          { timestampMs: 1000, value: 60 },
+        ],
+      },
+    ];
+    const { lastFrame } = render(
+      React.createElement(
+        MetricsTab,
+        baseProps({
+          resourceKind: 'Pod',
+          cpuSeries,
+          paneWidth: 0,
+        }),
+      ),
+    );
+    expect(lastFrame()).toContain('█');
+  });
 });
 
 // ---------------------------------------------------------------------------

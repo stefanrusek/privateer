@@ -31,6 +31,13 @@ export interface MetricsTabProps {
   readonly resourceKind: string;
   /** The resource name. */
   readonly resourceName: string;
+  /**
+   * Inner width of the detail pane (from the layout-geometry frame). Charts
+   * render at `min(paneWidth, MAX_CHART_WIDTH)` so they never wrap; defaults to
+   * `MAX_CHART_WIDTH` when the pane width is not supplied (Spec 02
+   * §"Content fits its pane").
+   */
+  readonly paneWidth?: number;
   /** Current metrics tier from discovery. */
   readonly tier: MetricsTier;
   /** Exporter capabilities (used for per-chart gating). */
@@ -106,13 +113,21 @@ interface ChartPlaceholderProps {
   readonly series: readonly MetricSeries[];
 }
 
-/** Width of rendered charts (Spec 06 §4.2 — fills the pane). */
-const CHART_WIDTH = 64;
+/**
+ * Upper bound on chart width (Spec 02 §"Content fits its pane"). The effective
+ * width is `min(paneWidth, MAX_CHART_WIDTH)`, threaded via context so charts
+ * never wrap when the detail pane is narrow.
+ */
+export const MAX_CHART_WIDTH = 64;
+
+/** Effective chart width, provided by MetricsTab from the layout frame. */
+const ChartWidthContext = React.createContext<number>(MAX_CHART_WIDTH);
 
 function ChartPlaceholder({
   title,
   series,
 }: ChartPlaceholderProps): React.ReactElement {
+  const chartWidth = React.useContext(ChartWidthContext);
   const firstSeries = series[0];
   const pointCount = firstSeries !== undefined ? firstSeries.points.length : 0;
   const hasData = series.length > 0 && pointCount > 0;
@@ -126,7 +141,7 @@ function ChartPlaceholder({
   }
   const chart = renderTimeseriesChart({
     series,
-    width: CHART_WIDTH,
+    width: chartWidth,
   });
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -439,6 +454,7 @@ function NoMetricsState(): React.ReactElement {
 export function MetricsTab({
   resourceKind,
   resourceName,
+  paneWidth,
   tier,
   capabilities,
   cpuSeries = [],
@@ -564,13 +580,20 @@ export function MetricsTab({
     }
   };
 
+  const chartWidth =
+    paneWidth !== undefined && paneWidth > 0
+      ? Math.min(paneWidth, MAX_CHART_WIDTH)
+      : MAX_CHART_WIDTH;
+
   return (
-    <Box flexDirection="column">
-      <Text bold>Metrics — {resourceName}</Text>
-      {sessionBanner}
-      {rangeSelector}
-      {renderCharts()}
-    </Box>
+    <ChartWidthContext.Provider value={chartWidth}>
+      <Box flexDirection="column">
+        <Text bold>Metrics — {resourceName}</Text>
+        {sessionBanner}
+        {rangeSelector}
+        {renderCharts()}
+      </Box>
+    </ChartWidthContext.Provider>
   );
 }
 
