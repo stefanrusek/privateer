@@ -263,6 +263,20 @@ A subtle indicator on the left of the input area shows current mode:
 
 Privateer uses a **modal input model** similar to vim, but deliberately minimal.
 
+The overarching rule: **`Tab` / `Shift+Tab` move *between* regions; the arrow
+keys act *within* the focused region.** Nothing else changes focus except a
+mouse click and opening the detail pane (which focuses it). In particular:
+
+- The arrow keys never jump focus to a different region.
+- In the **list**, `←` / `→` horizontally scroll the table (§5).
+- In the **detail** pane, `←` / `→` switch to the previous / next tab and
+  `↑` / `↓` scroll the tab content (Spec 04 §4.1).
+- In the **sidebar**, `←` / `→` collapse / expand (§8.4) — unchanged.
+- Opening the detail pane (Enter, `e`, `l`, second click on a selected row,
+  agent auto-open) sets focus to the detail pane, so the keys you type next go
+  to the thing you just opened (e.g. `/` in the Logs tab opens the Logs search,
+  not the global resource-list search).
+
 ### 8.1 Modes
 
 | Mode | Description |
@@ -279,11 +293,12 @@ Mode is shown in the command bar (detail deferred to Spec 04).
 | Key | Action |
 |---|---|
 | `?` | Toggle help overlay |
-| `q` | Quit |
+| `q` | Quit — from **every** region in normal mode (port-forward quit-confirm still applies). A literal `q` while a text input is active (search / command / YAML edit / Logs search) is typed, not a quit. |
+| `Escape` | Close the detail pane when it is open (focus returns to the list); cancel an active search / command / edit mode otherwise. `Escape` never quits the app. |
 | `/` | Focus search |
 | `n` | Open namespace picker |
 | `Space` | Focus command bar (agent input) |
-| `Tab` | Cycle focus: sidebar → list → detail |
+| `Tab` | Cycle focus between regions: sidebar → list → detail → sidebar (detail included only while it is open). Works from every region, **including** the detail pane. |
 | `Shift+Tab` | Cycle focus reverse |
 | `r` | Refresh current resource list |
 | `Ctrl+C` | Quit (always, any mode) |

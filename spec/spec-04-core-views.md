@@ -101,7 +101,12 @@ The tabbed container in the center bottom pane.
 - `✕` closes the detail pane (returns to hidden state)
 - Tabs that are unavailable for the resource type are hidden (not grayed out)
 - Active tab underlined
-- Tab keyboard nav: `1`–`6` or `Tab` / `Shift+Tab` when detail pane is focused
+- Tab keyboard nav (when the detail pane is focused): `←` / `→` switch to the
+  previous / next navigable tab (wrapping around), and number keys `1`–`6` jump
+  directly to a tab. `Tab` / `Shift+Tab` do **not** switch tabs — they cycle
+  keyboard focus between regions (Spec 02 §8.2). The navigable-tab list is the
+  available content tabs for the resource kind (§4.2) followed by the always-
+  present Agent tab.
 - An `answer` or `unknown` agent action auto-opens the detail pane with the Agent tab active if the pane is hidden (see Spec 07 §6)
 
 ### 4.2 Tab availability by resource type

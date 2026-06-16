@@ -5,6 +5,14 @@ import React from 'react';
 import { Sidebar } from '../../src/ui/components/Sidebar.js';
 import { SIDEBAR_CATEGORIES } from '../../src/ui/sidebar-data.js';
 import type { FocusRegion } from '../../src/ui/types.js';
+import { nextRegion, regionOrder } from '../../src/ui/navigation.js';
+import {
+  navigableTabsFor,
+  nextTab,
+  prevTab,
+  jumpTab,
+  type TabId,
+} from '../../src/ui/detail-tabs.js';
 
 // ---------------------------------------------------------------------------
 // Reset per-scenario state
@@ -124,35 +132,11 @@ let detailVisible = false;
 let focusWasSet = false;
 
 function computeNextFocus(current: FocusRegion, detail: boolean): FocusRegion {
-  if (detail) {
-    if (current === 'sidebar') {
-      return 'list';
-    }
-    if (current === 'list') {
-      return 'detail';
-    }
-    return 'sidebar';
-  }
-  if (current === 'sidebar') {
-    return 'list';
-  }
-  return 'sidebar';
+  return nextRegion(regionOrder(detail), current, false);
 }
 
 function computePrevFocus(current: FocusRegion, detail: boolean): FocusRegion {
-  if (detail) {
-    if (current === 'list') {
-      return 'sidebar';
-    }
-    if (current === 'detail') {
-      return 'list';
-    }
-    return 'detail';
-  }
-  if (current === 'list') {
-    return 'sidebar';
-  }
-  return 'list';
+  return nextRegion(regionOrder(detail), current, true);
 }
 
 Given('the layout has detail visible', function () {
@@ -193,4 +177,63 @@ When('I press Tab', function () {
 When('I press Shift+Tab', function () {
   focusWasSet = true;
   currentFocus = computePrevFocus(currentFocus, detailVisible);
+});
+
+// ---------------------------------------------------------------------------
+// Detail-pane tab navigation (chunk 01) — drives the pure detail-tabs module
+// the same way the controller does.
+// ---------------------------------------------------------------------------
+
+let detailKind = 'Pod';
+let detailHasPrometheus = false;
+let activeDetailTab: TabId = 'overview';
+
+Given(
+  'a {string} detail pane is open on tab {string}',
+  function (kind: string, tab: string) {
+    detailKind = kind;
+    activeDetailTab = tab as TabId;
+  },
+);
+
+Given('the detail pane has Prometheus metrics', function () {
+  detailHasPrometheus = true;
+});
+
+When('the detail pane moves to the next tab', function () {
+  const tabs = navigableTabsFor(detailKind, detailHasPrometheus);
+  const target = nextTab(tabs, activeDetailTab);
+  if (target !== null) {
+    activeDetailTab = target;
+  }
+});
+
+When('the detail pane moves to the previous tab', function () {
+  const tabs = navigableTabsFor(detailKind, detailHasPrometheus);
+  const target = prevTab(tabs, activeDetailTab);
+  if (target !== null) {
+    activeDetailTab = target;
+  }
+});
+
+When('the detail pane jumps to tab number {string}', function (n: string) {
+  const tabs = navigableTabsFor(detailKind, detailHasPrometheus);
+  const target = jumpTab(tabs, n);
+  if (target !== null) {
+    activeDetailTab = target;
+  }
+});
+
+Then('the active detail tab is {string}', function (tab: string) {
+  assert.equal(
+    activeDetailTab,
+    tab as TabId,
+    `Expected active detail tab "${tab}", got "${activeDetailTab}"`,
+  );
+});
+
+Before(function () {
+  detailKind = 'Pod';
+  detailHasPrometheus = false;
+  activeDetailTab = 'overview';
 });

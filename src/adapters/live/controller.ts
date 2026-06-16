@@ -16,8 +16,13 @@ import type { TableModel } from '../../ui/resource-table-model.js';
 import type { ColumnDef } from '../../resources/columns.js';
 import {
   getAvailableTabs,
+  navigableTabsFor,
+  prevTab,
+  nextTab,
+  jumpTab,
   type TabId,
-} from '../../ui/components/DetailPane.js';
+} from '../../ui/detail-tabs.js';
+import { nextRegion, regionOrder } from '../../ui/navigation.js';
 import type { PickerItem } from '../../ui/components/PickerOverlay.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
 import type { ClusterSummary } from '../../ui/components/HealthDashboard.js';
@@ -3134,8 +3139,17 @@ export class LiveController {
       this.bump();
       return;
     }
-    if (input === 'q' && this.app.focus !== 'detail') {
+    // `q` quits from every region in normal navigation mode. Text-entry modes
+    // (search/command/edit/namespace picker/Logs search) are handled earlier in
+    // the dispatch, so reaching here means `q` is a quit, not a literal char.
+    if (input === 'q') {
       this.quit();
+      return;
+    }
+    // Escape closes the detail pane from any region while it is open; it never
+    // quits. (Search/command/edit/overlay Escapes are consumed earlier.)
+    if (key.escape && this.app.showDetail) {
+      this.closeDetail();
       return;
     }
     if (input === '?') {
@@ -3166,7 +3180,8 @@ export class LiveController {
       this.bump();
       return;
     }
-    if (key.tab && this.app.focus !== 'detail') {
+    // Tab / Shift+Tab cycle regions from EVERY region including detail.
+    if (key.tab) {
       this.cycleFocus(key.shift);
       return;
     }
@@ -3217,15 +3232,8 @@ export class LiveController {
   }
 
   private cycleFocus(reverse: boolean): void {
-    const order: FocusRegion[] = this.app.showDetail
-      ? ['sidebar', 'list', 'detail']
-      : ['sidebar', 'list'];
-    const idx = order.indexOf(this.app.focus);
-    const next =
-      order[
-        (idx + (reverse ? order.length - 1 : 1) + order.length) % order.length
-      ] ?? 'sidebar';
-    this.setFocus(next);
+    const order = regionOrder(this.app.showDetail);
+    this.setFocus(nextRegion(order, this.app.focus, reverse));
   }
 
   private handleContextSwitcherInput(input: string, key: InkKey): void {
@@ -3425,12 +3433,9 @@ export class LiveController {
       this.bump();
       return;
     }
-    if (key.leftArrow) {
-      this.setFocus('sidebar');
-      return;
-    }
-    if (key.rightArrow && this.app.showDetail) {
-      this.setFocus('detail');
+    // List `←/→` no longer move focus. Horizontal scroll arrives in chunk 05;
+    // until then they are no-ops so `Tab` is the only way to leave the list.
+    if (key.leftArrow || key.rightArrow) {
       return;
     }
     if (input === 'g') {
@@ -3520,22 +3525,46 @@ export class LiveController {
   }
 
   private handleDetailInput(input: string, key: InkKey): void {
-    // DetailPane handles Tab/Shift+Tab/number tab navigation itself.
     if (
       this.detail?.yamlMode !== undefined &&
       this.detail.yamlMode !== 'read'
     ) {
       return;
     }
-    if (key.escape) {
-      this.closeDetail();
+    // Escape (close pane) is handled by the global dispatch before this runs.
+    if (this.detail === null) {
       return;
     }
+    // `←/→` switch tabs (previous/next, wrapping); `1`–`6` jump to a tab.
+    const tabs = navigableTabsFor(
+      this.detail.resource.kind,
+      this.metricsTier === 'prometheus',
+    );
     if (key.leftArrow) {
-      this.setFocus('list');
+      const target = prevTab(tabs, this.detail.tab);
+      if (target !== null) {
+        this.setDetailTab(target);
+      }
       return;
     }
-    if (this.detail?.tab === 'metrics' && (input === '[' || input === ']')) {
+    if (key.rightArrow) {
+      const target = nextTab(tabs, this.detail.tab);
+      if (target !== null) {
+        this.setDetailTab(target);
+      }
+      return;
+    }
+    const jumped = jumpTab(tabs, input);
+    if (jumped !== null) {
+      this.setDetailTab(jumped);
+      return;
+    }
+    // `↑/↓` scroll detail content — wired in chunk 03; no-op until then so they
+    // no longer leak to other regions.
+    if (key.upArrow || key.downArrow) {
+      return;
+    }
+    if (this.detail.tab === 'metrics' && (input === '[' || input === ']')) {
       const options = this.metricsRange.options;
       const idx = options.indexOf(this.metricsRange.selected);
       const next =
@@ -3545,10 +3574,6 @@ export class LiveController {
       if (next !== undefined) {
         this.setMetricsRange(next);
       }
-      return;
-    }
-    if (input === 'q') {
-      this.quit();
     }
   }
 }
