@@ -82,7 +82,15 @@ Responsibilities:
 **Error handling:**
 - 401/403 → surface permission error in UI, do not crash
 - Connection failure → retry with backoff, show degraded indicator
-- Context switch → tear down all streams, reinitialize
+- Context switch → tear down all streams, reinitialize. The switch is not
+  assumed instant: while reconnecting the header shows a transient
+  `connecting` status that clears on the first successful stream sync; a
+  connection failure surfaces a persistent "Could not connect" banner with
+  **[Retry]** and **[Switch context]** actions. The outgoing context's
+  `{ namespace, activeKind }` is remembered and the incoming context's
+  remembered values are restored (validated against the new cluster, falling
+  back to Overview / all-namespaces when absent), persisted in
+  `~/.config/p9r/layout.json` under a `contexts` map.
 
 ### 3.2 Watch Aggregator
 

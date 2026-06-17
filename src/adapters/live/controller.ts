@@ -39,6 +39,20 @@ import {
 } from '../../ui/detail-tabs.js';
 import { nextRegion, regionOrder, clampIndex } from '../../ui/navigation.js';
 import {
+  type ContextMemory,
+  remember as rememberContext,
+  restore as restoreContext,
+  parseContextMemory,
+  serializeContextMemory,
+} from '../../ui/context-memory.js';
+import {
+  type SwitchStatus,
+  beginSwitch,
+  onSync as switchOnSync,
+  onError as switchOnError,
+  retryTarget as switchRetryTarget,
+} from '../../ui/context-switch.js';
+import {
   buildContainerItems,
   buildLineLimitItems,
   LOGS_TOOLBAR_ACCELERATORS,
@@ -391,6 +405,7 @@ export class LiveController {
     showPassing: false,
   };
   private agentExchanges: AgentExchange[] = [];
+  private switchStatus: SwitchStatus = null;
   private contextFilter = '';
   private namespacePickIndex = 0;
 
@@ -475,6 +490,13 @@ export class LiveController {
   private layoutSaveDebounce: (() => void) | null = null;
   // Active detail tab remembered per resource kind (Spec 01 §4).
   private tabByKind = new Map<string, TabId>();
+  // Per-context {namespace, activeKind} memory (chunk 08 §4), persisted in
+  // layout.json under `contexts`. Pure logic lives in src/ui/context-memory.ts.
+  private contextMemory: ContextMemory = {};
+  // A remembered namespace whose validity could not yet be checked (namespaces
+  // had not loaded when the switch landed); applied once they do.
+  private pendingNamespaceRestore: { ctx: string; namespace: string } | null =
+    null;
 
   // Agent (Spec 07): engine loads lazily in the background after launch.
   private enginePromise: Promise<InferenceEngine> | null = null;
@@ -537,6 +559,7 @@ export class LiveController {
         verticalRatio?: number;
         collapsedCategories?: string[];
         tabByKind?: Record<string, TabId>;
+        contexts?: unknown;
       };
       this.app = {
         ...this.app,
@@ -553,6 +576,8 @@ export class LiveController {
       for (const [kind, tab] of Object.entries(raw.tabByKind ?? {})) {
         this.tabByKind.set(kind, tab);
       }
+      // Per-context memory — tolerant of the old schema (no `contexts` key).
+      this.contextMemory = parseContextMemory(raw.contexts);
     } catch {
       // Corrupt layout file — start fresh.
     }
@@ -571,6 +596,7 @@ export class LiveController {
               verticalRatio: this.app.verticalRatio,
               collapsedCategories: [...this.app.collapsedCategories],
               tabByKind: Object.fromEntries(this.tabByKind),
+              contexts: serializeContextMemory(this.contextMemory),
             },
             null,
             2,
@@ -994,6 +1020,9 @@ export class LiveController {
   }
 
   private onStoreChanged(): void {
+    // A store change is the first/ongoing sync from the new context's streams —
+    // it clears any `connecting` switch status (chunk 08 §3).
+    this.settleSwitchOnSync();
     // Coalesced refresh: badges for core kinds, namespaces, health summary.
     this.refreshNamespaces();
     this.refreshCoreBadges();
@@ -1004,6 +1033,15 @@ export class LiveController {
     this.bump();
   }
 
+  /** Clear `connecting` once the new context's first sync arrives. */
+  private settleSwitchOnSync(): void {
+    const next = switchOnSync(this.switchStatus, this.app.context);
+    if (next !== this.switchStatus) {
+      this.switchStatus = next;
+      this.app = { ...this.app, switchStatus: next };
+    }
+  }
+
   private refreshNamespaces(): void {
     const namespaces = this.store
       .list(this.app.context, 'Namespace')
@@ -1011,6 +1049,22 @@ export class LiveController {
       .sort();
     if (namespaces.join(',') !== this.app.allNamespaces.join(',')) {
       this.app = { ...this.app, allNamespaces: namespaces };
+    }
+    this.applyPendingNamespaceRestore(namespaces);
+  }
+
+  /**
+   * Apply a context's remembered namespace once its namespaces have loaded and
+   * the value still exists (chunk 08 §4); otherwise leave all-namespaces.
+   */
+  private applyPendingNamespaceRestore(namespaces: readonly string[]): void {
+    const pending = this.pendingNamespaceRestore;
+    if (pending?.ctx !== this.app.context) {
+      return;
+    }
+    if (namespaces.includes(pending.namespace)) {
+      this.pendingNamespaceRestore = null;
+      this.setNamespace(pending.namespace);
     }
   }
 
@@ -1100,8 +1154,21 @@ export class LiveController {
       const dimmed = new Set(this.app.dimmedKinds);
       dimmed.add(label);
       this.app = { ...this.app, dimmedKinds: dimmed };
+      // A non-RBAC stream error during a switch is a connection failure: surface
+      // the "Could not connect" banner with [Retry] / [Switch context]
+      // (chunk 08 §3). Forbidden is per-kind RBAC, not a connect failure.
+      this.failSwitchOnError(error.message);
     }
     this.bump();
+  }
+
+  /** Transition a `connecting` switch to `error` on a connection failure. */
+  private failSwitchOnError(reason: string): void {
+    const next = switchOnError(this.switchStatus, this.app.context, reason);
+    if (next !== this.switchStatus) {
+      this.switchStatus = next;
+      this.app = { ...this.app, switchStatus: next };
+    }
   }
 
   private matchesNamespaceFilter(
@@ -2015,6 +2082,44 @@ export class LiveController {
     this.bump();
   };
 
+  /**
+   * Re-run the connection for the context that failed to switch (chunk 08 §3,
+   * the error banner's [Retry]). Restarts the streams and returns the header to
+   * the `connecting` state. No-op unless we are in the error state.
+   */
+  retrySwitch = (): void => {
+    const target = switchRetryTarget(this.switchStatus);
+    if (target === null) {
+      return;
+    }
+    this.streams?.stop();
+    this.switchStatus = beginSwitch(target);
+    this.app = {
+      ...this.app,
+      forbiddenKinds: new Set(),
+      dimmedKinds: new Set(),
+      switchStatus: this.switchStatus,
+    };
+    this.startStreams();
+    void this.badgeSweep();
+    this.bump();
+  };
+
+  /**
+   * Dismiss the error banner and reopen the switcher so another context can be
+   * picked (chunk 08 §3, the banner's [Switch context]). The failed
+   * `switchStatus` is cleared so the banner does not linger behind the modal.
+   */
+  switchContextFromError = (): void => {
+    this.switchStatus = null;
+    this.app = {
+      ...this.app,
+      switchStatus: null,
+      contextSwitcherOpen: true,
+    };
+    this.bump();
+  };
+
   closeHelp = (): void => {
     this.app = { ...this.app, helpOpen: false };
     this.bump();
@@ -2033,7 +2138,29 @@ export class LiveController {
   // Context switching (Spec 01 §6 — tear down streams, reinitialize)
   // -------------------------------------------------------------------------
 
+  /**
+   * Kind labels valid for the active context: the static sidebar leaves plus
+   * any CRD-derived kinds (Strimzi's Kafka/KafkaTopic) detected for this
+   * cluster. Used to validate a remembered `activeKind` on restore (chunk 08
+   * §4) — a kind the new cluster lacks falls back to Overview.
+   */
+  private availableKindLabels(): string[] {
+    const labels: string[] = [];
+    for (const cat of SIDEBAR_CATEGORIES) {
+      for (const leaf of cat.children) {
+        labels.push(leaf.label);
+      }
+    }
+    if (this.kafkaDetected.deploymentType !== 'none') {
+      labels.push('Kafka', 'KafkaTopic');
+    }
+    return labels;
+  }
+
   private switchContext(ctx: string): void {
+    // Save the OUTGOING context's view before tearing it down (chunk 08 §4).
+    this.persistContextMemory(this.app.context);
+
     this.streams?.stop();
     this.kc.setCurrentContext(ctx);
     this.client = new KubeClientAdapter(this.kc);
@@ -2041,6 +2168,22 @@ export class LiveController {
     this.store.subscribe(() => {
       this.onStoreChanged();
     });
+
+    // Restore the INCOMING context's remembered view, validated against what
+    // exists now. Namespaces have not loaded yet, so the namespace is restored
+    // lazily once they do (pendingNamespaceRestore); the kind is validated
+    // against the static/CRD kind list immediately.
+    const restored = restoreContext(this.contextMemory, ctx, {
+      availableKinds: this.availableKindLabels(),
+      availableNamespaces: [],
+    });
+    const remembered = this.contextMemory[ctx];
+    this.pendingNamespaceRestore =
+      remembered !== undefined && remembered.namespace !== ''
+        ? { ctx, namespace: remembered.namespace }
+        : null;
+
+    this.switchStatus = beginSwitch(ctx);
     this.app = {
       ...this.app,
       context: ctx,
@@ -2049,15 +2192,31 @@ export class LiveController {
       badgeCounts: new Map(),
       dimmedKinds: new Set(),
       forbiddenKinds: new Set(),
-      activeKind: 'Overview',
+      activeKind: restored.activeKind,
       showDetail: false,
+      switchStatus: this.switchStatus,
     };
     this.detail = null;
     this.stopLogs();
     this.table = null;
     this.health = { summary: emptySummary(), rules: [], showPassing: false };
+    if (restored.activeKind === 'Overview') {
+      this.columns = [];
+    } else {
+      this.seedTable(restored.activeKind);
+    }
+    this.cursorKind = restored.activeKind;
     this.startStreams();
     void this.badgeSweep();
+  }
+
+  /** Record `ctx`'s current `{ namespace, activeKind }` in memory + persist. */
+  private persistContextMemory(ctx: string): void {
+    this.contextMemory = rememberContext(this.contextMemory, ctx, {
+      namespace: this.app.namespace,
+      activeKind: this.app.activeKind,
+    });
+    this.saveLayout();
   }
 
   // -------------------------------------------------------------------------
@@ -3906,6 +4065,25 @@ export class LiveController {
     // quits. (Search/command/edit/overlay Escapes are consumed earlier.)
     if (key.escape && this.app.showDetail) {
       this.closeDetail();
+      return;
+    }
+    // Error banner (chunk 08 §3): while a switch has failed, `r` retries the
+    // connection and `c` reopens the switcher. Checked before the global `c`
+    // and `r` so the banner's actions win while it is showing.
+    if (this.switchStatus?.phase === 'error') {
+      if (input === 'r') {
+        this.retrySwitch();
+        return;
+      }
+      if (input === 'c') {
+        this.switchContextFromError();
+        return;
+      }
+    }
+    // `c` opens the context switcher (chunk 08 §1). Text-entry modes are handled
+    // earlier in dispatch, so reaching here means `c` is the switch key.
+    if (input === 'c') {
+      this.openContextSwitcher();
       return;
     }
     if (input === '?') {

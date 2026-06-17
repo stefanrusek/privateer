@@ -393,7 +393,12 @@ export function LiveApp({
       <Box marginRight={1}>
         <Button
           id="header.context"
-          label={app.context}
+          label={
+            app.switchStatus?.phase === 'connecting'
+              ? `… connecting to ${app.switchStatus.ctx}`
+              : app.context
+          }
+          accelerator="c"
           onClick={controller.openContextSwitcher}
         />
       </Box>
@@ -432,6 +437,44 @@ export function LiveApp({
       </Box>
     </Box>
   );
+
+  // Command-bar override: a confirm dialog wins; otherwise a failed switch
+  // shows the persistent "Could not connect" banner with [Retry] / [Switch
+  // context] (chunk 08 §3). Both render inline in the command bar (Spec 04 §12).
+  const switchError =
+    app.switchStatus?.phase === 'error' ? app.switchStatus : null;
+  const commandBarOverride: React.ReactNode =
+    confirm !== null ? (
+      <ConfirmDialog
+        message={confirm.message}
+        confirmLabel={confirm.confirmLabel}
+        destructive={confirm.destructive}
+        onConfirm={controller.confirmAccept}
+        onCancel={controller.confirmCancel}
+      />
+    ) : switchError !== null ? (
+      <Box flexDirection="row">
+        <Text color="red">
+          ✗ Could not connect to {switchError.ctx}: {switchError.reason}
+        </Text>
+        <Box marginLeft={2}>
+          <Button
+            id="context.retry"
+            label="Retry"
+            accelerator="r"
+            onClick={controller.retrySwitch}
+          />
+        </Box>
+        <Box marginLeft={2}>
+          <Button
+            id="context.switch"
+            label="Switch context"
+            accelerator="c"
+            onClick={controller.switchContextFromError}
+          />
+        </Box>
+      </Box>
+    ) : null;
 
   const termSize = controller.terminalSize();
   const rows = termSize.rows;
@@ -498,18 +541,8 @@ export function LiveApp({
               {renderDetail()}
             </Box>
           )}
-          {...(confirm !== null
-            ? {
-                commandBarContent: (
-                  <ConfirmDialog
-                    message={confirm.message}
-                    confirmLabel={confirm.confirmLabel}
-                    destructive={confirm.destructive}
-                    onConfirm={controller.confirmAccept}
-                    onCancel={controller.confirmCancel}
-                  />
-                ),
-              }
+          {...(commandBarOverride !== null
+            ? { commandBarContent: commandBarOverride }
             : {})}
         />
       </Box>

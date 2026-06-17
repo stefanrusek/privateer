@@ -439,7 +439,8 @@ shell.
 
 ## 10. Context Switcher
 
-Triggered by `:ctx` command or clicking context name in command bar.
+Triggered by the **`c`** key, the `!ctx` command, or clicking the header
+**context** chip (`<Button>`).
 
 - Full-screen overlay (modal)
 - Lists all contexts from kubeconfig
@@ -447,6 +448,19 @@ Triggered by `:ctx` command or clicking context name in command bar.
 - Search/filter by typing
 - Select with Enter or click
 - Escape to cancel
+
+Selecting a context **closes the switcher immediately** and hands feedback to
+the header: it shows `… connecting to <ctx>` until the first stream sync clears
+it, or — on a connection failure — a persistent banner
+`✗ Could not connect to <ctx>: <reason>` with **[Retry]** (re-runs the
+connection) and **[Switch context]** (reopens the switcher). Switching to the
+current context is a no-op.
+
+Per-context memory: the `{ namespace, activeKind }` last viewed in each context
+is remembered and restored on return — validated against the new cluster, with
+Overview / all-namespaces fallbacks when a remembered kind/namespace is absent —
+persisted in `~/.config/p9r/layout.json` under a `contexts` map (tolerant of the
+old schema).
 
 ---
 

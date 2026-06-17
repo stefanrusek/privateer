@@ -24,6 +24,7 @@ const defaultState: AppState = {
   forbiddenKinds: new Set(),
   showDetail: false,
   contextSwitcherOpen: false,
+  switchStatus: null,
   helpOpen: false,
   sidebarRatio: 0.2,
   verticalRatio: 0.6,
