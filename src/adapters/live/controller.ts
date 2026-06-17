@@ -1974,13 +1974,17 @@ export class LiveController {
       return;
     }
     const now = this.clock.now();
+    const present = new Set<string>();
     for (const item of result.value.items) {
+      const namespace = item.metadata?.namespace ?? null;
+      const name = item.metadata?.name ?? '';
+      present.add(`${namespace ?? '~'}/${name}`);
       const event: ResourceEvent = {
         type: 'ADDED',
         apiVersion: item.apiVersion ?? '',
         kind: item.kind ?? kind,
-        namespace: item.metadata?.namespace ?? null,
-        name: item.metadata?.name ?? '',
+        namespace,
+        name,
         object: { ...item, kind: item.kind ?? kind },
         receivedAt: now,
       };
@@ -1991,6 +1995,18 @@ export class LiveController {
           this.table,
           { type: 'ADDED', resource },
           now - 10_000,
+        );
+      }
+    }
+    // Reconcile removals: drop stored resources of this kind absent from the
+    // fresh LIST (a DELETED event we never saw) and prune them from the table.
+    const removed = this.store.reconcileList(this.app.context, kind, present);
+    for (const resource of removed) {
+      if (this.matchesNamespaceFilter(resource.namespace, kind)) {
+        this.table = applyResourceEvent(
+          this.table,
+          { type: 'DELETED', resource },
+          now,
         );
       }
     }
@@ -4495,6 +4511,14 @@ export class LiveController {
         this.evaluateHealth();
       } else {
         this.seedTable(this.app.activeKind);
+        // A manual refresh re-LISTs from the cluster and reconciles removals so
+        // a resource deleted while a DELETED watch event was missed leaves the
+        // list. `seedTable` already kicks off `listSeed` for on-demand kinds;
+        // core kinds rebuild from the (possibly stale) store, so re-LIST them.
+        const kind = labelToKind(this.app.activeKind);
+        if (kind !== undefined && CORE_KINDS.has(kind)) {
+          void this.listSeed(kind);
+        }
       }
       this.bump();
       return;

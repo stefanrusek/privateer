@@ -169,6 +169,49 @@ export class StateStore {
     return [...ctx.values()];
   }
 
+  /**
+   * Reconcile the store against a fresh LIST result for a single `kind`.
+   *
+   * `present` is the set of `${namespace ?? '~'}/${name}` identities returned by
+   * the fresh LIST. Any stored resource of `kind` (optionally narrowed to
+   * `namespace`) whose identity is **not** in `present` is removed — it was
+   * deleted on the cluster while we were not watching (a missed DELETED event).
+   *
+   * This is the prune half of a refresh: callers upsert the fresh items via
+   * {@link applyEvent} (ADDED), then call this to drop the stragglers. Returns
+   * the removed ResourceObjects (for the table model to also prune). Schedules a
+   * single notification when anything was removed.
+   */
+  reconcileList(
+    contextName: string,
+    kind: string,
+    present: ReadonlySet<string>,
+    namespace?: string,
+  ): ResourceObject[] {
+    const ctx = this.contexts.get(contextName);
+    if (ctx === undefined) {
+      return [];
+    }
+    const removed: ResourceObject[] = [];
+    for (const [key, obj] of ctx) {
+      if (obj.kind !== kind) {
+        continue;
+      }
+      if (namespace !== undefined && obj.namespace !== namespace) {
+        continue;
+      }
+      const identity = `${obj.namespace ?? '~'}/${obj.name}`;
+      if (!present.has(identity)) {
+        ctx.delete(key);
+        removed.push(obj);
+      }
+    }
+    if (removed.length > 0) {
+      this.scheduleNotify();
+    }
+    return removed;
+  }
+
   // ---------------------------------------------------------------------------
   // Subscriptions
   // ---------------------------------------------------------------------------
