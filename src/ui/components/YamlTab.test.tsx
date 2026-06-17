@@ -316,6 +316,52 @@ describe('YamlTab $EDITOR pop-out', () => {
 });
 
 // ---------------------------------------------------------------------------
+// $EDITOR reentry seed (B2): the suspend round-trip remounts the tab; the
+// controller hands the externally-edited content back via reentryContent so the
+// editor reopens on it (in edit mode) instead of a frozen read view.
+// ---------------------------------------------------------------------------
+
+describe('YamlTab $EDITOR reentry seed', () => {
+  it('boots into edit mode on the reentry content and consumes the seed', async () => {
+    const onReentryConsumed = vi.fn();
+    const modes: string[] = [];
+    const { lastFrame } = renderTab(makeConfigMap({ env: 'staging' }), {
+      reentryContent: 'kind: ConfigMap\ndata:\n  env: reentered\n',
+      onReentryConsumed,
+      onModeChange: (m) => modes.push(m),
+    });
+    await ticks();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('EDITING');
+    expect(frame).toContain('reentered');
+    // The seed is consumed once and edit mode is re-asserted on mount.
+    expect(onReentryConsumed).toHaveBeenCalledOnce();
+    expect(modes).toEqual(['edit']);
+  });
+
+  it('surfaces a validation error when the reentry content is invalid', async () => {
+    const { lastFrame } = renderTab(makeConfigMap({ env: 'staging' }), {
+      reentryContent: 'key: {unclosed',
+      onReentryConsumed: vi.fn(),
+    });
+    await ticks();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('EDITING');
+    expect(frame).toContain('YAML error');
+  });
+
+  it('does not fire the reentry effect without a seed (read mode)', async () => {
+    const onReentryConsumed = vi.fn();
+    const { lastFrame } = renderTab(makeConfigMap({ env: 'staging' }), {
+      onReentryConsumed,
+    });
+    await ticks();
+    expect(lastFrame()).toContain('[Edit]');
+    expect(onReentryConsumed).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Dirty-boot seam + discard-confirm + cursor editing
 // ---------------------------------------------------------------------------
 

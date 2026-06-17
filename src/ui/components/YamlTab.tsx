@@ -17,7 +17,7 @@
  * stdin under ink-testing-library) stay covered.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { Key as InkKey } from 'ink';
 import { tokenizeLine } from '../../yaml/highlight.js';
@@ -91,6 +91,16 @@ export interface YamlTabProps {
   /** Called on every mode transition with the new mode's kind. */
   onModeChange?: (mode: 'read' | 'edit' | 'discard-confirm' | 'diff') => void;
   /**
+   * Content to boot straight into edit mode with after a `$EDITOR` pop-out
+   * (B2). The suspend round-trip unmounts and remounts this component, losing
+   * its in-memory edit buffer; the controller stashes the (possibly externally
+   * edited) YAML and hands it back here so the editor reopens on it — validated,
+   * live, and in edit mode — rather than dropping to a frozen read view.
+   */
+  reentryContent?: string;
+  /** Called once on mount after a {@link reentryContent} seed is consumed. */
+  onReentryConsumed?: () => void;
+  /**
    * Test-only: boot straight into a *dirty* edit buffer with this content.
    * (Preserves the coverage seam the discard-confirm / cursor-restore branches
    * depend on — stdin-driven dirtiness is unreliable under ink-testing-library.)
@@ -139,21 +149,47 @@ export function YamlTab({
   onOpenInEditor,
   onSave,
   onModeChange,
+  reentryContent,
+  onReentryConsumed,
   _testInitialContent,
   width = 80,
   offset = 0,
   viewportHeight,
 }: YamlTabProps): React.ReactElement {
+  // A `$EDITOR` reentry (B2) reopens the editor on the externally-edited content,
+  // validated like a normal Ctrl+E return; a test seed boots a dirty buffer; the
+  // default is read mode.
+  const reentryMode: TabMode | null =
+    reentryContent !== undefined
+      ? {
+          kind: 'edit',
+          edit: editStateFromContent(reentryContent),
+          baseYaml: yaml,
+          validationError: validateYaml(reentryContent),
+        }
+      : null;
   const initialMode: TabMode =
-    _testInitialContent !== undefined
+    reentryMode ??
+    (_testInitialContent !== undefined
       ? {
           kind: 'edit',
           edit: editStateFromContent(_testInitialContent),
           baseYaml: yaml,
           validationError: null,
         }
-      : { kind: 'read', revealed: false };
+      : { kind: 'read', revealed: false });
   const [mode, setMode] = useState<TabMode>(initialMode);
+  // On mount with a reentry seed, clear the controller's pending value and
+  // re-assert edit mode so the [EDIT] indicator / key routing stay consistent
+  // across the remount. Mount-only (deps are stable controller callbacks; the
+  // seed itself is captured once by useState above).
+  const hasReentry = reentryMode !== null;
+  useEffect(() => {
+    if (hasReentry) {
+      onReentryConsumed?.();
+      onModeChange?.('edit');
+    }
+  }, [hasReentry, onReentryConsumed, onModeChange]);
   // Edit-mode cursor-following scroll (both axes). Recomputed on every cursor
   // move via the pure `followCursor`; read mode uses the controller's offset.
   const [editScroll, setEditScroll] = useState<EditScroll>(SCROLL_ORIGIN);

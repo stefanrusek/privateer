@@ -166,7 +166,8 @@ export function LiveApp({
             viewportHeight={controller.detailScrollViewportHeight()}
           />
         );
-      case 'yaml':
+      case 'yaml': {
+        const reentry = controller.peekYamlEditReentry();
         return (
           <YamlTab
             yaml={controller.yamlForDetail()}
@@ -176,11 +177,14 @@ export function LiveApp({
             onReload={controller.yamlReload}
             onOpenInEditor={controller.yamlOpenInEditor}
             onModeChange={controller.yamlModeChanged}
+            {...(reentry !== null ? { reentryContent: reentry } : {})}
+            onReentryConsumed={controller.clearYamlEditReentry}
             width={controller.detailScrollWidth()}
             offset={controller.detailScrollOffset()}
             viewportHeight={controller.detailScrollViewportHeight()}
           />
         );
+      }
       case 'events':
         return (
           <EventsTab

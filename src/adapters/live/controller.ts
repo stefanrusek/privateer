@@ -499,6 +499,13 @@ export class LiveController {
   // Exec suspend/handover (Spec 05 §4.3): set by the launch adapter.
   private suspendRunner: (run: () => Promise<void>) => void = () => undefined;
 
+  // $EDITOR pop-out reentry (B2): the suspend round-trip unmounts the Ink tree
+  // and re-renders a fresh one, so the YamlTab's component-local edit state does
+  // not survive. After the external editor exits we stash its (possibly edited)
+  // content here so the remounted YamlTab can seed itself straight back into a
+  // live edit buffer; the component consumes and clears it on mount.
+  private yamlEditReentry: string | null = null;
+
   // Metrics (Spec 06): discovery tier + session buffer for the
   // metrics-server fallback (40-sample rolling window per pod/node).
   private metricsTier: MetricsTier = 'none';
@@ -2216,6 +2223,11 @@ export class LiveController {
               } catch {
                 // Best-effort cleanup.
               }
+              // Stash the result so the YamlTab that remounts after the suspend
+              // round-trip re-enters edit mode on the externally-edited content
+              // (B2). `result` reflects the on-disk edits when the read-back
+              // succeeded, or the original buffer when it failed.
+              this.yamlEditReentry = result;
               resolve(result);
               done();
             };
@@ -2224,6 +2236,19 @@ export class LiveController {
           }),
       );
     });
+  };
+
+  /**
+   * The content the YamlTab should seed an edit buffer with after a `$EDITOR`
+   * pop-out (B2), or `null` when there is no pending reentry. Pure read — the
+   * value is cleared via {@link clearYamlEditReentry} once the remounted tab has
+   * consumed it (on mount), so a render alone has no side effect.
+   */
+  peekYamlEditReentry = (): string | null => this.yamlEditReentry;
+
+  /** Clear the pending `$EDITOR` reentry once the YamlTab has consumed it. */
+  clearYamlEditReentry = (): void => {
+    this.yamlEditReentry = null;
   };
 
   toggleShowAllEvents = (): void => {
