@@ -101,17 +101,27 @@ function Toolbar(props: {
 function LogLine(props: {
   line: string;
   isCurrentMatch: boolean;
+  wrap: boolean;
 }): React.ReactElement {
-  const { line, isCurrentMatch } = props;
+  const { line, isCurrentMatch, wrap } = props;
   const color = INK_COLOR[colorizeLine(line)];
+  // With wrap off (the default), each line must occupy exactly one row, or a
+  // wrapped long line overflows the fixed-height pane and Yoga squeezes the
+  // chrome — collapsing the toolbar onto the status row (B2). `truncate-end`
+  // keeps it a single row; `wrap` honours the toggle.
+  const wrapMode = wrap ? 'wrap' : 'truncate-end';
   if (isCurrentMatch) {
     return (
-      <Text color={color} inverse>
+      <Text color={color} inverse wrap={wrapMode}>
         {line}
       </Text>
     );
   }
-  return <Text color={color}>{line}</Text>;
+  return (
+    <Text color={color} wrap={wrapMode}>
+      {line}
+    </Text>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -145,52 +155,71 @@ export function LogsTab(props: LogsTabProps): React.ReactElement {
 
   return (
     <Box flexDirection="column">
-      <Text bold>{title}</Text>
-      {toolbar !== undefined ? (
-        toolbar
-      ) : (
-        <Toolbar
-          container={container}
-          live={live}
-          lineLimitLabel={lineLimitLabel}
-          previous={previous}
-        />
-      )}
-      <Text dimColor>{stateHints.join('  ')}</Text>
-      <Text dimColor>{'─'.repeat(40)}</Text>
-      <Box flexDirection="column">
+      {/*
+        The chrome rows (title, toolbar, status hints, divider) must never
+        shrink: when log lines overflow the fixed-height pane, Yoga would
+        otherwise collapse a flex child to zero height and the toolbar would
+        render on top of the status row (B2). `flexShrink={0}` pins them.
+      */}
+      <Box flexDirection="column" flexShrink={0}>
+        <Text bold>{title}</Text>
+        {toolbar !== undefined ? (
+          toolbar
+        ) : (
+          <Toolbar
+            container={container}
+            live={live}
+            lineLimitLabel={lineLimitLabel}
+            previous={previous}
+          />
+        )}
+        <Text dimColor>{stateHints.join('  ')}</Text>
+        <Text dimColor>{'─'.repeat(40)}</Text>
+      </Box>
+      <Box flexDirection="column" flexShrink={1} overflow="hidden">
         {lines.length === 0 ? (
           <Text dimColor>No log lines</Text>
         ) : (
           lines.map((line, i) => (
-            <LogLine key={i} line={line} isCurrentMatch={i === matchLine} />
+            <LogLine
+              key={i}
+              line={line}
+              isCurrentMatch={i === matchLine}
+              wrap={wrap}
+            />
           ))
         )}
       </Box>
-      {!live && newLinesAvailable && (
-        <Text color="cyan">[Resume live tail ↓]</Text>
-      )}
-      {searchFocused ? (
-        <Text>
-          [Search logs: /{search.query}
-          {search.matches.length > 0
-            ? `  ${String(search.current + 1)}/${String(search.matches.length)}`
-            : search.query === ''
-              ? ''
-              : '  no matches'}
-          ]
-        </Text>
-      ) : (
-        search.query !== '' && (
-          <Text dimColor>
-            /{search.query}{' '}
+      {/* Footer affordances are also pinned so overflowing lines can't push or
+          collapse them (B2). */}
+      <Box flexDirection="column" flexShrink={0}>
+        {!live && newLinesAvailable && (
+          <Text color="cyan">[Resume live tail ↓]</Text>
+        )}
+        {searchFocused ? (
+          <Text>
+            [Search logs: /{search.query}
             {search.matches.length > 0
-              ? `${String(search.current + 1)}/${String(search.matches.length)}`
-              : 'no matches'}
+              ? `  ${String(search.current + 1)}/${String(search.matches.length)}`
+              : search.query === ''
+                ? ''
+                : '  no matches'}
+            ]
           </Text>
-        )
-      )}
-      {confirmation !== undefined && <Text color="green">{confirmation}</Text>}
+        ) : (
+          search.query !== '' && (
+            <Text dimColor>
+              /{search.query}{' '}
+              {search.matches.length > 0
+                ? `${String(search.current + 1)}/${String(search.matches.length)}`
+                : 'no matches'}
+            </Text>
+          )
+        )}
+        {confirmation !== undefined && (
+          <Text color="green">{confirmation}</Text>
+        )}
+      </Box>
     </Box>
   );
 }
