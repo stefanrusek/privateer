@@ -1,22 +1,19 @@
 ---
 name: tui-manual-test
 description: >-
-  Manually QA the p9r TUI by driving the REAL app under tmux against a live
-  cluster — generate a test plan from the keymap + specs, exercise every
-  keyboard/mouse/feature interaction, and find the bugs an automated gate can't
-  see (a hung quit, an off-by-one click, a dialog that won't confirm, a request
-  that always 409s, a render glitch), looping until a clean run. Reach for this
-  for ANY hands-on testing of the running TUI: a full pre-release QA pass, a
-  smoke test, "qa the app", "drive it and see what's broken", "make sure it
-  actually works in the terminal" — and PROACTIVELY as a quality gate during
-  implementation: after a build chunk lands, before declaring a feature done,
-  and before a release. A green `bun run gate` (coverage/lint/tests/BDD) proves
-  the tests pass, NOT that the app works — in this codebase 14 real bugs once
-  shipped through a 100%-coverage, 560-scenario-green gate and surfaced only by
-  driving the live terminal. This skill owns comprehensive and exploratory QA,
-  periodic implementation gates, and bug-hunting; for confirming that one
-  specific change works the built-in `verify` skill also applies. Trigger even
-  when the user only says "test it" or "make sure it works."
+  Use this skill whenever the goal is to confirm the p9r TUI actually works by
+  driving the REAL running app under tmux against a live cluster — not just that
+  `bun run gate` / unit tests / BDD are green. A passing gate means the tests
+  pass, NOT that the app behaves: in this repo 14 real bugs shipped through a
+  100%-coverage, green gate and surfaced only by driving the live terminal.
+  Reach for it for ANY of: a full pre-release QA or smoke pass ("qa the app",
+  "drive it and see what's broken"); exercising a feature end-to-end before
+  calling it done; verifying a just-landed chunk works in the running app, not
+  just that tests are green; or confirming a specific fix has its real effect by
+  actually performing the action — a child process truly dies, a label actually
+  lands on the cluster, a click confirms a dialog. Also use it to set up
+  tmux-driven key/mouse exercise of the bindings. Trigger even on a bare
+  "test it" or "make sure it works."
 ---
 
 # Manual TUI testing — drive the real thing
