@@ -4417,8 +4417,15 @@ export class LiveController {
       return;
     }
     if (input === '/') {
-      this.app = { ...this.app, mode: 'search', headerFocus: 'search' };
-      this.bump();
+      // `/` is scoped to the focused region (Spec 02 region model). It opens
+      // the global pod-list filter only from the list or sidebar. The Logs tab
+      // claims `/` for its in-pane search earlier; every other detail tab has
+      // no search, so `/` is a no-op there rather than leaking to the list
+      // filter (B4).
+      if (this.app.focus === 'list' || this.app.focus === 'sidebar') {
+        this.app = { ...this.app, mode: 'search', headerFocus: 'search' };
+        this.bump();
+      }
       return;
     }
     if (input === 'n') {

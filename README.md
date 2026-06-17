@@ -122,7 +122,6 @@ markers; regenerate from `renderKeymapMarkdown()`.
 | `Ctrl+C` | Quit (any mode) |
 | `Esc` | Close the detail pane / cancel input |
 | `?` | Toggle this help overlay |
-| `/` | Search the resource list |
 | `n` | Open the namespace picker |
 | `Space` | Focus the command bar (agent input) |
 | `!` | Focus the command bar (command input) |
@@ -143,12 +142,14 @@ markers; regenerate from `renderKeymapMarkdown()`.
 | `→ / Enter` | Expand category / select resource |
 | `h` | Collapse all categories |
 | `l` | Expand all categories |
+| `/` | Search the resource list |
 
 ### List
 
 | Key | Action |
 | --- | --- |
 | `↑ / ↓  (k / j)` | Move selection up / down |
+| `/` | Search the resource list |
 | `← / →` | Scroll columns horizontally |
 | `g g` | Jump to top |
 | `G` | Jump to bottom |

@@ -74,7 +74,6 @@ export const KEYMAP: readonly KeyGroup[] = [
       { keys: 'Ctrl+C', description: 'Quit (any mode)' },
       { keys: 'Esc', description: 'Close the detail pane / cancel input' },
       { keys: '?', description: 'Toggle this help overlay' },
-      { keys: '/', description: 'Search the resource list' },
       { keys: 'n', description: 'Open the namespace picker' },
       { keys: 'Space', description: 'Focus the command bar (agent input)' },
       { keys: '!', description: 'Focus the command bar (command input)' },
@@ -100,6 +99,7 @@ export const KEYMAP: readonly KeyGroup[] = [
       { keys: '→ / Enter', description: 'Expand category / select resource' },
       { keys: 'h', description: 'Collapse all categories' },
       { keys: 'l', description: 'Expand all categories' },
+      { keys: '/', description: 'Search the resource list' },
     ],
   },
   {
@@ -107,6 +107,7 @@ export const KEYMAP: readonly KeyGroup[] = [
     title: 'List',
     bindings: [
       { keys: '↑ / ↓  (k / j)', description: 'Move selection up / down' },
+      { keys: '/', description: 'Search the resource list' },
       { keys: '← / →', description: 'Scroll columns horizontally' },
       { keys: 'g g', description: 'Jump to top' },
       { keys: 'G', description: 'Jump to bottom' },
