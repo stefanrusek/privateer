@@ -192,13 +192,14 @@ done
 ### Step C — assemble the APNG
 
 `-delay 280` holds each frame 2.8 s; `-loop 0` loops forever. **The frame order
-is the story order, which is not the filename order** — the horizontal-scroll
-showcase (08) follows the pods list, then the agent tool call (06) comes before
-logs/metrics/yaml:
+is the story order, which is not the filename order** — the demo **leads with the
+dashboard** (so the poster/first frame shows the overhauled UI even where APNG
+isn't animated), the horizontal-scroll showcase (08) follows the pods list, then
+the agent tool call (06) precedes logs/metrics/yaml, and the first-run model
+chooser (01) is the closing frame:
 
 ```sh
 magick -delay 280 -loop 0 \
-  /tmp/demo-frames/01-chooser.png \
   /tmp/demo-frames/02-dashboard.png \
   /tmp/demo-frames/03-pods.png \
   /tmp/demo-frames/08-hscroll.png \
@@ -206,6 +207,7 @@ magick -delay 280 -loop 0 \
   /tmp/demo-frames/04-logs.png \
   /tmp/demo-frames/05-metrics.png \
   /tmp/demo-frames/07-yaml.png \
+  /tmp/demo-frames/01-chooser.png \
   APNG:docs/demo.png
 ```
 
