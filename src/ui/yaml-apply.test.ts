@@ -6,6 +6,7 @@ import {
   pressReload,
   reloadResolved,
   pressCancel,
+  reconcileResourceVersion,
   type ApplyStatus,
 } from './yaml-apply.js';
 
@@ -138,5 +139,47 @@ describe('yaml-apply: cancel / discard flow', () => {
     for (const status of statuses) {
       expect(pressCancel(status).outcome).toEqual({ kind: 'none' });
     }
+  });
+});
+
+describe('yaml-apply: reconcileResourceVersion (B1 regression)', () => {
+  it('overwrites the stale buffer version with the latest observed one', () => {
+    const buffer = {
+      kind: 'Deployment',
+      metadata: { name: 'web', resourceVersion: '100', labels: { a: 'b' } },
+      spec: { replicas: 3 },
+    };
+    const out = reconcileResourceVersion(buffer, '250');
+    expect(out).toEqual({
+      kind: 'Deployment',
+      metadata: { name: 'web', resourceVersion: '250', labels: { a: 'b' } },
+      spec: { replicas: 3 },
+    });
+    // The input is not mutated.
+    expect(buffer.metadata.resourceVersion).toBe('100');
+  });
+
+  it('injects the version when the buffer omitted it', () => {
+    const out = reconcileResourceVersion({ metadata: { name: 'x' } }, '7');
+    expect(out).toEqual({ metadata: { name: 'x', resourceVersion: '7' } });
+  });
+
+  it('returns the object unchanged when latest is empty', () => {
+    const buffer = { metadata: { resourceVersion: '5' } };
+    expect(reconcileResourceVersion(buffer, '')).toBe(buffer);
+  });
+
+  it('returns the object unchanged when there is no metadata object', () => {
+    const noMeta = { kind: 'Deployment' };
+    expect(reconcileResourceVersion(noMeta, '9')).toBe(noMeta);
+    const nullMeta = { metadata: null };
+    expect(reconcileResourceVersion(nullMeta, '9')).toBe(nullMeta);
+    const scalarMeta = { metadata: 'oops' };
+    expect(reconcileResourceVersion(scalarMeta, '9')).toBe(scalarMeta);
+  });
+
+  it('returns non-object inputs unchanged', () => {
+    expect(reconcileResourceVersion(null, '9')).toBeNull();
+    expect(reconcileResourceVersion(42, '9')).toBe(42);
   });
 });

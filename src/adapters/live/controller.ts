@@ -82,6 +82,7 @@ import {
   projectYamlReadLines,
   projectMetricsLines,
 } from '../../ui/detail-view.js';
+import { reconcileResourceVersion } from '../../ui/yaml-apply.js';
 import { MAX_CHART_WIDTH } from '../../ui/components/MetricsTab.js';
 import { projectLogsView, offsetForMatch } from '../../ui/logs-view.js';
 import { helpLines, scopeForFocus } from '../../ui/keymap.js';
@@ -2141,7 +2142,16 @@ export class LiveController {
         message: err instanceof Error ? err.message : 'invalid YAML',
       };
     }
-    const result = await this.client.replace(parsed as KubernetesObject);
+    // The edit buffer froze the resource's `resourceVersion` when the user
+    // pressed `e`; the watch has since advanced it in the store. Replace with
+    // the stale buffer version and the apiserver rejects every save as a 409
+    // even when nothing actually conflicts (B1). Reconcile to the latest
+    // version the live store has observed before the PUT — mirroring what
+    // `kubectl replace` does — so benign edits land while a genuinely newer
+    // concurrent write (one we haven't observed) still produces a real 409.
+    const latest = this.detail?.resource.resourceVersion ?? '';
+    const object = reconcileResourceVersion(parsed as KubernetesObject, latest);
+    const result = await this.client.replace(object);
     if (result.ok) {
       return { ok: true };
     }

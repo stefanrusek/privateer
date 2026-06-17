@@ -77,6 +77,46 @@ export type ReloadResult =
 const NONE: ApplyEffect = { kind: 'none' };
 const NO_OUTCOME: ApplyOutcome = { kind: 'none' };
 
+/**
+ * Reconcile the `metadata.resourceVersion` of a parsed edit buffer with the
+ * latest version the client has observed for the resource, returning a new
+ * object (the input is not mutated).
+ *
+ * Why: the in-pane editor snapshots the resource's YAML — including its
+ * `resourceVersion` — when the user presses `e`, and that snapshot is frozen
+ * for the whole edit session. Meanwhile the watch stream keeps advancing the
+ * resource's `resourceVersion` in the store (controllers touch `.status`,
+ * annotations, etc.). A `replace` (PUT) that carries the *stale* buffer version
+ * is rejected by the apiserver with `409 Conflict` even though the user's edit
+ * doesn't actually conflict with anyone — which is exactly how `kubectl
+ * replace` would behave if you hand-fed it an old version. The fix mirrors what
+ * `kubectl` does implicitly: send the freshest version the client knows about,
+ * so a benign edit lands. A genuine concurrent write (one the client hasn't
+ * observed yet, i.e. newer than `latest`) still loses the optimistic-concurrency
+ * race and correctly produces a 409 → reload-&-re-edit.
+ *
+ * `latest` is the version from the live store (kept current by the watch). When
+ * it is empty (resource never seen / no version), the buffer is returned
+ * unchanged so the apiserver decides. When the buffer has no `metadata` object,
+ * it is returned unchanged (the apiserver will reject it for other reasons).
+ */
+export function reconcileResourceVersion<T>(object: T, latest: string): T {
+  if (latest === '') {
+    return object;
+  }
+  if (object === null || typeof object !== 'object') {
+    return object;
+  }
+  const meta = (object as { metadata?: unknown }).metadata;
+  if (meta === null || meta === undefined || typeof meta !== 'object') {
+    return object;
+  }
+  return {
+    ...(object as object),
+    metadata: { ...meta, resourceVersion: latest },
+  } as T;
+}
+
 /** The starting status when the editor hands a valid `newYaml` to the diff. */
 export function initialApplyStatus(): ApplyStatus {
   return { kind: 'diff' };
