@@ -21,6 +21,7 @@ import {
   MeasuredRegistryProvider,
   Button,
   DropdownButton,
+  OVERLAY_LAYER,
   type DropdownItem,
 } from './measured-widgets.js';
 import { LOGS_TOOLBAR_ACCELERATORS } from '../../ui/logs-toolbar.js';
@@ -463,8 +464,19 @@ export function LiveApp({
         message={confirm.message}
         confirmLabel={confirm.confirmLabel}
         destructive={confirm.destructive}
+        selection={confirm.selection}
         onConfirm={controller.confirmAccept}
         onCancel={controller.confirmCancel}
+        renderButton={({ which, label, selected, destructive, onClick }) => (
+          <Button
+            id={`confirm.${which}`}
+            label={`[${label}]`}
+            layer={OVERLAY_LAYER}
+            active={selected}
+            onClick={onClick}
+            {...(destructive ? { color: 'red' } : {})}
+          />
+        )}
       />
     ) : switchError !== null ? (
       <Box flexDirection="row">

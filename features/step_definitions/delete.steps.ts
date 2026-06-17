@@ -11,7 +11,13 @@ import assert from 'node:assert/strict';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import type { PrivateerWorld } from '../support/world.js';
-import { ConfirmDialog } from '../../src/ui/components/ConfirmDialog.js';
+import {
+  ConfirmDialog,
+  confirmDialogKeyAction,
+  applyConfirmKeyAction,
+  type ConfirmSelection,
+} from '../../src/ui/components/ConfirmDialog.js';
+import type { Key } from 'ink';
 import {
   buildDeleteConfirmMessage,
   executeDelete,
@@ -35,6 +41,12 @@ declare module '../support/world.js' {
     deleteConfirmMessage: string;
     deleteResult: Result<void, string> | null;
     deleteClient: FakeKubeClient;
+    /**
+     * The controller-owned confirm selection (B3b). Input now routes through
+     * the controller (controller.handleConfirmInput), so these steps drive the
+     * same pure reducers it uses. Defaults to "confirm" so Enter confirms.
+     */
+    deleteConfirmSelection: ConfirmSelection;
   }
 }
 
@@ -49,17 +61,72 @@ Before(function (this: PrivateerWorld) {
   this.deleteConfirmMessage = '';
   this.deleteResult = null;
   this.deleteClient = new FakeKubeClient();
+  this.deleteConfirmSelection = 'confirm';
 });
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Yield to the macrotask queue so ink's useInput useEffect attaches. */
+/** Yield to the macrotask queue so ink's render useEffect attaches. */
 function yieldToEventLoop(): Promise<void> {
   return new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
+}
+
+/** Build a minimal Key object with all booleans false by default. */
+function makeKey(overrides: Partial<Key> = {}): Key {
+  return {
+    upArrow: false,
+    downArrow: false,
+    leftArrow: false,
+    rightArrow: false,
+    pageDown: false,
+    pageUp: false,
+    return: false,
+    escape: false,
+    ctrl: false,
+    shift: false,
+    tab: false,
+    backspace: false,
+    delete: false,
+    meta: false,
+    ...overrides,
+  };
+}
+
+/**
+ * Mirror controller.handleConfirmInput: route a keypress through the same pure
+ * reducers the live controller uses while a confirm dialog is open. Updates the
+ * world's selection and fires the confirm/cancel flags.
+ */
+function dispatchDeleteKey(
+  world: PrivateerWorld,
+  input: string,
+  key: Key,
+): void {
+  const action = confirmDialogKeyAction(input, key);
+  switch (action.kind) {
+    case 'cancel':
+      world.deleteOnCancelCalled = true;
+      return;
+    case 'confirm':
+      if (world.deleteConfirmSelection === 'confirm') {
+        world.deleteOnConfirmCalled = true;
+      } else {
+        world.deleteOnCancelCalled = true;
+      }
+      return;
+    case 'toggle':
+      world.deleteConfirmSelection = applyConfirmKeyAction(
+        action,
+        world.deleteConfirmSelection,
+      );
+      return;
+    case 'none':
+      return;
+  }
 }
 
 function renderDeleteDialog(
@@ -163,22 +230,18 @@ Given('a fake kube client with no resources', function (this: PrivateerWorld) {
 // ---------------------------------------------------------------------------
 
 When('I press Enter on the delete dialog', function (this: PrivateerWorld) {
-  this.deleteDialogStdin.write('\r');
+  dispatchDeleteKey(this, '', makeKey({ return: true }));
 });
 
 When(
   'I press the right arrow on the delete dialog',
-  async function (this: PrivateerWorld) {
-    // ESC + [C is the ANSI right-arrow sequence.
-    this.deleteDialogStdin.write('\x1B[C');
-    // Yield so React can process the setSelection state update before next step.
-    await yieldToEventLoop();
+  function (this: PrivateerWorld) {
+    dispatchDeleteKey(this, '', makeKey({ rightArrow: true }));
   },
 );
 
 When('I press Escape on the delete dialog', function (this: PrivateerWorld) {
-  // ESC character.
-  this.deleteDialogStdin.write('\x1B');
+  dispatchDeleteKey(this, '', makeKey({ escape: true }));
 });
 
 When(
@@ -230,33 +293,22 @@ Then(
 
 Then(
   'the delete dialog default selection is {string}',
-  async function (this: PrivateerWorld, selection: string) {
-    // The default selection is Cancel — confirmed by pressing Enter and checking
-    // which callback fires. We do a fresh render for this assertion.
-    let cancelCalled = false;
-    let confirmCalled = false;
-    const message = buildDeleteConfirmMessage('Pod', 'test', 'default');
-    const instance = render(
-      React.createElement(ConfirmDialog, {
-        message,
-        confirmLabel: 'Delete',
-        onConfirm: () => {
-          confirmCalled = true;
-        },
-        onCancel: () => {
-          cancelCalled = true;
-        },
-      }),
+  function (this: PrivateerWorld, selection: string) {
+    // The controller seeds selection='confirm', so an immediate Enter confirms.
+    const expected: ConfirmSelection =
+      selection === 'Cancel' ? 'cancel' : 'confirm';
+    assert.equal(
+      this.deleteConfirmSelection,
+      expected,
+      `Expected default selection ${expected}, got ${this.deleteConfirmSelection}`,
     );
-    // Yield so useInput's useEffect attaches the stdin listener.
-    await yieldToEventLoop();
-    instance.stdin.write('\r');
-    if (selection === 'Cancel') {
-      assert.ok(cancelCalled, 'Expected onCancel to be called for Cancel');
-      assert.ok(!confirmCalled, 'Expected onConfirm NOT to be called');
+    dispatchDeleteKey(this, '', makeKey({ return: true }));
+    if (expected === 'cancel') {
+      assert.ok(this.deleteOnCancelCalled, 'Expected onCancel to be called');
+      assert.ok(!this.deleteOnConfirmCalled, 'Expected onConfirm NOT called');
     } else {
-      assert.ok(confirmCalled, 'Expected onConfirm to be called for Confirm');
-      assert.ok(!cancelCalled, 'Expected onCancel NOT to be called');
+      assert.ok(this.deleteOnConfirmCalled, 'Expected onConfirm to be called');
+      assert.ok(!this.deleteOnCancelCalled, 'Expected onCancel NOT called');
     }
   },
 );

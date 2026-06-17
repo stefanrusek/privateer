@@ -27,6 +27,11 @@ import type {
   YamlReplaceResult,
   YamlReloadResult,
 } from '../../ui/components/YamlTab.js';
+import {
+  confirmDialogKeyAction,
+  applyConfirmKeyAction,
+  type ConfirmSelection,
+} from '../../ui/components/ConfirmDialog.js';
 import type { AppState, FocusRegion } from '../../ui/types.js';
 import type { TableModel } from '../../ui/resource-table-model.js';
 import type { ColumnDef } from '../../resources/columns.js';
@@ -243,6 +248,13 @@ export interface ConfirmState {
   destructive: boolean;
   confirmLabel: string;
   action: () => void;
+  /**
+   * Which button is highlighted (B3b). The controller owns this so keyboard
+   * (Enter/Tab/arrows) and the measured [confirm]/[cancel] Buttons share one
+   * source of truth — the dialog's own `useInput` raced the global one and
+   * leaked Enter to the list. Defaults to `confirm` so Enter confirms.
+   */
+  selection: ConfirmSelection;
 }
 
 export interface HealthState {
@@ -2226,6 +2238,46 @@ export class LiveController {
     action?.();
   };
 
+  /** Move the highlight between [confirm] and [cancel] (B3b). */
+  confirmSelect = (selection: ConfirmSelection): void => {
+    if (this.confirm === null || this.confirm.selection === selection) {
+      return;
+    }
+    this.confirm = { ...this.confirm, selection };
+    this.bump();
+  };
+
+  /**
+   * Keyboard for the active confirm dialog (B3b). Esc cancels; Enter activates
+   * the highlighted button (defaulting to confirm); ←/→/Tab toggle the
+   * highlight. The pure reducer in ConfirmDialog decides the action.
+   */
+  private handleConfirmInput(input: string, key: InkKey): void {
+    if (this.confirm === null) {
+      return;
+    }
+    const action = confirmDialogKeyAction(input, key);
+    switch (action.kind) {
+      case 'cancel':
+        this.confirmCancel();
+        return;
+      case 'confirm':
+        if (this.confirm.selection === 'confirm') {
+          this.confirmAccept();
+        } else {
+          this.confirmCancel();
+        }
+        return;
+      case 'toggle':
+        this.confirmSelect(
+          applyConfirmKeyAction(action, this.confirm.selection),
+        );
+        return;
+      case 'none':
+        return;
+    }
+  }
+
   selectContext = (ctx: string): void => {
     this.app = { ...this.app, contextSwitcherOpen: false };
     this.contextFilter = '';
@@ -2489,6 +2541,7 @@ export class LiveController {
       message: `Delete ${resource.kind} ${resource.name}?${scaleNote}`,
       destructive: true,
       confirmLabel: 'Delete',
+      selection: 'confirm',
       action: () => {
         void this.client
           .delete(resource.kind, resource.name, resource.namespace)
@@ -2874,6 +2927,7 @@ export class LiveController {
         message: `${String(active)} port-forward${active === 1 ? '' : 's'} active. Quit anyway?`,
         destructive: false,
         confirmLabel: 'Quit',
+        selection: 'confirm',
         action: () => {
           this.forceQuit();
         },
@@ -3849,6 +3903,20 @@ export class LiveController {
     return entries;
   }
 
+  /**
+   * Hit-test registry while a confirm dialog is open: only its measured
+   * [confirm]/[cancel] Buttons, so a click anywhere else is a no-op (B3b).
+   */
+  private confirmRegistry(): RegistrySnapshot {
+    const entries: HitEntry[] = [];
+    for (const entry of this.measured.values()) {
+      if (entry.id?.startsWith('confirm.') === true) {
+        entries.push(entry);
+      }
+    }
+    return entries;
+  }
+
   /** The session's mouse-mode lifecycle (enable / idempotent teardown). */
   mouseLifecycle(): MouseLifecycle {
     return this.mouse;
@@ -3875,12 +3943,19 @@ export class LiveController {
    */
   handleMouseEvent(event: MouseEvent): void {
     if (
-      this.confirm !== null ||
       this.app.helpOpen ||
       this.app.contextSwitcherOpen ||
       this.pfManagerOpen ||
       this.picker !== null
     ) {
+      return;
+    }
+    // While a confirm dialog is open, only its own [confirm]/[cancel] Buttons
+    // (registered on the overlay layer) may be clicked — everything else is
+    // swallowed so a click can't act on the list behind the prompt (B3b).
+    if (this.confirm !== null) {
+      const result = dispatchMouse(event, this.confirmRegistry(), null);
+      this.executeMouseAction(result.action);
       return;
     }
     const result = dispatchMouse(event, this.registry(), this.dragLatch);
@@ -4214,7 +4289,11 @@ export class LiveController {
     }
     // Ctrl+C is handled by Ink's exitOnCtrlC; q routing below.
     if (this.confirm !== null) {
-      // ConfirmDialog's own useInput handles selection.
+      // The confirm dialog owns all input while open. Routing through the
+      // controller (rather than the dialog's own `useInput`) keeps a single
+      // source of truth, so Enter no longer leaks past the dialog to the list
+      // (B3b). Enter activates the highlighted button; ←/→/Tab toggle it.
+      this.handleConfirmInput(input, key);
       return;
     }
     if (this.execPrompt !== null) {

@@ -133,6 +133,8 @@ export interface ButtonProps {
   children?: ReactNode;
   /** Active-state styling passthrough (e.g. an active tab). */
   active?: boolean;
+  /** Optional text colour (e.g. a destructive confirm button renders red). */
+  color?: string;
 }
 
 /**
@@ -150,6 +152,7 @@ export function Button({
   layer = 0,
   children,
   active = false,
+  color,
 }: ButtonProps): React.ReactElement {
   const ref = useRef<DOMElement>(null);
   useMeasuredEntry(
@@ -161,6 +164,7 @@ export function Button({
     [layer, label, accelerator],
   );
 
+  const colorProp = color !== undefined ? { color } : {};
   let content: ReactNode;
   if (children !== undefined) {
     content = children;
@@ -168,7 +172,7 @@ export function Button({
     content = renderSegments(renderAccelerator(label, accelerator), active);
   } else {
     content = (
-      <Text bold={active} underline={active}>
+      <Text bold={active} underline={active} {...colorProp}>
         {label ?? ''}
       </Text>
     );
