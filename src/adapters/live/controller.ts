@@ -632,26 +632,44 @@ export class LiveController {
   private saveLayout(): void {
     this.layoutSaveDebounce ??= this.clock.setTimeout(() => {
       this.layoutSaveDebounce = null;
-      try {
-        mkdirSync(join(homedir(), '.config', 'p9r'), { recursive: true });
-        writeFileSync(
-          this.layoutPath(),
-          JSON.stringify(
-            {
-              sidebarRatio: this.app.sidebarRatio,
-              verticalRatio: this.app.verticalRatio,
-              collapsedCategories: [...this.app.collapsedCategories],
-              tabByKind: Object.fromEntries(this.tabByKind),
-              contexts: serializeContextMemory(this.contextMemory),
-            },
-            null,
-            2,
-          ),
-        );
-      } catch {
-        // Persistence is best-effort.
-      }
+      this.writeLayoutNow();
     }, 1000);
+  }
+
+  /** Write `layout.json` synchronously now. The body of {@link saveLayout}. */
+  private writeLayoutNow(): void {
+    try {
+      mkdirSync(join(homedir(), '.config', 'p9r'), { recursive: true });
+      writeFileSync(
+        this.layoutPath(),
+        JSON.stringify(
+          {
+            sidebarRatio: this.app.sidebarRatio,
+            verticalRatio: this.app.verticalRatio,
+            collapsedCategories: [...this.app.collapsedCategories],
+            tabByKind: Object.fromEntries(this.tabByKind),
+            contexts: serializeContextMemory(this.contextMemory),
+          },
+          null,
+          2,
+        ),
+      );
+    } catch {
+      // Persistence is best-effort.
+    }
+  }
+
+  /**
+   * Flush any pending debounced layout write immediately. Called on quit so a
+   * just-changed namespace/kind (or any layout edit) inside the debounce window
+   * is not lost (BUG-C2).
+   */
+  private flushLayout(): void {
+    if (this.layoutSaveDebounce !== null) {
+      this.layoutSaveDebounce();
+      this.layoutSaveDebounce = null;
+    }
+    this.writeLayoutNow();
   }
 
   // -------------------------------------------------------------------------
@@ -670,6 +688,10 @@ export class LiveController {
     this.pf.onChange(() => {
       this.bump();
     });
+    // Restore the launch context's remembered namespace+kind (C2). The kind is
+    // validated against the static/CRD kind list now; the namespace is applied
+    // lazily by applyPendingNamespaceRestore once namespaces load.
+    this.restoreCurrentContext();
     this.startStreams();
 
     // Age refresh + animation ticks
@@ -753,6 +775,13 @@ export class LiveController {
   }
 
   dispose(): void {
+    // Capture the current context's view and flush any pending layout write so
+    // a namespace/kind change made just before quitting is persisted (C2).
+    this.contextMemory = rememberContext(this.contextMemory, this.app.context, {
+      namespace: this.app.namespace,
+      activeKind: this.app.activeKind,
+    });
+    this.flushLayout();
     this.streams?.stop();
     this.healthDebounce?.();
     this.healthDebounce = null;
@@ -2059,6 +2088,8 @@ export class LiveController {
     } else {
       this.seedTable(kindLabel);
     }
+    // Remember this context's active kind so it is restored next launch (C2).
+    this.persistContextMemory(this.app.context);
     this.bump();
   };
 
@@ -2080,6 +2111,8 @@ export class LiveController {
       this.seedTable(this.app.activeKind);
     }
     this.refreshCoreBadges();
+    // Remember this context's namespace so it is restored next launch (C2).
+    this.persistContextMemory(this.app.context);
     this.bump();
   };
 
@@ -2512,6 +2545,32 @@ export class LiveController {
     this.cursorKind = restored.activeKind;
     this.startStreams();
     void this.badgeSweep();
+  }
+
+  /**
+   * Apply the current (launch) context's remembered view (C2). Mirrors the
+   * restore half of {@link switchContext} but for the context already loaded at
+   * construction: the kind is validated immediately; the namespace is deferred
+   * to {@link applyPendingNamespaceRestore} since namespaces have not loaded.
+   */
+  private restoreCurrentContext(): void {
+    const ctx = this.app.context;
+    const restored = restoreContext(this.contextMemory, ctx, {
+      availableKinds: this.availableKindLabels(),
+      availableNamespaces: [],
+    });
+    const remembered = this.contextMemory[ctx];
+    this.pendingNamespaceRestore =
+      remembered !== undefined && remembered.namespace !== ''
+        ? { ctx, namespace: remembered.namespace }
+        : null;
+    if (restored.activeKind !== this.app.activeKind) {
+      this.app = { ...this.app, activeKind: restored.activeKind };
+      this.cursorKind = restored.activeKind;
+      if (restored.activeKind !== 'Overview') {
+        this.seedTable(restored.activeKind);
+      }
+    }
   }
 
   /** Record `ctx`'s current `{ namespace, activeKind }` in memory + persist. */
