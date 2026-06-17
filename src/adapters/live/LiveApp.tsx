@@ -182,6 +182,15 @@ export function LiveApp({
             width={controller.detailScrollWidth()}
             offset={controller.detailScrollOffset()}
             viewportHeight={controller.detailScrollViewportHeight()}
+            renderDiscardButton={({ which, label, selected, onClick }) => (
+              <Button
+                id={`yaml.discard.${which}`}
+                label={`[${label}]`}
+                onClick={onClick}
+                active={selected}
+                color={which === 'confirm' ? 'red' : 'green'}
+              />
+            )}
           />
         );
       }

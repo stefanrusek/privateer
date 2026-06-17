@@ -45,6 +45,12 @@ import {
 import { projectYamlReadLines } from '../detail-view.js';
 import { ScrollableLines } from './ScrollableLines.js';
 import {
+  confirmDialogKeyAction,
+  applyConfirmKeyAction,
+  type ConfirmSelection,
+} from './ConfirmDialog.js';
+import { isLeakedMouseInput } from '../../input/mouse.js';
+import {
   initialApplyStatus,
   pressApply,
   applyResolved,
@@ -116,6 +122,64 @@ export interface YamlTabProps {
    * its own — see {@link followCursor}.)
    */
   viewportHeight?: number;
+  /**
+   * Injected by the adapter to render the discard-confirm `[Yes]`/`[No]` as
+   * measured, clickable Buttons (mirrors {@link ConfirmDialog}'s `renderButton`).
+   * The default plain-`<Text>` renderer keeps the component testable under
+   * ink-testing-library without the adapter's measure/register glue.
+   */
+  renderDiscardButton?: DiscardButtonRenderer;
+}
+
+/**
+ * Renders one discard-confirm button. `which` is `confirm` for `[Yes]`
+ * (discard) and `cancel` for `[No]` (keep editing).
+ */
+export type DiscardButtonRenderer = (args: {
+  which: ConfirmSelection;
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+}) => React.ReactNode;
+
+/**
+ * Pure decision for a keypress while the discard-confirm prompt is open.
+ * Mirrors the delete confirm (Enter activates the highlighted choice, arrows /
+ * Tab toggle, Esc cancels) and additionally honors the documented `y`/`n`
+ * accelerators regardless of the current selection. Exported for unit testing.
+ */
+export type DiscardConfirmAction =
+  | { kind: 'discard' }
+  | { kind: 'keep' }
+  | { kind: 'select'; selection: ConfirmSelection }
+  | { kind: 'none' };
+
+export function discardConfirmKeyAction(
+  input: string,
+  key: InkKey,
+  selection: ConfirmSelection,
+): DiscardConfirmAction {
+  // Documented accelerators win outright (a `y`/`n` always decides).
+  if (input === 'y' || input === 'Y') {
+    return { kind: 'discard' };
+  }
+  if (input === 'n' || input === 'N') {
+    return { kind: 'keep' };
+  }
+  const action = confirmDialogKeyAction(input, key);
+  if (action.kind === 'cancel') {
+    return { kind: 'keep' };
+  }
+  if (action.kind === 'confirm') {
+    return selection === 'confirm' ? { kind: 'discard' } : { kind: 'keep' };
+  }
+  if (action.kind === 'toggle') {
+    return {
+      kind: 'select',
+      selection: applyConfirmKeyAction(action, selection),
+    };
+  }
+  return { kind: 'none' };
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +197,12 @@ interface EditModeState {
 type TabMode =
   | { kind: 'read'; revealed: boolean }
   | EditModeState
-  | { kind: 'discard-confirm'; edit: EditState; baseYaml: string }
+  | {
+      kind: 'discard-confirm';
+      edit: EditState;
+      baseYaml: string;
+      selection: ConfirmSelection;
+    }
   | { kind: 'diff'; edit: EditState; baseYaml: string; status: ApplyStatus };
 
 // ---------------------------------------------------------------------------
@@ -155,6 +224,7 @@ export function YamlTab({
   width = 80,
   offset = 0,
   viewportHeight,
+  renderDiscardButton = defaultRenderDiscardButton,
 }: YamlTabProps): React.ReactElement {
   // A `$EDITOR` reentry (B2) reopens the editor on the externally-edited content,
   // validated like a normal Ctrl+E return; a test seed boots a dirty buffer; the
@@ -204,6 +274,15 @@ export function YamlTab({
   }
 
   useInput((input, key) => {
+    // SGR mouse reports leak past Ink's filter as the bare CSI body
+    // (`[<0;74;15M`); the real click is handled off raw stdin by the controller's
+    // MouseRouter. Drop the leaked payload here too — otherwise its bytes are
+    // typed into the edit buffer and its leading ESC is misread as a cancel
+    // (the controller filters the same way for its own keymap, see
+    // isLeakedMouseInput).
+    if (isLeakedMouseInput(input)) {
+      return;
+    }
     if (mode.kind === 'read') {
       if (input === 'e') {
         enterEditMode();
@@ -221,16 +300,7 @@ export function YamlTab({
         handleEditKey(mode, input, key);
       }
     } else if (mode.kind === 'discard-confirm') {
-      if (input === 'y' || input === 'Y') {
-        transition({ kind: 'read', revealed: false });
-      } else if (input === 'n' || input === 'N' || key.escape) {
-        transition({
-          kind: 'edit',
-          edit: mode.edit,
-          baseYaml: mode.baseYaml,
-          validationError: null,
-        });
-      }
+      handleDiscardKey(mode, input, key);
     }
     // diff mode: keys are handled by DiffView's own useInput.
   });
@@ -278,9 +348,48 @@ export function YamlTab({
         kind: 'discard-confirm',
         edit: current.edit,
         baseYaml: current.baseYaml,
+        // Default to the discard action so Enter confirms the discard (mirrors
+        // the delete confirm's controlled selection).
+        selection: 'confirm',
       });
     } else {
       transition({ kind: 'read', revealed: false });
+    }
+  }
+
+  function discardChanges(): void {
+    transition({ kind: 'read', revealed: false });
+  }
+
+  function keepEditing(
+    current: Extract<TabMode, { kind: 'discard-confirm' }>,
+  ): void {
+    transition({
+      kind: 'edit',
+      edit: current.edit,
+      baseYaml: current.baseYaml,
+      validationError: null,
+    });
+  }
+
+  function handleDiscardKey(
+    current: Extract<TabMode, { kind: 'discard-confirm' }>,
+    input: string,
+    key: InkKey,
+  ): void {
+    const action = discardConfirmKeyAction(input, key, current.selection);
+    switch (action.kind) {
+      case 'discard':
+        discardChanges();
+        return;
+      case 'keep':
+        keepEditing(current);
+        return;
+      case 'select':
+        setMode({ ...current, selection: action.selection });
+        return;
+      case 'none':
+        return;
     }
   }
 
@@ -473,16 +582,25 @@ export function YamlTab({
 
   // ── Discard confirm ──────────────────────────────────────────────────────
   if (mode.kind === 'discard-confirm') {
+    const discardMode = mode;
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" gap={2}>
           <Text>Discard changes?</Text>
-          <Text color="red" underline>
-            [Yes]
-          </Text>
-          <Text color="green" underline>
-            [No]
-          </Text>
+          {renderDiscardButton({
+            which: 'confirm',
+            label: 'Yes',
+            selected: discardMode.selection === 'confirm',
+            onClick: discardChanges,
+          })}
+          {renderDiscardButton({
+            which: 'cancel',
+            label: 'No',
+            selected: discardMode.selection === 'cancel',
+            onClick: () => {
+              keepEditing(discardMode);
+            },
+          })}
         </Box>
       </Box>
     );
@@ -512,6 +630,27 @@ export function YamlTab({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Default (test-mode) discard button: a styled, non-clickable `<Text>`. */
+function defaultRenderDiscardButton({
+  which,
+  label,
+  selected,
+}: {
+  which: ConfirmSelection;
+  label: string;
+  selected: boolean;
+}): React.ReactNode {
+  return (
+    <Text
+      color={which === 'confirm' ? 'red' : 'green'}
+      underline
+      bold={selected}
+    >
+      [{label}]
+    </Text>
+  );
+}
 
 function toReplaceEvent(
   result: YamlReplaceResult,

@@ -4,10 +4,14 @@ import React from 'react';
 import jsYaml from 'js-yaml';
 import {
   YamlTab,
+  discardConfirmKeyAction,
   type YamlTabProps,
   type YamlReplaceResult,
   type YamlReloadResult,
 } from './YamlTab.js';
+import { Text } from 'ink';
+import type { Key as InkKey } from 'ink';
+import type { ConfirmSelection } from './ConfirmDialog.js';
 import type { KubernetesObject } from '../../core/types.js';
 import { safeWrite, tick } from '../../../test/ink-stdin.js';
 
@@ -420,6 +424,158 @@ describe('YamlTab dirty buffer (test seam)', () => {
     });
     await safeWrite(stdin, '\x13');
     expect(lastFrame()).toContain('YAML error');
+  });
+
+  it('ignores leaked SGR mouse bytes in the edit buffer', async () => {
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }), {
+      _testInitialContent: 'kind: Pod\n',
+    });
+    // A leaked SGR report would otherwise type its digits into the buffer.
+    await safeWrite(stdin, '[<0;74;15M');
+    expect(lastFrame()).not.toContain('74;15');
+    expect(lastFrame()).toContain('kind: Pod');
+  });
+
+  it('an unrelated key leaves the discard prompt up', async () => {
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }), {
+      _testInitialContent: DIRTY,
+    });
+    await safeWrite(stdin, '\x1B'); // → discard-confirm
+    await safeWrite(stdin, 'z'); // not y/n/arrow/Enter/Esc → no-op
+    expect(lastFrame()).toContain('Discard changes?');
+  });
+
+  it('Enter confirms the discard (default selection is Yes)', async () => {
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }), {
+      _testInitialContent: DIRTY,
+    });
+    await safeWrite(stdin, '\x1B'); // → discard-confirm
+    await safeWrite(stdin, '\r'); // Enter activates highlighted [Yes]
+    expect(lastFrame()).toContain('[Edit]');
+    expect(lastFrame()).not.toContain('Discard changes?');
+  });
+
+  it('arrow toggles to No so Enter keeps editing', async () => {
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }), {
+      _testInitialContent: DIRTY,
+    });
+    await safeWrite(stdin, '\x1B'); // → discard-confirm
+    await safeWrite(stdin, '\x1B[C'); // right → select No
+    await safeWrite(stdin, '\r'); // Enter on No keeps editing
+    expect(lastFrame()).toContain('EDITING');
+  });
+
+  it('renderDiscardButton receives selection + a working onClick for [Yes]', async () => {
+    const clicks = new Map<ConfirmSelection, () => void>();
+    const seen: { which: ConfirmSelection; selected: boolean }[] = [];
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }), {
+      _testInitialContent: DIRTY,
+      renderDiscardButton: ({ which, label, selected, onClick }) => {
+        clicks.set(which, onClick);
+        seen.push({ which, selected });
+        return <Text key={which}>{`[${label}${selected ? '*' : ''}]`}</Text>;
+      },
+    });
+    await safeWrite(stdin, '\x1B'); // → discard-confirm; renderDiscardButton runs
+    // Default selection highlights [Yes].
+    expect(seen).toContainEqual({ which: 'confirm', selected: true });
+    expect(seen).toContainEqual({ which: 'cancel', selected: false });
+    // Invoking the [Yes] click handler discards (mirrors a mouse click).
+    clicks.get('confirm')?.();
+    await tick();
+    expect(lastFrame()).toContain('[Edit]');
+    expect(lastFrame()).not.toContain('Discard changes?');
+  });
+
+  it('clicking [No] keeps editing (renderDiscardButton onClick)', async () => {
+    const clicks = new Map<ConfirmSelection, () => void>();
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }), {
+      _testInitialContent: DIRTY,
+      renderDiscardButton: ({ which, onClick }) => {
+        clicks.set(which, onClick);
+        return <Text key={which}>{which}</Text>;
+      },
+    });
+    await safeWrite(stdin, '\x1B'); // → discard-confirm
+    clicks.get('cancel')?.();
+    await tick();
+    expect(lastFrame()).toContain('EDITING');
+  });
+});
+
+describe('discardConfirmKeyAction', () => {
+  const key = (over: Partial<InkKey> = {}): InkKey => {
+    const base: InkKey = {
+      upArrow: false,
+      downArrow: false,
+      leftArrow: false,
+      rightArrow: false,
+      pageDown: false,
+      pageUp: false,
+      return: false,
+      escape: false,
+      ctrl: false,
+      shift: false,
+      tab: false,
+      backspace: false,
+      delete: false,
+      meta: false,
+    };
+    return { ...base, ...over };
+  };
+
+  it('y / Y always discards regardless of selection', () => {
+    expect(discardConfirmKeyAction('y', key(), 'cancel')).toEqual({
+      kind: 'discard',
+    });
+    expect(discardConfirmKeyAction('Y', key(), 'cancel')).toEqual({
+      kind: 'discard',
+    });
+  });
+
+  it('n / N always keeps editing regardless of selection', () => {
+    expect(discardConfirmKeyAction('n', key(), 'confirm')).toEqual({
+      kind: 'keep',
+    });
+    expect(discardConfirmKeyAction('N', key(), 'confirm')).toEqual({
+      kind: 'keep',
+    });
+  });
+
+  it('Escape cancels (keep editing)', () => {
+    expect(
+      discardConfirmKeyAction('', key({ escape: true }), 'confirm'),
+    ).toEqual({ kind: 'keep' });
+  });
+
+  it('Enter activates the highlighted choice', () => {
+    expect(
+      discardConfirmKeyAction('', key({ return: true }), 'confirm'),
+    ).toEqual({ kind: 'discard' });
+    expect(
+      discardConfirmKeyAction('', key({ return: true }), 'cancel'),
+    ).toEqual({
+      kind: 'keep',
+    });
+  });
+
+  it('arrows / Tab toggle the selection', () => {
+    expect(
+      discardConfirmKeyAction('', key({ rightArrow: true }), 'confirm'),
+    ).toEqual({ kind: 'select', selection: 'cancel' });
+    expect(
+      discardConfirmKeyAction('', key({ leftArrow: true }), 'cancel'),
+    ).toEqual({ kind: 'select', selection: 'confirm' });
+    expect(discardConfirmKeyAction('\t', key(), 'confirm')).toEqual({
+      kind: 'select',
+      selection: 'cancel',
+    });
+  });
+
+  it('an unrelated key is a no-op', () => {
+    expect(discardConfirmKeyAction('z', key(), 'confirm')).toEqual({
+      kind: 'none',
+    });
   });
 });
 
