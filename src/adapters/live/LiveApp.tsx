@@ -189,6 +189,12 @@ export function LiveApp({
               <Button
                 id={`yaml.discard.${which}`}
                 label={`[${label}]`}
+                // Register on the overlay layer (mirrors the delete
+                // ConfirmDialog) so the discard `[Yes]`/`[No]` win the hit-test
+                // over the YamlTab detail region beneath even if a future
+                // higher-layer region is added — clicks always route to the
+                // prompt, never the editor below it.
+                layer={OVERLAY_LAYER}
                 onClick={onClick}
                 active={selected}
                 color={which === 'confirm' ? 'red' : 'green'}
