@@ -87,6 +87,7 @@ import {
 } from '../../ui/layout-geometry.js';
 import {
   dispatch as dispatchMouse,
+  entriesEqual,
   type Action as MouseAction,
   type DragLatch,
   type Entry as HitEntry,
@@ -3732,18 +3733,32 @@ export class LiveController {
     if (id === undefined) {
       return;
     }
-    this.measured.set(id, entry);
+    // Always store the latest handler (looked up by id at press time — a fresh
+    // closure with identical geometry must still fire the current callback).
     if (onClick !== undefined) {
       this.buttonHandlers.set(id, onClick);
+    }
+    const prev = this.measured.get(id);
+    this.measured.set(id, entry);
+    // Idempotent at the seam: a re-register that lands a value-equal entry must
+    // NOT churn the snapshot, or the measured wrappers' commit-time re-register
+    // would notify `useSyncExternalStore` → re-render → re-register forever.
+    // Real changes (rect moved on resize, new id, new selection) still notify.
+    if (prev !== undefined && entriesEqual(prev, entry)) {
+      return;
     }
     this.bump();
   };
 
   /** Remove a measured hit-target on unmount. */
   unregisterMeasured = (id: string): void => {
-    this.measured.delete(id);
+    const had = this.measured.delete(id);
     this.buttonHandlers.delete(id);
-    this.bump();
+    // Only notify when something was actually removed (a no-op delete of an
+    // already-absent id must not churn the snapshot).
+    if (had) {
+      this.bump();
+    }
   };
 
   /**

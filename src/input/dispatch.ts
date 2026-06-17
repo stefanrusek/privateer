@@ -65,6 +65,31 @@ export interface Entry {
   readonly selectedIndex?: number;
 }
 
+/**
+ * Value-equality for two registered {@link Entry} hit targets: every field that
+ * the hit-test snapshot depends on must match. Used by the controller to skip
+ * notifying `useSyncExternalStore` subscribers when a re-registration replaces
+ * an entry with an identical one (the measured wrappers re-measure on each
+ * relevant change, but most re-registers land the same rect/layer). A `button`
+ * entry's `onClick` is *not* compared — it is looked up by id at press time, so
+ * a fresh closure with the same geometry is a no-op for dispatch.
+ */
+export function entriesEqual(a: Entry, b: Entry): boolean {
+  return (
+    a.kind === b.kind &&
+    a.layer === b.layer &&
+    a.region === b.region &&
+    a.handle === b.handle &&
+    a.id === b.id &&
+    a.rowOffset === b.rowOffset &&
+    a.selectedIndex === b.selectedIndex &&
+    a.rect.x === b.rect.x &&
+    a.rect.y === b.rect.y &&
+    a.rect.width === b.rect.width &&
+    a.rect.height === b.rect.height
+  );
+}
+
 /** An immutable snapshot of the registered hit targets for one dispatch. */
 export type RegistrySnapshot = readonly Entry[];
 

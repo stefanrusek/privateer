@@ -80,6 +80,14 @@ function measure(ref: React.RefObject<DOMElement | null>): Rect | null {
  * every relevant change, register the entry, and unregister on unmount. `deps`
  * re-runs the measurement when layout-affecting inputs change (resize handled
  * by the controller re-rendering with a new frame).
+ *
+ * `build` and `onClick` are freshly allocated by callers on every render, so
+ * depending on them would re-run the effect → re-register → notify → re-render
+ * every commit (an "update depth exceeded" loop). Instead we hold the latest
+ * `build`/`onClick` in refs (kept current each render) and key the effect only
+ * on `id` + the genuinely layout-affecting `deps`. The registered entry/handler
+ * therefore always reflects the *current* closure, while the measure/register
+ * runs only when something that can change the rect actually changed.
  */
 function useMeasuredEntry(
   registry: MeasuredRegistry,
@@ -89,15 +97,21 @@ function useMeasuredEntry(
   id: string,
   deps: readonly unknown[],
 ): void {
+  const buildRef = useRef(build);
+  const onClickRef = useRef(onClick);
+  buildRef.current = build;
+  onClickRef.current = onClick;
   useEffect(() => {
     const rect = measure(ref);
     if (rect !== null) {
-      registry.registerMeasured(build(rect), onClick);
+      registry.registerMeasured(buildRef.current(rect), onClickRef.current);
     }
     return () => {
       registry.unregisterMeasured(id);
     };
-  }, [registry, ref, id, build, onClick, ...deps]);
+    // build/onClick are read through refs so the effect re-runs only when the
+    // rect-affecting inputs (id + deps) change, not on every parent commit.
+  }, [registry, ref, id, ...deps]);
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +509,11 @@ function Overlay({
   onClose: () => void;
 }): React.ReactElement {
   // Full-area backdrop on the overlay layer swallows outside clicks → close.
+  // `onClose` is a fresh inline closure each render; hold it in a ref so the
+  // register effect keys only on stable values (no re-register loop).
   const backdropId = `${id}.backdrop`;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     registry.registerMeasured(
       {
@@ -504,12 +522,14 @@ function Overlay({
         rect: { x: 0, y: 0, width: 9999, height: 9999 },
         layer: OVERLAY_LAYER - 1,
       },
-      onClose,
+      () => {
+        onCloseRef.current();
+      },
     );
     return () => {
       registry.unregisterMeasured(backdropId);
     };
-  }, [registry, backdropId, onClose]);
+  }, [registry, backdropId]);
 
   return (
     <Box flexDirection="column">

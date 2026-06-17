@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   dispatch,
+  entriesEqual,
   pressAction,
   pressTarget,
   topmostAt,
@@ -486,5 +487,46 @@ describe('pressTarget (nested-Button winner)', () => {
     const snapshot: RegistrySnapshot = [tab, regionEntry];
     const r = dispatch(ev({ type: 'down', x: 3, y: 0 }), snapshot, null);
     expect(r.action).toEqual({ kind: 'buttonPress', id: 'tab.yaml' });
+  });
+});
+
+describe('entriesEqual', () => {
+  const base: Entry = {
+    kind: 'list',
+    region: 'list',
+    handle: 'sidebar',
+    id: 'list.list',
+    rowOffset: 3,
+    selectedIndex: 5,
+    layer: 0,
+    rect: { x: 1, y: 2, width: 40, height: 10 },
+  };
+  type EntryOver = Partial<Omit<Entry, 'rect'>> & {
+    readonly rect?: Partial<Entry['rect']>;
+  };
+  const clone = (over: EntryOver): Entry => ({
+    ...base,
+    ...over,
+    rect: { ...base.rect, ...(over.rect ?? {}) },
+  });
+
+  it('is true for two value-equal entries (distinct objects)', () => {
+    expect(entriesEqual(base, clone({}))).toBe(true);
+  });
+
+  it.each<[string, EntryOver]>([
+    ['kind', { kind: 'region' }],
+    ['layer', { layer: 1 }],
+    ['region', { region: 'sidebar' }],
+    ['handle', { handle: 'vertical' }],
+    ['id', { id: 'other' }],
+    ['rowOffset', { rowOffset: 4 }],
+    ['selectedIndex', { selectedIndex: 6 }],
+    ['rect.x', { rect: { x: 99 } }],
+    ['rect.y', { rect: { y: 99 } }],
+    ['rect.width', { rect: { width: 99 } }],
+    ['rect.height', { rect: { height: 99 } }],
+  ])('is false when %s differs', (_field, over) => {
+    expect(entriesEqual(base, clone(over))).toBe(false);
   });
 });
