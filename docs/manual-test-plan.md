@@ -91,9 +91,9 @@ dim borders; use the plain capture for text content.
 | LR-04 | model chooser quit **[NO-CLUSTER]** | LR-02 showing | `q` | App quits cleanly; shell prompt clean | PASS — q quit cleanly, no stderr errors |
 | LR-05 | normal launch **[CLUSTER]** | Real config home, valid context | Launch | Main bordered grid renders: header, sidebar, list, command bar; no chooser; resource list populates within a few seconds | PASS — grid renders, no chooser, sidebar tree + Overview health populate |
 | LR-06 | Esc never quits **[CLUSTER]** | Main grid, list focused, no overlay/detail | Press `Escape` | App does **not** quit; remains on main grid (Esc only closes detail/cancels input) | PASS — Esc kept the grid up, app still running |
-| LR-07 | q quits — list **[CLUSTER]** | List focused | `q` | App quits cleanly; shell clean | **FAIL (process leak)** — `q` unmounts the UI (screen restores) BUT the bun process does NOT exit: the Prometheus SystemTunnel `kubectl port-forward service/prometheus 39090:9090` is left running (never closed in `dispose()`), keeping the event loop alive. Verified: after `q`, no shell prompt returns and `bun run bin/p9r.ts` + the kubectl child stay alive indefinitely. (UI teardown is clean; the leak is the failure.) Severity: FUNCTIONAL (hang-on-quit when Prometheus tunnel active). |
-| LR-08 | q quits — sidebar **[CLUSTER]** | `Tab` to sidebar | `q` | Quits cleanly | **FAIL (same root cause as LR-07)** — UI unmounts but process hangs on the leaked Prometheus kubectl port-forward. Focus region is irrelevant; all `q` paths hit the leak. |
-| LR-09 | q quits — detail **[CLUSTER]** | Open detail (Enter on a row), detail focused | `q` | Quits cleanly | **FAIL (same root cause as LR-07)** — UI unmounts but process hangs on the leaked Prometheus kubectl port-forward. |
+| LR-07 | q quits — list **[CLUSTER]** | List focused | `q` | App quits cleanly; shell clean | **[W4] PASS — FIXED** — with the Prometheus tunnel active, `q` exits cleanly: the bun process AND the leaked `kubectl port-forward service/prometheus 39090:9090` are both gone (`pgrep` empty), the launch wrapper's post-exit marker `EXITED=0` fires, and the pane's running command becomes `sleep`/shell (proving `bun run start` returned). The Wave-1 quit-hang (Prometheus tunnel never closed in `dispose()`) is resolved. |
+| LR-08 | q quits — sidebar **[CLUSTER]** | `Tab` to sidebar | `q` | Quits cleanly | **[W4] PASS — FIXED** — `q` with focus on the sidebar exits cleanly (`EXITED=0`, all procs gone incl. the Prometheus tunnel). |
+| LR-09 | q quits — detail **[CLUSTER]** | Open detail (Enter on a row), detail focused | `q` | Quits cleanly | **[W4] PASS — FIXED** — `q` with detail open/focused exits cleanly (`EXITED=0`, all procs gone). All `q` paths hit the same dispose, now tearing down the tunnel. |
 | LR-10 | q quits — command bar context **[CLUSTER]** | `Tab` to command bar (NOT in input mode) | `q` | Quits cleanly | N/A — command bar is NOT Tab-reachable (cycle is sidebar↔list↔detail per navigation.ts); cannot enter a non-input command-bar focus to execute as written. q quits in normal mode regardless. |
 | LR-11 | Ctrl+C quits any mode **[CLUSTER]** | While command-bar **input** mode active (`!` pressed, typing) | `C-c` | Quits cleanly (Ctrl+C quits from any mode, even input) | PASS — literal ETX (`send-keys -l $'\003'`) quit from `[!]` input mode and the process DID fully terminate. NOTE: Ctrl+C works only because the ETX delivers SIGINT to the whole process group, which also kills the leaked kubectl child — masking the LR-07 quit-leak bug. tmux `send-keys C-c` did NOT deliver the byte; use `-l $'\003'`. |
 | LR-12 | q is literal in input **[CLUSTER]** | `!` opens command input | Type `q` | A `q` character is entered into the input — does **not** quit (q only quits outside input modes) | PASS — `!`+`q` shows `!q` in the input, app stays up |
@@ -157,7 +157,7 @@ All **[CLUSTER]** (need rows). Use a kind with many rows (Pods) for scroll tests
 | LT-13 | no wrap-by-one at any width | Resize terminal to several widths (e.g. 80, 120, 200 cols), each time scroll columns fully right then left | Inspect each width | At no width does a column wrap onto the next line; content fits the natural-width viewport | PASS — at 80/120/200 cols, list shows exactly 18 one-line pod rows; no column wraps to a second line |
 | LT-14 | global filter / | List focused | `/`, type a substring matching some rows, observe | List filters to matching rows live; filter applies to the resource list only | PASS — `/coredns` filtered list to 2 coredns pods live, command bar `[/]` |
 | LT-15 | global filter clear | After LT-14 | `Escape` | Filter cancelled; full list restored; Esc does not quit | PASS — Esc restored all 18 pods, mode `[·]`, app still running |
-| LT-16 | filter is list-focused only | Detail pane open and **detail focused** | `/` | `/` does **not** open the global list filter (it is captured by detail/logs context — see LG-12); global filter only triggers when the list is focused | **FAIL** — with detail open & focused on the **Overview** tab, `/` opened the global list filter (`[/]`) and typing `web` filtered the underlying pod list 18→3. Expected `/` to be captured by detail context / be a no-op. (Note: keymap.ts lists `/` as a *global* binding "Search the resource list", so this may be by-design for non-Logs tabs — but it contradicts LT-16's stated expectation.) Severity: FUNCTIONAL (spec/behavior conflict). |
+| LT-16 | filter is list-focused only | Detail pane open and **detail focused** | `/` | `/` does **not** open the global list filter (it is captured by detail/logs context — see LG-12); global filter only triggers when the list is focused | **[W4] PASS — FIXED** — with detail open & focused on the **Overview** tab, `/` does NOT open the global list filter: mode stays `[·]` and the pod list stays at 5 rows (unfiltered) even after typing `web`. With the list/sidebar context focused, `/` correctly opens `[/]` and filters (5→3 `web`); Esc restores. The `/` scoping fix (commit `cdefaeb`) holds. |
 
 ---
 
@@ -171,8 +171,8 @@ All **[CLUSTER]** (need rows). Use a kind with many rows (Pods) for scroll tests
 | CB-04 | switch kind by typing name + Enter | List focused | `Space`, type `pods` (or a kind name), `Enter` | List switches to that kind (fast-path resolves the alias) | PASS — Space+`services`+Enter (and `deployments`/`pods`) switch the list to that kind |
 | CB-05 | !ctx command | List focused | `!`, type `ctx`, `Enter` | Context switcher opens | PASS — `!ctx` opens the "Switch Context" switcher (current `● docker-desktop` marked) |
 | CB-06 | !ns <name> command | List focused **[CLUSTER]** | `!`, type `ns kube-system`, `Enter` | Namespace switches to `kube-system`; list updates; header ns dropdown reflects it | PASS — `!ns kube-system` switched ns; header `[kube-system ▾]`, command bar `ns: kube-system` |
-| CB-07 | !q quits | List focused | `!`, type `q`, `Enter` | App quits cleanly | **FAIL** — `!q`+Enter unmounts the UI but the process HANGS (does not exit). Same root cause as the quit-leak bug: the Prometheus SystemTunnel `kubectl port-forward` is never closed in `dispose()`, so bun never exits; the command-bar input then appears stuck/unresponsive (keys leak to raw terminal as `^[^[^[`). Only a raw SIGINT/ETX recovers. Severity: FUNCTIONAL (hang-on-quit). |
-| CB-08 | !quit quits | List focused | `!`, type `quit`, `Enter` | App quits cleanly | **FAIL (same root cause as CB-07)** — `!quit` routes through the same `forceQuit()→dispose()→onExit(unmount)` path that leaves the Prometheus `kubectl port-forward` running, so the process hangs instead of exiting. (Not separately re-driven to avoid more zombies; mechanism is identical and confirmed via CB-07 + the q-hang repro.) Severity: FUNCTIONAL. |
+| CB-07 | !q quits | List focused | `!`, type `q`, `Enter` | App quits cleanly | **[W4] PASS — FIXED** — `!q`+Enter exits cleanly with the Prometheus tunnel active: `EXITED=0`, the bun process and the kubectl tunnel are both gone. The Wave-1 hang is resolved. |
+| CB-08 | !quit quits | List focused | `!`, type `quit`, `Enter` | App quits cleanly | **[W4] PASS — FIXED** — `!quit`+Enter exits cleanly (`EXITED=0`, all procs gone incl. the Prometheus tunnel). |
 | CB-09 | !<resource> navigates | List focused **[CLUSTER]** | `!`, type `deploy` (or `svc`), `Enter` | List navigates to that kind (alias resolved) | PASS — `!deploy` navigated to Deployments |
 | CB-10 | unknown ! command | List focused | `!`, type `bogusxyz`, `Enter` | Handled gracefully (no crash); unknown command surfaced/ignored per UI; no `Maximum update depth` in stderr | PASS — `!bogusxyz` surfaced `✗ Unknown command: !bogusxyz`, no crash, no `Maximum update depth` |
 
@@ -188,7 +188,7 @@ All **[CLUSTER]** (need rows). Use a kind with many rows (Pods) for scroll tests
 | DT-04 | prev tab ← | After DT-03 | `Left` | Returns to previous tab | PASS — Left: YAML→Overview (METADATA) |
 | DT-05 | jump to tab 1 | Detail focused | `1` | Jumps to tab 1 (Overview) | PASS — `1` jumps to Overview |
 | DT-06 | jump to tabs 2–6 | Detail focused | Press `2`,`3`,`4`,`5`,`6` in turn | Each jumps to the corresponding tab; tabs present depend on kind (Overview/YAML/Events/Logs/Metrics, etc.) | PASS — `2`→YAML, `3`→Events, `4`→Logs, `5`→Metrics (pod has 5 tabs; `6` is a no-op as there are only 5) |
-| DT-07 | tab strip click | Detail open | (see MS section) | Clicking a tab label switches to it | **FAIL** — clicking tab labels in the strip (row 24) does NOT select the label under the cursor: clicking [Overview] (col 50) activated Events/Logs/Metrics depending on the click ROW (23/24/25), so the click→tab hit-test is mis-mapped (column ignored, vertical offset wrong). Keyboard tab switching works fine (DT-03..06). Same defect as MS-15. Severity: FUNCTIONAL (mouse). |
+| DT-07 | tab strip click | Detail open | (see MS section) | Clicking a tab label switches to it | **[W4] PASS — FIXED** — clicking each tab label at its VISIBLE row selects exactly that tab (Overview→METADATA, YAML→[Edit], Events→events panel, Logs→stream, Metrics→charts). Column maps correctly and the vertical hit-test is aligned (no off-by-one). See MS-15. |
 | DT-08 | nothing clipped | Each tab | Inspect frame on every tab | Content fits inside the detail Rect; nothing spills past the right border or wraps unexpectedly | PASS — on Overview/YAML/Events/Metrics, all 21 detail content rows end at the `║` right border; nothing spills |
 
 ### Scrolling on EVERY detail tab (Overview / YAML / Events / Logs / Metrics)
@@ -216,11 +216,11 @@ All **[CLUSTER]**, ideally a multi-container pod plus a single-container pod.
 | ID | Area | Pre | Steps | Expected | Result |
 |----|------|-----|-------|----------|--------|
 | LG-01 | logs stream immediately | Pod row, open detail, go to Logs tab | Switch to Logs | Default container logs **start streaming immediately** — **NO full-screen modal** picker (regression: picker was full-screen) | PASS — Logs tab streams the default container inline, NO full-screen modal (verified on prometheus + crasher/coredns) |
-| LG-02 | toolbar present inline | Logs tab | Inspect toolbar row | Inline toolbar shows `[Co̲ntainer ▾]`, `[NNN l̲ines ▾]`, and toggle buttons (pause/timestamps/wrap/download) with underlined accelerators — all inside the detail area | **FAIL (VISUAL)** — toolbar renders correctly ONLY when there are "No log lines". When log lines are PRESENT (e.g. prometheus), the toolbar row is **corrupted/overlapping**: the `Timestamps: on  Wrap: on` status text overwrites the `[Container ▾] p:● Live` portion, and the remaining buttons mash together (`Timestamps Wrap [100 lines ▾] Download`) over the `────` separator. `[Container ▾]` and the Live indicator become invisible. Underlined accelerators ARE present in the no-logs render. Severity: VISUAL (toolbar unreadable while logs present). |
-| LG-03 | container dropdown via o | Logs tab, multi-container pod | `o` | An inline `DropdownButton` overlay opens **under** the `[Container ▾]` button, floating over logs (logs keep streaming behind); not full-screen | INCONCLUSIVE — pressing `o` did not open a visible dropdown on prometheus (single-container pod, likely a no-op), and the corrupted toolbar (LG-02) further garbled the row. No crash. Could not test on a true multi-container pod (fixtures in this cluster appear single-container for the pods reached). |
-| LG-04 | pick container | LG-03 open | `Down` to another container, `Enter` | Switches streaming to the chosen container; dropdown closes | NOT RUN — depends on LG-03 (no multi-container dropdown reachable) |
-| LG-05 | auto-open when no default | Pod whose containers are all terminated/waiting (defaultIndex −1) | Open Logs | Container dropdown auto-opens; no lines stream until a pick is made | NOT RUN — could not stage a pod with all-terminated containers |
-| LG-06 | no containers hint | Pod with zero containers | Open Logs | Shows `✗ No containers found` hint; no crash | NOT RUN — no zero-container pod available |
+| LG-02 | toolbar present inline | Logs tab | Inspect toolbar row | Inline toolbar shows `[Co̲ntainer ▾]`, `[NNN l̲ines ▾]`, and toggle buttons (pause/timestamps/wrap/download) with underlined accelerators — all inside the detail area | **[W4] PASS — FIXED** — with log lines streaming (web/nginx and multi/nginx), the toolbar row (`[Container ▾] p:● Live  Timestamps  Wrap  [100 lines ▾]  Download`) and the status row (`Timestamps: on  Wrap: off`) render on SEPARATE, fully-readable lines — no overlap/mashing. `[Container ▾]` and the Live indicator are visible. The Wave-1 corruption-when-logs-present bug is resolved. |
+| LG-03 | container dropdown via o | Logs tab, multi-container pod | `o` | An inline `DropdownButton` overlay opens **under** the `[Container ▾]` button, floating over logs (logs keep streaming behind); not full-screen | **[W4] PASS** — on `demo/multi` (nginx+busybox), `o` opens an inline dropdown anchored under `[Container ▾]` listing BOTH containers (`● busybox ✓`, `● nginx`) over the streaming logs — NOT full-screen. |
+| LG-04 | pick container | LG-03 open | `Down` to another container, `Enter` | Switches streaming to the chosen container; dropdown closes | **[W4] PASS** — `Down`→nginx, `Enter` switched the header to `Logs — multi / nginx` and the stream to nginx's docker-entrypoint output (was busybox-tick); dropdown closed. |
+| LG-05 | auto-open when no default | Pod whose containers are all terminated/waiting (defaultIndex −1) | Open Logs | Container dropdown auto-opens; no lines stream until a pick is made | NOT RUN — could not stage a pod with all-terminated containers (no such fixture). Negative case confirmed: `demo/multi` (has a default) streams immediately without auto-opening the dropdown. |
+| LG-06 | no containers hint | Pod with zero containers | Open Logs | Shows `✗ No containers found` hint; no crash | NOT RUN — no zero-container pod is stageable in this cluster. |
 | LG-07 | line-limit dropdown via l | Logs tab | `l` | `[NNN lines ▾]` dropdown opens; selectable limits | NOT FULLY VERIFIED — `l` accepted without crash; dropdown visibility obscured by the corrupted toolbar (LG-02). No crash, app stable. |
 | LG-08 | change line limit | LG-07 open | Pick a different limit, `Enter` | Tail buffer/limit updates accordingly | NOT RUN — depends on LG-07 dropdown being visible |
 | LG-09 | pause/resume p | Logs streaming | `p` | Live tail pauses (button toggles); `p` again resumes | PARTIAL PASS — `p` accepted without crash; could not visually confirm the Live/Paused button toggle because the toolbar is corrupted (LG-02). No errors. |
@@ -250,9 +250,9 @@ All **[CLUSTER]**.
 | YA-04 | type edits | YA-03 active | Type some characters | Text inserts at cursor; buffer updates | PASS — typed `XYZ`, inserted at cursor (line 1 → `XYZkind: Pod`) |
 | YA-05 | cursor-follow scroll | Editing a long manifest | Arrow/Down to move cursor past viewport bottom | Editor scrolls to keep the cursor visible (cursor-following scroll) | PASS — moving cursor down 30 lines scrolled the viewport (top line 1→10), cursor stays visible |
 | YA-06 | save → diff confirm Ctrl+S | Editing with changes | `C-s` | A **diff/confirm** view appears before anything touches the cluster; shows additions/removals | **[W2] PASS** — Ctrl+S first validates YAML client-side (a malformed edit was rejected with `✗ YAML error line N: bad indentation…`), then shows a `Review Changes — Pod/demo/<name>` dialog with collapsed `… N unchanged lines` markers, the `+ w2test: ok` addition, and `[Apply] (Enter)  [Cancel] (Esc)` buttons. No cluster write happens before this dialog. |
-| YA-07 | confirm apply | YA-06 diff shown | Confirm (Enter/Apply) | Change applied to the cluster (resource updated); returns to read mode reflecting new YAML | **[W2] FAIL — apply always 409s (stale resourceVersion)** — `Enter` on the diff DOES fire the apply (so the button works), but it **consistently returns `✗ Conflict — resource was modified`** even on a pod whose resourceVersion is provably stable, and even when applied <1s after a fresh `[Reload & re-edit]`. Verified the SAME label edit succeeds via `kubectl label pod … w2test=ok` (resourceVersion unchanged at 234614 throughout). So the apply path sends a stale resourceVersion and the change NEVER lands via the UI. Tested on demo/web-…-zhldl (stable) and demo/crasher (churning). Severity: FUNCTIONAL (YAML edits cannot be saved to the cluster). |
-| YA-08 | $EDITOR pop-out Ctrl+E | Editing | `C-e` | App suspends and opens `$EDITOR` (mouse modes restored during suspend); on exit returns to the editor with the edited content; mouse modes restored | **[W2] PARTIAL PASS** — launched with `EDITOR=/tmp/w2-editor.sh` (a script that records a marker and appends `# w2-editor-was-here`). `Ctrl+E` from the editor **does** suspend Ink, run `$EDITOR`, and resume: **verified the script ran** via a marker file it wrote (recorded the temp file had 155 lines), no crash, no stderr errors. **Mouse modes restored on return** — an SGR click correctly moved focus to `⌖ sidebar` afterward; no escape leak. CAVEATS / not-fully-met: on return the pane drops to a **read-mode** view (`[Edit]` button) that does **not** scroll (PageDown/G no-op) and I could not see the `$EDITOR`-appended line reflected back into the editor buffer; also the command-bar mode indicator stays stuck on `[EDIT]` and Esc didn't cleanly exit it. So suspend/handover + mouse-restore are PASS; "returns to the editor with the edited content" is unconfirmed/likely broken. Severity: FUNCTIONAL (round-trip content reload). |
-| YA-09 | cancel edit Esc | Editing with pending changes | `Escape` | Prompts/cancels the edit; pending edits **discarded** (revert/discard); returns to read mode with original YAML; no quit | **PARTIAL FAIL** — Esc with pending changes correctly shows a `Discard changes?  [Yes]  [No]` confirm (red [Yes]/green [No]) — good. BUT the `[Yes]` (discard) action is **not triggerable**: neither Enter, Tab+Enter, Left/Right+Enter, nor clicking `[Yes]` dismisses it; the dialog has no visible button focus/selection and Enter is a no-op. Only a 2nd Esc works (= cancel discard, back to editing). So you can never actually discard via the dialog. Same confirm-dialog/click-mapping defect as DT-07/MS-23. Severity: FUNCTIONAL. — **[W2 UPDATE] NOW PASS via accelerator** — the `Discard changes?  [Yes]  [No]` confirm is now actionable: pressing the **`y` accelerator** triggers Discard (returns to read mode with the original YAML) and `n` cancels. NOTE: Enter / Tab+Enter / Left-Right+Enter / clicking `[Yes]` are still all no-ops (no visible button focus); only the literal `y`/`n` accelerator keys work. Functional via keyboard accelerator; click/Enter activation still broken (tracks DT-07/MS-23 family). |
+| YA-07 | confirm apply | YA-06 diff shown | Confirm (Enter/Apply) | Change applied to the cluster (resource updated); returns to read mode reflecting new YAML | **[W4] PASS — FIXED** — edited `demo/multi` to add a benign `w2test: ok` label, `Ctrl+S`→diff (`Review Changes — Pod/demo/multi`, `+ w2test: ok`)→`Enter`: applied WITHOUT a 409. `kubectl get pod multi` confirmed the label landed (`{"app":"multi","w2test":"ok"}`); resourceVersion advanced 253519→253839 (a real update). Dialog closed to read mode (`[·]`). Reverted via `kubectl label … w2test-`. The Wave-2 always-409 stale-resourceVersion bug is resolved. |
+| YA-08 | $EDITOR pop-out Ctrl+E | Editing | `C-e` | App suspends and opens `$EDITOR` (mouse modes restored during suspend); on exit returns to the editor with the edited content; mouse modes restored | **[W4] PASS — FIXED** — launched with `EDITOR=/tmp/p9r-editor.sh` (appends `w2test: ok` under metadata.labels + records a marker). `Ctrl+E` from the editor on `demo/multi` suspends Ink, runs `$EDITOR` (marker confirms it ran on the temp file), and resumes into a **LIVE editing buffer** (`╔══ EDITING` header, still editable) that now CONTAINS the externally-added `w2test: ok` line — i.e. the external edit is reflected back, NOT frozen. The follow-on `Ctrl+S`→diff→`Enter` then applied it (see YA-07). The Wave-2 "returns to a frozen read view / content not reloaded" bug is resolved. |
+| YA-09 | cancel edit Esc | Editing with pending changes | `Escape` | Prompts/cancels the edit; pending edits **discarded** (revert/discard); returns to read mode with original YAML; no quit | **PARTIAL FAIL** — Esc with pending changes correctly shows a `Discard changes?  [Yes]  [No]` confirm (red [Yes]/green [No]) — good. BUT the `[Yes]` (discard) action is **not triggerable**: neither Enter, Tab+Enter, Left/Right+Enter, nor clicking `[Yes]` dismisses it; the dialog has no visible button focus/selection and Enter is a no-op. Only a 2nd Esc works (= cancel discard, back to editing). So you can never actually discard via the dialog. Same confirm-dialog/click-mapping defect as DT-07/MS-23. Severity: FUNCTIONAL. — **[W2 UPDATE] NOW PASS via accelerator** — the `Discard changes?  [Yes]  [No]` confirm is now actionable: pressing the **`y` accelerator** triggers Discard (returns to read mode with the original YAML) and `n` cancels. NOTE: Enter / Tab+Enter / Left-Right+Enter / clicking `[Yes]` are still all no-ops (no visible button focus); only the literal `y`/`n` accelerator keys work. Functional via keyboard accelerator; click/Enter activation still broken (tracks DT-07/MS-23 family). — **[W4] RE-VERIFIED: discard via Enter AND via click both still FAIL** (the `2615996` confirm-dialog fix only covered the *delete* confirm, not the YAML discard confirm). Repro: edit a pod's YAML, type a char, `Escape` → `Discard changes? [Yes] [No]` (Yes=red-underlined, No=green-underlined, neither bold-default-focused). `Enter` → dialog stays open (no-op). Clicking `[Yes]` interior (col 68, row 15) → dialog stays open (no-op). Only `y`/`n` accelerators work. Severity: FUNCTIONAL (minor — keyboard accelerator path works). REMAINING BUG. — **[CONF-RUN 2026-06-17, commit 0fea256] PARTIAL FAIL — click `[Yes]` STILL does not discard.** Independent re-verify of all five sub-paths on `demo/web` pod YAML: (a) `Esc`→prompt→**`Enter` discards** ✅ (reproducible 2×, returns to read mode, edit lost); (d) `Esc` on the prompt **cancels** ✅ (back to EDITING with changes intact); (e) **`y` discards / `n` cancels** ✅. BUT (b) **clicking `[Yes]` (col 73, row 15) does NOT discard** — the prompt is dismissed and the app returns to the EDITING buffer with changes intact (i.e. treated as click-on-editor-below = cancel, not Yes-activate); and (c) **clicking `[No]` (col 80) is a no-op that LEAVES THE DIALOG OPEN** (neither cancels-to-edit nor discards). So the `3cb1d5d` "accepts Enter/click" fix covered **Enter** (now works) but **NOT the `[Yes]`/`[No]` mouse-clicks**. Item-1 requirement "(b) click `[Yes]` discards" FAILS. Severity: FUNCTIONAL minor (Enter + `y`/`n` keyboard paths fully work; only click activation of the discard confirm is broken — same DT-07/MS-23 confirm-click family). |
 | YA-10 | 409 conflict reload | Edit a resource, have it change server-side, then Ctrl+S | Apply | A 409 conflict is detected → the editor **reloads** the latest and lets you re-edit (no silent overwrite/crash) | **[W2] PASS** — 409 conflict is detected and surfaced as `✗ Conflict — resource was modified  [Reload & re-edit] (r)  [Discard] (Esc)`. Pressing `r` re-fetches the latest manifest (verified the editor's `resourceVersion` advanced to match the current cluster value) and returns to the editor for a clean re-edit — no silent overwrite, no crash. (Triggered organically/repeatedly because of YA-07's stale-resourceVersion bug; the conflict-handling UX itself is correct.) |
 
 ---
@@ -267,7 +267,7 @@ All **[CLUSTER]**. Select a row in the list first.
 | AC-02 | copy name y | Row selected | `y` | Resource name copied to clipboard; a confirmation/toast shown | PASS — `y` shows toast `✓ Copied crasher-5c98495b8f-2dhhf`; verified `pbpaste` returns the exact pod name. |
 | AC-03 | delete confirm d | Row selected | `d` | A **confirm dialog** appears (does not delete immediately) | PASS — `d` shows a command-bar confirm `Delete Pod crasher-…? [Delete] [Cancel]`; pod NOT deleted yet. `[Delete]` is the focused/default button (bold-red-underlined). |
 | AC-04 | delete cancel | AC-03 dialog open | Cancel (Esc/No) | Dialog closes; resource NOT deleted | PASS — Esc dismisses the confirm (mode → `[·]`); `kubectl` confirms the crasher pod still present (not deleted). |
-| AC-05 | delete confirm yes | AC-03 dialog (use a disposable fixture resource) | Confirm (Enter/Yes) | Resource deleted; row disappears from list | **PASS (action) / FAIL-adjacent (list stale)** — `Enter` on `[Delete]` deleted demo/crasher-…-2dhhf; `kubectl` confirmed it gone and the Deployment respawned `crasher-…-7cxxj`. (This command-bar confirm DOES respond to Enter, because `[Delete]` is the default-focused button — unlike the YA-09 discard dialog.) **BUG observed:** the deleted pod's row did **not** disappear from the list — it persisted even after a manual `r` refresh (the new pod appeared after refresh, but the stale `-2dhhf` row remained). Severity: FUNCTIONAL (deleted rows linger / list not reconciled on delete). |
+| AC-05 | delete confirm yes | AC-03 dialog (use a disposable fixture resource) | Confirm (Enter/Yes) | Resource deleted; row disappears from list | **[W4] PASS — FIXED** — `[Delete]`+`Enter` deleted `demo/web-…-grgld`; the deleted row **disappeared from the UI list via the watch** (no stale row) and the Deployment respawn `web-…-klb7z` appeared; `r` refresh matched `kubectl` exactly (crasher, multi, klb7z, pszqk, zhb6n). The Wave-2 "deleted rows linger / list not reconciled" bug is resolved. Also re-verified the **delete confirm responds to both Enter and click**: `Enter`→fires delete; clicking `[Cancel]` interior dismisses (pod stays Running); clicking `[Delete]` interior fires the delete (pod→Terminating). |
 | AC-06 | logs l (pod) | A **Pod** row selected | `l` | Opens detail Logs tab streaming (pod-only action) | PASS — `l` on demo/web-…-zhldl opens the detail **Logs** tab streaming the `nginx` container inline (`Logs — web-…-zhldl / nginx`, real log lines tailing). **Container dropdown did NOT auto-open** (correct for a single-container pod — see W2-LG-EXTRA). **LG-02 toolbar corruption is FIXED**: with log lines present, the toolbar `[Container ▾] p:● Live  Timestamps  Wrap  [100 lines ▾]  Download` and the status `Timestamps: on  Wrap: off` render on clean, separate, non-overlapping lines. |
 | AC-07 | exec x (pod) | A Pod row selected | `x` | Container picker (if multi-container) → exec session (see Exec section) | PASS — `x` on demo/web-…-6jqtx opens a command-bar exec prompt `[!] exec <pod> ▸ /bin/bash (↑ history)` (single-container, so no container picker — none available in this cluster), then Enter hands over to an interactive in-pod shell (see EX-02). |
 | AC-08 | port-forward p (pod) | A Pod row selected | `p` | Port-forward dialog/setup for the pod opens | PASS — `p` on a pod opens a command-bar port-forward setup `[!] ⇄ <pod> ports remote:local = <port>:<port>` (pre-filled with the container port). BUG NOTE: the port input field appears **non-editable** — typing digits and Backspace had no reliable effect (default ports must be accepted); see EX-05. |
@@ -281,12 +281,12 @@ All **[CLUSTER]**.
 
 | ID | Area | Pre | Steps | Expected | Result |
 |----|------|-----|-------|----------|--------|
-| EX-01 | exec container picker | Multi-container pod, `x` | Observe | Container picker shown to choose a container | NOT FULLY RUN (no multi-container pod) — all cluster pods are single-container, so no container picker appears (correct behavior for single-container). The `x` flow instead prompts for the **command** (`exec <pod> ▸ /bin/bash`, with `↑ history`). Could not exercise the multi-container picker path. |
+| EX-01 | exec container picker | Multi-container pod, `x` | Observe | Container picker shown to choose a container | **[W4] PASS** — `x` on `demo/multi` (nginx+busybox) opens an `Exec — choose container` modal listing BOTH containers (busybox, nginx) with a `filter:` field and `↑/↓ select · Enter confirm · Esc cancel`. Multi-container picker path confirmed. (Esc cancels cleanly.) |
 | EX-02 | exec handover | Pick a container | Confirm | App **suspends** Ink and hands the terminal to the shell; you get an interactive prompt in the pod | PASS — Enter on the exec prompt hands over to an interactive shell **inside the pod**: prompt `root@web-6b4dff767b-6jqtx:/#`, ran `hostname` → `web-6b4dff767b-6jqtx`, `id` → `uid=0(root)`. MINOR VISUAL: the Ink frame is not fully cleared on handover — the old grid remains drawn above the live shell prompt (shell works correctly regardless). |
 | EX-03 | exec return restores mouse | Exit the shell (`exit`) | Return to p9r | Ink resumes; **mouse modes restored** — back in shell later, no escape leak; capture shows clean main grid | PASS — `exit` terminates the shell and p9r resumes a clean main grid (mode `[·]`, list focused). Verified **mouse modes restored**: an SGR click on the sidebar after return correctly moved focus to `⌖ sidebar`. No stderr errors, no escape leak. (Also satisfies MS-26.) |
-| EX-04 | port-forward manager F | Main grid | `F` | Port-forward manager overlay opens, listing active forwards | PASS — `F` opens the **Port Forwards** overlay listing active/failed forwards (e.g. `● localhost:9090 → prometheus-…:9090 [✕]`, failed `✕ localhost:80 → web-… [retry]`) plus a RECENT section with `[Restore]`, and `[+ New Forward] [Close]`. |
+| EX-04 | port-forward manager F | Main grid | `F` | Port-forward manager overlay opens, listing active forwards | PASS — `F` opens the **Port Forwards** overlay listing active/failed forwards (e.g. `● localhost:9090 → prometheus-…:9090 [✕]`, failed `✕ localhost:80 → web-… [retry]`) plus a RECENT section with `[Restore]`, and `[+ New Forward] [Close]`. — **[CONF-RUN 2026-06-17, commit 0fea256] PF manager bottom-row button clicks re-verified: `[Close]` PASS, `[+ New Forward]` FAIL.** Clicking `[Close]` (interior, at its visible row) closes the manager (count 1→0) ✅. BUT clicking `[+ New Forward]` (interior, at its visible row — row 6 in the compact layout, row 9 when a RECENT row is present) **does NOT open the new-forward flow — it just closes the manager** (no `⇄ … remote:local` prompt, no picker, mode returns to `[·]`). Root cause confirmed read-only in `src/adapters/live/LiveApp.tsx` (~L568): **`onNewForward={controller.closePfManager}`** is wired to the same close handler as `onClose`, so `[+ New Forward]` is a duplicate "close" instead of opening a new forward. The `0fea256` fix made both buttons *respond* to clicks (previously unclickable) but mis-wired New Forward. Severity: FUNCTIONAL (the `[+ New Forward]` button is non-functional; new forwards must still be created via `p` on a pod/Service). |
 | EX-05 | create port-forward | PF manager / `p` on a pod | Specify ports, confirm | Forward established and listed; local port reachable | PASS (with caveats) — `p` on the **prometheus** pod (default 9090:9090) + Enter established a working forward: command bar shows `⇄ 1  ⇄ Forwarding localhost:9090 → prometheus-…:9090`, `curl http://localhost:9090/-/healthy` → **200**, and a `kubectl port-forward … 127.0.0.1:9090 LISTEN` is confirmed. CAVEATS: (1) the toast says "Forwarding…" **optimistically before the listen succeeds** — a forward on web:80 showed the same success toast but actually FAILED (privileged port; the manager correctly showed `✕ … unable to listen on any of the requested ports [{80 80}]`). (2) The port field is non-editable, so you're stuck with the default ports. |
-| EX-06 | stop port-forward | PF manager with an active forward | Select + stop | Forward removed from the list and torn down | **FAIL** — could not stop the active 9090 forward from the manager: clicking its `[✕]` (tried multiple columns), `Down`+`Enter`, and `x`/`d`/`Backspace` all left the forward active (`curl localhost:9090` stayed 200, the row stayed `●`). No visible row-selection highlight either. Same button/click-activation defect family as DT-07/YA-09/MS-23. Severity: FUNCTIONAL (cannot tear down a forward via the UI). |
+| EX-06 | stop port-forward | PF manager with an active forward | Select + stop | Forward removed from the list and torn down | **[W4] PASS — FIXED (both paths)** — started a real forward (`p` on a web pod, edited local port to a high port → curl 200, kubectl child confirmed). In the PF manager: pressing **`x`** on the selected active row tore it down (row moved to RECENT `[Restore]`, kubectl child DEAD, curl→000); and clicking its **`[✕]`** interior on a fresh forward tore it down identically (child DEAD, curl→000). The Wave-2 "cannot stop a forward via the UI" bug is resolved. NOTE (separate follow-up): the PF port field IS now editable (the earlier "non-editable" note does not reproduce). — **[CONF-RUN 2026-06-17, commit 0fea256] per-row `[✕]` click re-verified PASS.** Started a real forward via `p` on `demo/web-…-fv2s2` (edited local port to `8090` by typing — the field appends digits — → `curl localhost:8090` = **200**, `kubectl port-forward pod/web-… 8090:80` child confirmed). In the PF manager, clicking the active row's **`[✕]`** (display col 54, accounting for multibyte glyphs) tore it down: the row moved to RECENT `[Restore]`, the kubectl child DIED (`pgrep` empty), and `curl` → **000**. |
 
 ---
 
@@ -300,14 +300,14 @@ All **[CLUSTER]**; ideally with **two** contexts configured (one reachable, one 
 | CX-02 | chip opens switcher | Main grid | Click the header context chip (see MS) | Same switcher opens | PASS — clicking the header `docker-desktop` chip opens the same "Switch Context" switcher. Also satisfies MS-18. |
 | CX-03 | c is literal while typing | List filter `/` active (or command input) | `c` | `c` appended to the input; switcher does **NOT** open | PASS — with the list filter active (`/ab`), pressing `c` appends → `/abc` and does NOT open the switcher. |
 | CX-04 | filter contexts | Switcher open | Type part of a context name | List filters to matching contexts | PASS — typing `docker` keeps `docker-desktop`; a non-matching suffix shows `No matching contexts`. |
-| CX-05 | navigate + select | Switcher open | `Down`/`Up`, `Enter` on a different reachable context | Switcher **closes immediately**; header shows `… connecting to <ctx>` | **CANNOT RUN — only one context** (`docker-desktop`) is configured in this kubeconfig; no second reachable context to switch to. |
-| CX-06 | connected clears status | After CX-05, reachable ctx | Wait for first sync | Connecting status clears; list populates from the new context | **CANNOT RUN — single context** (depends on CX-05). |
+| CX-05 | navigate + select | Switcher open | `Down`/`Up`, `Enter` on a different reachable context | Switcher **closes immediately**; header shows `… connecting to <ctx>` | **[W4] PASS** — with a throwaway kubeconfig (`dd-copy`, `dd-broken`, `docker-desktop`): `c` opens the switcher listing all 3, current marked `●`. Selecting the reachable `dd-copy` (via filter `copy`+Enter) closes the switcher immediately and the header switches to `dd-copy`. (NOTE: the selection-cursor highlight is not very visible in capture, so I selected deterministically via the filter field rather than arrow-stepping.) |
+| CX-06 | connected clears status | After CX-05, reachable ctx | Wait for first sync | Connecting status clears; list populates from the new context | **[W4] PASS** — after switching to `dd-copy`, the connecting status clears (no error/connecting banner) and the Overview/list populate (`Cluster Health — dd-copy`, resources listed). |
 | CX-07 | switch to current = no-op | Switcher open | Select the context you're already on | No-op; no reconnect | PASS — selecting `docker-desktop` (the current ctx) closes the switcher with no reconnect/banner/error; list intact. |
-| CX-08 | error banner | Select an **unreachable** context | Wait | Persistent banner `✗ Could not connect to <ctx>: <reason>` with `[Retry]` and `[Switch context]` buttons | **CANNOT RUN — single context** (no unreachable context configured to select). |
-| CX-09 | Retry action | CX-08 banner shown | Press/click `[Retry]` (`r`) | Re-runs the connection attempt | **CANNOT RUN — depends on CX-08** (single context). |
-| CX-10 | Switch-context action | CX-08 banner shown | Press/click `[Switch context]` | Reopens the switcher | **CANNOT RUN — depends on CX-08** (single context). |
-| CX-11 | per-context memory (ns+kind) | On ctx A: set ns=kube-system, select kind=Deployments; switch to ctx B; switch back to A | Observe A | A restores ns=kube-system and kind=Deployments (validated against current cluster); B kept its own ns/kind | **CANNOT RUN — needs two contexts** (only `docker-desktop` available). |
-| CX-12 | memory survives restart | Set ns+kind on a context, quit, relaunch | Observe | The remembered ns+kind for that context is restored from `layout.json` | **[W2] FAIL** — set ns=demo + kind=Pods, quit cleanly (`q` → Quit), relaunched: the app came back at **ns=all / kind=Overview**, NOT the remembered demo/Pods. Inspected `~/.config/p9r/layout.json`: the `"contexts": {}` map is **empty** (ns/kind per-context never written), even though `tabByKind` (Pod→metrics, Secret→yaml) DID persist. So tab memory persists but per-context ns+kind memory does not survive restart. Severity: FUNCTIONAL. |
+| CX-08 | error banner | Select an **unreachable** context | Wait | Persistent banner `✗ Could not connect to <ctx>: <reason>` with `[Retry]` and `[Switch context]` buttons | **[W4] PASS** — selecting `dd-broken` (server `https://127.0.0.1:1`) raised the persistent banner `✗ Could not connect to dd-broken: ECONNREFUSED  Retry  Switch context` (header `c:dd-broken`, Overview shows `Cluster Health — dd-broken`). |
+| CX-09 | Retry action | CX-08 banner shown | Press/click `[Retry]` (`r`) | Re-runs the connection attempt | **[W4] PASS** — both the `r` key AND clicking `[Retry]` re-fire the connection attempt; the ECONNREFUSED banner reappears (server still unreachable). |
+| CX-10 | Switch-context action | CX-08 banner shown | Press/click `[Switch context]` | Reopens the switcher | **[W4] PASS** — clicking `[Switch context]` reopens the "Switch Context" switcher (now `● dd-broken` current, all 3 listed). |
+| CX-11 | per-context memory (ns+kind) | On ctx A: set ns=kube-system, select kind=Deployments; switch to ctx B; switch back to A | Observe A | A restores ns=kube-system and kind=Deployments (validated against current cluster); B kept its own ns/kind | **[W4] PASS** — set `dd-copy`→demo/Pods and `docker-desktop`→kube-system/Deployments. Switching back and forth restored each context's own ns+kind: dd-copy reopened on demo/Pods, docker-desktop reopened on kube-system/Deployments. Per-context memory is independent and correct. |
+| CX-12 | memory survives restart | Set ns+kind on a context, quit, relaunch | Observe | The remembered ns+kind for that context is restored from `layout.json` | **[W4] PASS — FIXED** — using a throwaway HOME: set ns=demo + kind=Services, quit cleanly (`EXITED=0`). `layout.json` `contexts` now contains `{"docker-desktop": {"namespace": "demo", "activeKind": "Services"}}` (was `{}` in Wave 2). Relaunched → app reopened on **ns=demo / Services** (restored). The Wave-2 "per-context ns/kind memory lost on restart" bug is resolved. |
 | CX-13 | memory validation fallback | Remembered kind no longer exists in cluster | Switch to that context | Falls back to `Overview` (kind) / all-namespaces (ns) when the remembered value is gone | **CANNOT RUN — needs a second context / a way to invalidate the remembered kind** (single context; not feasible to safely make a kind disappear). |
 
 ---
@@ -334,7 +334,7 @@ All **[CLUSTER]**. Some require Prometheus / metrics-server installed (note inli
 |----|------|-----|-------|----------|--------|
 | MT-01 | sparkline column | Pods list, metrics available | Inspect list | A sparkline column renders per row; `~` dim prefix when from session buffer (metrics-server-only) | PASS — Pods list renders a per-row CPU sparkline column with the `~` dim prefix (e.g. `~▃▂▂▂▃▇▂▃▃▃`). NOTE: the two brand-new demo pods (crasher, age 1h/17m) show no sparkline yet (insufficient history); established pods all show one. |
 | MT-02 | metrics detail tab | Open a pod's detail → Metrics tab | Inspect | Full ASCII/Braille charts (CPU/mem) render; not wrapped | PASS — Metrics tab on coredns renders full ASCII block charts: `CPU Usage`, `Memory Usage`, `Network I/O`, each with Y-axis labels (8/6/4/2/0, 20M/15M/…) and X-axis time labels (05:28 / 05:58). No line wrapping; fits the Rect. |
-| MT-03 | time-range selector [ / ] | Metrics tab | `[` then `]` | Cycles the chart time range; chart re-renders for the range | **PARTIAL FAIL — `[` (decrease) is a no-op** — the selector `[20m] [1h] [4h] [1d] [2d]` cycles **forward** correctly with `]` (1h→4h→1d→2d, charts re-render), but `[` does **not** move the range back (verified from 2d: repeated `[` left it stuck on `[2d]*`; also stuck going 4h→1h). Only one direction works. Severity: FUNCTIONAL (can't narrow the range via keyboard). |
+| MT-03 | time-range selector [ / ] | Metrics tab | `[` then `]` | Cycles the chart time range; chart re-renders for the range | **[W4] PASS — FIXED** — the selector `[20m] [1h] [4h] [1d] [2d]` now cycles BOTH directions: `]` increases (1h→4h→1d→2d, clamps at 2d) and `[` decreases (1d→4h→1h→20m, clamps at 20m), charts re-render. The Wave-2 "`[` decrease is a no-op" bug is resolved. |
 | MT-04 | Prometheus vs fallback | Cluster with Prometheus | Inspect Metrics tab | Full history + multiple charts; range options (1h/4h/1d/2d) enabled | PASS — Prometheus is connected; the Metrics tab shows full multi-range history with all ranges `20m/1h/4h/1d/2d` enabled and real charts. (No "session data" / "Prometheus not found" note present, as expected with Prometheus.) |
 | MT-05 | metrics-server-only note | Cluster with metrics-server only, no Prometheus | Inspect Metrics tab | `ℹ Prometheus not found — showing current values only.` note; historical ranges disabled; `session data` label | **N/A — this cluster HAS Prometheus** (monitoring/prometheus connected), so the metrics-server-only note correctly does NOT appear; can't exercise without removing Prometheus. (Aside: the Overview best-practices panel says "No Prometheus found in cluster" while the Overview METRICS section AND the detail Metrics tab both show Prometheus connected — an internal inconsistency worth a look, but out of MT-05 scope.) |
 | MT-06 | no metrics at all | Cluster without metrics | Inspect Metrics tab | Graceful guidance message (install metrics-server / Prometheus); no crash | **N/A — cluster has both metrics-server and Prometheus**; can't reach the no-metrics state without breaking the cluster. |
@@ -386,7 +386,7 @@ Determine X/Y from the plain capture before each click.
 | MS-03 | click region → focus (detail) | Detail open, list focused | Click inside the detail region | Detail becomes focused | **[W3] PASS** — with detail open, clicking the detail body (col60,row25) focused detail (`⌖ detail`). |
 | MS-04 | click region → focus (command bar) | Main grid | Click the command bar | Command bar becomes focused | **[W3] PASS (as designed)** — clicking the command bar (row49) enters command **input** mode (`[!]` glyph + accent border). The command bar has no passive focus state (per FR-10); the click activates it. |
 | MS-05 | click region → focus (header) | Main grid | Click empty header area | Header becomes focused (if focusable) | **[W3] N/A** — header is not a focusable region (not Tab-reachable per navigation.ts); clicking empty header area (col100,row2) is a no-op for focus. (Clicking the header's *controls* — chip/dropdown — works, see MS-17/MS-18.) No crash. |
-| MS-06 | click row → select | List focused, multiple rows | Click a non-selected row | That row becomes selected (highlight moves to it) | **[W3] FAIL — vertical off-by-one** — clicking a list row selects the row **one below** the cursor: Y=5(crasher)→web-6jqtx, Y=6→web-grgld, Y=7→web-zhldl (each lands one row down); Y=8(last)→clamped. Column is irrelevant; row hit-test is off by one. Same root cause as MS-15/DT-07 tab-strip off-by-one. Severity: FUNCTIONAL (mouse). |
+| MS-06 | click row → select | List focused, multiple rows | Click a non-selected row | That row becomes selected (highlight moves to it) | **[W4] PASS — FIXED** — clicking a list row selects exactly the row AT the cursor Y: Y=5→crasher, Y=7→web-grgld, Y=9→web-zhb6n (each lands on the row it's on, no off-by-one). Column is irrelevant (correct). The Wave-3 vertical off-by-one is resolved. |
 | MS-07 | second click row → open detail | A row already selected | Click that same row again | Detail pane opens for that row | **[W3] PASS (with MS-06 caveat)** — a 2nd click on the same row opens the detail pane (focused). The pod it opens reflects the MS-06 off-by-one (the row below the cursor). The open-on-2nd-click mechanism itself works. |
 | MS-08 | wheel over list scrolls list | Detail open, list under cursor | Wheel-down at list coords (`\e[<65;X;YM`) | The **list** scrolls — not the detail (routes by cursor geometry) | **[W3] PASS** — with detail open + list shrunk to overflow, wheel-down over the list (col75) scrolled the LIST viewport (crasher→local-path-provisioner→web) while the detail header (Metrics — crasher) stayed unchanged. Geometry-routed correctly. |
 | MS-09 | wheel over detail scrolls detail | Detail open | Wheel-down at detail coords | The **detail** content scrolls, not the list | **[W3] PASS** — wheel-down over the detail body (col60,row30) scrolled the Metrics content; the list rows were untouched. |
@@ -395,8 +395,8 @@ Determine X/Y from the plain capture before each click.
 | MS-12 | drag sidebar│list handle | Main grid | Press on the sidebar│list vertical border, drag right several cols, release | Sidebar widens; list narrows; layout recomputes; no `Maximum update depth` | **[W3] PASS** — pressing the sidebar│list border (col46) and dragging right to col60 moved the border to col61 (sidebar widened, list narrowed, ~delta matches); dragging back returned it to col47. No `Maximum update depth`. |
 | MS-13 | drag list│detail handle | Detail open | Press on the list│detail border, drag, release | The list/detail split ratio changes | **[W3] PASS** — the list│detail split is a *horizontal* handle (list top / detail bottom). Pressing it (row13,col100) and dragging down to row21 moved the split to row21 (list grew, detail shrank); delta exact. |
 | MS-14 | grabbed handle does not slip | Mid-drag | Start a drag on a border, move the cursor a column to the side and several rows away, release | The grabbed handle keeps tracking (no slip to a different handle/region) | **[W3] PASS** — during a horizontal-split drag, the cursor X wandered far left (into the sidebar col20) and far right (col160) while moving up; the grabbed handle kept tracking the Y and landed exactly at the release row (14). No slip to another handle. |
-| MS-15 | click detail tab → switch | Detail open | Click a tab label in the tab strip | Detail switches to that tab | **[W3] FAIL — vertical off-by-one** — clicking a tab label at its visible row (row15) is a no-op; clicking **one row above** (row14) switches tabs, and at that row the column maps correctly (YAML col61→YAML, Events col69→Events, Metrics col79→Metrics). So the column hit-test is right but the row is off by one. Same defect as MS-06/DT-07. Keyboard tab-switch (1–6, ←/→) works fine. Severity: FUNCTIONAL (mouse). |
-| MS-16 | click ✕ → close detail | Detail open | Click the close `✕` control | Detail pane closes | **[W3] PASS (with off-by-one caveat)** — clicking ✕ at its visible row (row15) is a no-op, but at row14 (one above, consistent with the MS-15 off-by-one) it closes the detail. The ✕ control IS clickable, subject to the same vertical off-by-one. |
+| MS-15 | click detail tab → switch | Detail open | Click a tab label in the tab strip | Detail switches to that tab | **[W4] PASS — FIXED** — clicking each tab label at its VISIBLE row (row 14) switches to that exact tab: Overview(col49)→METADATA, YAML(col60)→[Edit], Events(col67)→events panel, Logs(col76)→stream, Metrics(col83)→charts. Column AND row hit-test both correct (no off-by-one). The Wave-3 vertical off-by-one is resolved. |
+| MS-16 | click ✕ → close detail | Detail open | Click the close `✕` control | Detail pane closes | **[W4] PASS — FIXED** — clicking the `✕` at its VISIBLE row (col 92, row 14) closes the detail (tab strip gone, focus returns to list). No off-by-one. |
 | MS-17 | click namespace DropdownButton | Main grid | Click the header `[ns ▾]` | Namespace dropdown opens; click an item → namespace switches | **[W3] PASS** — clicking the header `[all ▾]` (col23,row2) opened the namespace dropdown; clicking the "demo" item (row5) switched ns to demo (header `[demo ▾]`, command bar `ns: demo`). Header-control clicks and dropdown-item clicks both work (no off-by-one in the header/overlay). MINOR: header-anchored dropdown still shows the `kube-publicease` overlap artifact (per NS-02). |
 | MS-18 | click context chip → switcher | Main grid | Click the header context chip | Context switcher opens | **[W3] PASS** — clicking the `docker-desktop` chip (col8,row2) opened the "Switch Context" switcher (`● docker-desktop` marked). |
 | MS-19 | click Logs [Container ▾] | Logs tab | Click `[Container ▾]` | Container dropdown opens; click an item selects it | **[W3] PASS** — clicking `[Container ▾]` (col54,row17) opened the container dropdown (`● nginx ✓`); clicking the nginx item closed it and selected it. Dropdown opens at the visible row (no off-by-one for the toolbar). |
@@ -404,7 +404,7 @@ Determine X/Y from the plain capture before each click.
 | MS-21 | accelerator letters fire buttons | Logs tab | Press the underlined accelerator (`o`,`l`,`p`,`t`,`w`,`d`) | Each fires the same action as clicking the corresponding button | **[W3] PASS** — all fire: `o`→container dropdown, `l`→line-limit dropdown, `p`→pause/resume Live toggle, `t`→timestamps on/off, `w`→wrap on/off, `d`→download (`✓ Saved to ~/Downloads/p9r-logs-…-<ts>.txt`). |
 | MS-22 | click Logs toggle buttons | Logs tab | Click the pause / timestamps / wrap / download buttons | Each toggles/fires like its accelerator | **[W3] PASS** — clicking the toolbar buttons at their visible row (row17) fires each: Timestamps (col75) toggled on→off, Wrap (col83) off→on, Download (col104) → `✓ Saved to ~/Downloads/…`, pause (col64) toggled Live↔Paused. No off-by-one for these toolbar buttons. |
 | MS-23 | click confirm-dialog buttons | Delete confirm open | Click `[Yes]` / `[No]` (or the accent buttons) | The corresponding action fires | **[W3] PASS — appears FIXED** — on the command-bar delete confirm `[Delete] [Cancel]`, clicking the **button center** fires it: `[Cancel]` (mid-col) dismissed the dialog reliably (3/3 trials, pod not deleted); `[Delete]` (mid-col 42) fired the delete (crasher deleted+respawned). NOTE: clicks must land on the button's interior — hitting the bracket edge (e.g. col47 of a `[Cancel]` at 44) misses. This is an improvement over the Wave-1/2 "non-default confirm buttons unclickable" defect (DT-07/YA-09/EX-06 family) — at least the delete confirm now responds to clicks. |
-| MS-24 | click context banner buttons | Error banner shown (CX-08) | Click `[Retry]` / `[Switch context]` | Each fires its action | **[W3] CANNOT RUN — single context** — no unreachable context configured to trigger the error banner (same as CX-08/CX-24). |
+| MS-24 | click context banner buttons | Error banner shown (CX-08) | Click `[Retry]` / `[Switch context]` | Each fires its action | **[W4] PASS** — with the `dd-broken` error banner up: clicking `[Retry]` (col 52, row 49) re-fired the connection (banner reappeared); clicking `[Switch context]` (col 60, row 49) reopened the switcher. Both banner buttons fire on click. |
 | MS-25 | mouse modes restored on quit | Main grid | `q` then move the mouse in the shell | No SGR escape sequences leak; mouse reporting off | **[W3] PASS** — `q` quit cleanly (shell prompt returned — quit-hang fixed, confirming W2); after quit, a shell `echo` ran normally and a captured pane showed **0** stray mouse escape sequences (`\e[<…` / mode `100Xh`). Mouse reporting is off; no leak. (The un-cleared grid above the prompt is cosmetic; the shell underneath is clean.) |
 | MS-26 | mouse modes restored on suspend | During exec handover or `$EDITOR` pop-out | Move mouse while suspended, then return | No escape leak while suspended; clean grid + working mouse on return | **[W3] PASS (per Wave 2)** — verified in EX-03 (exec `exit` → SGR click correctly moved focus, no leak) and YA-08 (`$EDITOR` pop-out restored mouse modes on return). Not re-driven in W3 to avoid extra suspend cycles; mechanism confirmed clean. |
 | MS-27 | mode 1003h suppressed | Any mouse activity | Move the mouse without clicking, watch stderr/shell | No any-motion (1003h) reporting; only press/release/wheel/drag events handled; no flood | **[W3] PASS** — injecting bare any-motion events (`\e[<35;X;YM`, button-less motion) caused no state change (focus unchanged) and no stderr flood (stderr stayed at 1 line — just the shell echo). Any-motion (1003h) is suppressed; only press/release/wheel/drag are handled. |
@@ -578,6 +578,21 @@ Section                         Pass / Total   (Wave 1 executor: sections 1–8)
 8  YAML tab                      4 / 10   (FAIL: YA-09 discard-confirm unactivatable; NOT RUN: YA-02,06,07,08,10 — cluster-mutating/Secret/suspend not driven)
 9–19                            (out of Wave 1 scope — not executed)
 
+Wave 4 (final verification) — corrected section verdicts after the 12 fixes:
+1  Launch & first-run            12 / 13  (LR-07/08/09 quit-hang now PASS; N/A: LR-10)
+4  List / table                 16 / 16  (LT-16 now PASS)
+5  Command bar                  10 / 10  (CB-07/08 now PASS)
+6  Detail (all tabs)            17 / 17  (DT-07 now PASS; DSC-07 still partial-by-fixture)
+7  Logs tab                     PASS: LG-01,02,03,04,10,11,13,14,15,16,17 (LG-02/03/04 fixed via demo/multi); NOT RUN: LG-05,06,18 (un-stageable fixtures)
+8  YAML tab                     PASS: YA-01..08,10; REMAINING FAIL: YA-09 discard via Enter/click (y/n accelerator works)
+9  List-row actions             9 / 9    (AC-05 deleted-row reconcile now PASS)
+10 Exec & port-forward          6 / 6    (EX-06 now PASS; EX-01 PASS via demo/multi)
+11 Context switching            12 / 13  (CX-05,06,08,09,10,11,12 now PASS; CX-13 NOT RUN — un-stageable)
+13 Metrics                      PASS: MT-01,02,03,04 (MT-03 now PASS); N/A: MT-05,06 (cluster has metrics+Prom)
+16 Mouse interactions           PASS incl. MS-06,15,16,24 (off-by-one fixed; banner-button clicks fixed)
+18 Regression (Bugs fixed)      8 / 8    ✅ re-verified
+NEW remaining bugs: YA-09 discard click/Enter; PF-manager bottom-row [Close]/[+ New Forward] clicks (both low-severity, click-activation family)
+
 Wave 2 executor: sections 9–15 + YA-02/06/07/08/10
 8  YAML tab (YA-* W2)            PASS: YA-02 reveal, YA-06 diff, YA-10 409-reload; FAIL: YA-07 apply (always 409s); PARTIAL: YA-08 ($EDITOR runs+mouse-restore ok, content-reload broken); YA-09 now PASS via y-accelerator
 9  List-row actions             9 / 9    (AC-05 action PASS but list keeps stale deleted row; rest PASS)
@@ -594,6 +609,90 @@ Wave 3 executor: sections 16 (Mouse), 17 (Resize), 18 (Regression), 19 (keymap e
 18 Regression (Bugs fixed)      8 / 8    ✅  (RG-01..RG-08 all PASS — every README "Bugs fixed" item verified)
 19 Keymap extras                5 / 5    ✅  (RG-09 refresh, KB-RS1/2 +/-, KB-RS3 Alt+↑↓, KB-G1 g/G all PASS)
 ```
+
+### Wave 4 — final verification pass (re-verify all prior FAILs + N/A environmental tests)
+
+Driver: live app under tmux 170×50, branch
+`claude/keyboard-navigation-improvements-xmjgek` (12 fixes landed). Throwaway
+HOME (`/tmp/p9r-final-home`) for restart-memory, throwaway kubeconfig
+(`/tmp/p9r-final-kube` with `dd-copy`/`dd-broken`) for multi-context, `demo/multi`
+(nginx+busybox) for multi-container. Cluster + fixtures restored after.
+
+**Previously-FAILED tests — every one now PASSES:**
+
+```
+LR-07/08/09  quit-hang ............ PASS (EXITED=0, prometheus tunnel torn down, all procs gone)
+CB-07/08     !q / !quit hang ...... PASS (clean exit)
+LT-16        / scoping ............ PASS (detail-focused / is a no-op; list-context / filters)
+DT-07/MS-15  detail tab click ..... PASS (clicks at visible row map to correct tab)
+MS-06        list row click ....... PASS (selects row AT cursor Y, no off-by-one)
+MS-16        click ✕ close ........ PASS (visible row, no off-by-one)
+LG-02        logs toolbar ......... PASS (toolbar + status on separate readable rows w/ logs present)
+YA-07        YAML apply ........... PASS (applies w/o 409; label confirmed via kubectl; rv advanced)
+YA-08        $EDITOR pop-out ...... PASS (returns to LIVE editor with external edit reflected)
+AC-05        deleted row .......... PASS (row leaves via watch; respawn appears; r matches kubectl)
+            delete confirm ....... PASS (Enter AND click both fire [Delete]/[Cancel])
+CX-12        restart memory ....... PASS (layout.json contexts populated; ns/kind restored on relaunch)
+MT-03        metrics range [/] .... PASS (both directions cycle + clamp)
+EX-06        stop port-forward .... PASS (x key AND [✕] click both tear down; kubectl child dies)
+```
+
+**Part 2 — environmental N/A tests (now executed):**
+
+```
+CX-05  navigate+select reachable ... PASS (switcher lists all 3; dd-copy selected, header switches)
+CX-06  connected clears status ...... PASS (dd-copy connects, Overview/list populate)
+CX-08  error banner ................. PASS (dd-broken → ✗ Could not connect … ECONNREFUSED [Retry][Switch context])
+CX-09  Retry ........................ PASS (r key AND click re-fire)
+CX-10  Switch context ............... PASS (click reopens switcher)
+CX-11  per-context ns+kind memory ... PASS (dd-copy=demo/Pods, docker-desktop=kube-system/Deployments, each independent)
+MS-24  click banner buttons ......... PASS (Retry + Switch context fire on click)
+EX-01  exec container picker ........ PASS (demo/multi → picker lists busybox + nginx)
+LG-03  container dropdown via o ..... PASS (inline, lists both containers over streaming logs)
+LG-04  pick container ............... PASS (Enter switches stream busybox→nginx, dropdown closes)
+LG-05  auto-open no-default ......... NOT RUN (no all-terminated-container pod stageable; negative case OK)
+LG-06  no-containers hint ........... NOT RUN (no zero-container pod stageable)
+```
+
+**Part 3 — regression + new observations:**
+
+```
+RG-01  list wrap-by-one ............. PASS (clamps top & bottom, no wrap)
+RG-02  metrics no-wrap .............. PASS (MT-02; lines fit Rect)
+RG-03  logs picker inline ........... PASS (LG-03; not full-screen)
+RG-04  / in Logs not leaking ........ PASS (LG-15; stays [·])
+RG-05  wheel scrolls detail not list  PASS (wheel over detail scrolls YAML; list untouched)
+RG-06  arrows scroll detail not list  PASS (8 Down scroll YAML; list selection unchanged after close)
+RG-07  help title not clipped ....... PASS ("Keyboard Reference" full)
+RG-08  no Maximum update depth ...... PASS (stderr = 0 errors across the entire run)
+Core sweep (sidebar nav, list sel, detail tabs+scroll, ns dropdown, help) .. PASS, no regressions
+```
+
+**PF bottom-row button clicks — flagged follow-up: FAIL (remaining bug).**
+In the Port-Forward manager, clicking `[Close]` (does not close the manager)
+and `[+ New Forward]` (does not open the new-forward dialog) **do not register**
+— while the per-row `[✕]` and the `x` key DO work (EX-06). Escape closes the
+manager and `p` creates forwards, so this is low-severity. Tracks the same
+non-default-button click-activation family.
+
+### Wave 4 — remaining bugs (after the 12 fixes)
+
+1. **FUNCTIONAL (minor) — YAML discard confirm (YA-09) not activatable by
+   Enter or click.** The `2615996` "confirm dialog accepts Enter/click" fix
+   covered the **delete** confirm (verified working) but NOT the YAML
+   `Discard changes? [Yes] [No]` confirm: `Enter` and clicking `[Yes]` are both
+   no-ops; only the `y`/`n` accelerators work. Smallest repro: edit a pod's
+   YAML, type a char, `Escape` → dialog → `Enter` (stays open) / click `[Yes]`
+   (stays open) / `y` (discards). Low severity (keyboard accelerator path works).
+2. **FUNCTIONAL (minor) — PF manager bottom-row buttons (`[Close]`,
+   `[+ New Forward]`) don't respond to clicks.** Per-row `[✕]` and the `x` key
+   work; only the two bottom-row buttons miss. Escape / `p` provide working
+   alternatives. Low severity. Same non-default-button click-activation family
+   as YA-09.
+
+Neither is a regression of a fixed bug; both are pre-existing residual
+click-activation gaps in the confirm/button family that the `2615996` fix only
+partially addressed.
 
 ### Wave 3 — headline findings (sections 16–19)
 
@@ -736,3 +835,72 @@ Wave 3 executor: sections 16 (Mouse), 17 (Resize), 18 (Regression), 19 (keymap e
   bar→header" is illustrative, and FR-10/LR-10 cannot be executed as written).
 - Detail opens list-top / detail-bottom in the right column (not strictly "to
   the right"); detail remembers the last-used tab across re-opens.
+
+---
+
+### Final confirmation run — 2026-06-17 (branch `claude/keyboard-navigation-improvements-xmjgek`, commit `0fea256`)
+
+Independent clean-run re-verification of the two just-claimed fixes (YAML discard
+confirm; PF Close/New button clicks) plus a regression sanity sweep, driven under
+tmux @170×50 against `docker-desktop` / `demo` fixtures. Each item run from a
+fresh state.
+
+**1. YA-09 discard confirm — FAIL (item requires all sub-paths to hold).**
+  - (a) `Enter` discards — PASS (reproducible, returns to read mode).
+  - (b) **click `[Yes]` discards — FAIL** (click is treated as click-on-editor =
+    cancel; returns to EDITING with changes intact).
+  - (c) **click `[No]` cancels — FAIL** (no-op; leaves the dialog open).
+  - (d) `Esc` cancels — PASS (returns to EDITING with changes).
+  - (e) `y` discards / `n` cancels — PASS.
+  - The `3cb1d5d` fix added **Enter** support but did NOT wire the `[Yes]`/`[No]`
+    mouse-clicks. Keyboard paths (Enter, `y`, `n`, Esc) all work; only click
+    activation of the discard confirm is broken (same DT-07/MS-23 family).
+    Severity FUNCTIONAL-minor.
+
+**2. PF Close / New clicks — PARTIAL FAIL.**
+  - `[Close]` click — PASS (closes the manager).
+  - per-row `[✕]` click — PASS (stops the forward; kubectl child dies, curl→000).
+  - **`[+ New Forward]` click — FAIL** (closes the manager instead of opening the
+    new-forward flow). Root cause (read-only): `LiveApp.tsx`
+    `onNewForward={controller.closePfManager}` — wired to the close handler. The
+    `0fea256` fix made both buttons clickable but mis-routed New Forward.
+    Severity FUNCTIONAL.
+
+**3. Regression sanity sweep — ALL PASS.**
+  - `q` quits, process tree torn down (bun + an auto-restored prometheus
+    port-forward child both gone), pane returns to the wrapper `sleep`; no
+    leftover `bin/p9r`/`port-forward` procs. PASS.
+  - Click list row Y → selects the pod AT row Y (row 5→crasher, row 7→web-klb7z,
+    via reverse-video). No off-by-one. PASS.
+  - Detail: click each tab at its visible (multibyte-corrected) display column →
+    switches to THAT tab (Overview/YAML/Events/Logs/Metrics); click `✕` (col 92)
+    → closes detail. PASS. (An apparent "off-by-one-tab" during testing was a
+    measurement artifact — active-tab styling shifts the strip; using true
+    display columns, every tab maps correctly.)
+  - YAML apply WITHOUT 409: applied a benign `conftest: ok` label to the
+    `demo/app-config` ConfigMap (stable RV) — diff → `Enter` → "applied", cluster
+    label confirmed, reverted. PASS. (NOTE: the same edit on a live `demo/web`
+    **pod** hit genuine 409s because that pod's resourceVersion drifts under
+    kubelet status writes; the conflict-reload path (`r`) correctly re-synced RV —
+    YA-10 behaviour, not a regression. Verdict run on the stable ConfigMap.)
+  - Help `?` → title "Keyboard Reference" full; PageDown scrolls; Esc closes. PASS.
+  - Scroll each detail tab (Overview/Logs/Events/Metrics) with ↑/↓ & PageDown —
+    content scrolls, nothing clipped (Overview/Logs/Metrics scroll exercised under
+    a deliberately shrunken pane to force overflow; Events shows 0 events, scroll
+    keys safe). PASS.
+  - `Maximum update depth` over the WHOLE session stderr = **0** (also 0
+    TypeError / `at Object` / `Error:`). PASS.
+
+**BOTTOM LINE: NOT CLEAN.** Two remaining FAILs, both in the
+confirm/manager click-activation family, both FUNCTIONAL (keyboard/other paths
+work):
+  1. YA-09 — clicking `[Yes]`/`[No]` on the YAML "Discard changes?" confirm does
+     not discard/cancel (only `Enter`, `y`/`n`, `Esc` work). Repro: edit a YAML,
+     type a char, `Esc`, click `[Yes]` → stays in editor with changes.
+  2. EX-04 — clicking `[+ New Forward]` in the PF manager closes the manager
+     instead of opening the new-forward flow (`onNewForward` mis-wired to
+     `closePfManager` in `LiveApp.tsx`). Repro: `F`, click `[+ New Forward]` →
+     manager closes, no new-forward prompt.
+
+Cluster restored (ConfigMap/pod labels reverted; no leftover forwards); tmux
+sessions killed. No source code modified.
