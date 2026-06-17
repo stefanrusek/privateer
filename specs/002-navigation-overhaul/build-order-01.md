@@ -1,7 +1,7 @@
 # Navigation Overhaul — Build Order
-**Document:** build-order-01 (for `specs/navigation-overhaul/`)
-**Inputs:** spec chunks 01–10 in `specs/navigation-overhaul/` (+ canonical
-`spec/`, the codebase, `CLAUDE.md`).
+**Document:** build-order-01 (for `specs/002-navigation-overhaul/`)
+**Inputs:** spec chunks 01–10 in `specs/002-navigation-overhaul/` (+ canonical
+`specs/001-initial-features/`, the codebase, `CLAUDE.md`).
 **Consumer:** unattended implementation pipeline — each **build chunk** is
 independently implementable and testable, **done only when `bun run gate` is
 green** (format · lint · lint:grep · typecheck · unit @ 100/100/100/100 · bdd).

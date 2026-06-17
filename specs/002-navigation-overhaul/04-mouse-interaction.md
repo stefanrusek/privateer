@@ -4,7 +4,7 @@
 **Depends on:** 02 (`computeFrame` region `Rect`s + handle `Segment`s), 03
 (detail `scrollBy` entry point + Logs pause/resume coupling), 01 (`app.focus`
 region model + `setFocus`)
-**Implements / amends:** `spec/spec-02-navigation-layout.md` (mouse). Update it
+**Implements / amends:** `specs/001-initial-features/spec-02-navigation-layout.md` (mouse). Update it
 where this changes behavior.
 
 > **This chunk replaces p9r's entire mouse stack**, not just the geometry. The

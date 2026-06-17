@@ -2,7 +2,7 @@
 
 **Status:** DRAFT
 **Depends on:** —
-**Implements / amends:** `spec/spec-02-navigation-layout.md` (layout, regions,
+**Implements / amends:** `specs/001-initial-features/spec-02-navigation-layout.md` (layout, regions,
 sizing, header). Update that canonical spec where this changes it.
 
 ## User stories

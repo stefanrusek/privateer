@@ -1,7 +1,7 @@
 # p9r (Privateer)
 
 A single-binary Kubernetes TUI — Bun · Ink 5 · React 18 · local LLM agent.
-The files in `spec/` together form the specification; when behavior is in
+The files in `specs/001-initial-features/` together form the specification; when behavior is in
 question, the spec wins.
 
 ## Working with me

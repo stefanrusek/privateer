@@ -2,7 +2,7 @@
  * logs-toolbar.ts — pure item builders + accelerator map for the Logs toolbar
  * (navigation-overhaul chunk 06 / B06).
  *
- * Spec: `specs/navigation-overhaul/06-inline-logs-container-picker.md`.
+ * Spec: `specs/002-navigation-overhaul/06-inline-logs-container-picker.md`.
  *
  * The Logs toolbar's `[Co̲ntainer ▾]` and `[NNN l̲ines ▾]` controls are chunk-04
  * `<DropdownButton>`s. The *specifics* of what those dropdowns list — phase

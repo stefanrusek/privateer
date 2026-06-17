@@ -2,7 +2,7 @@
  * container-phase.ts — pure phase→color mapping for the Logs container dropdown
  * (navigation-overhaul chunk 06 / B06).
  *
- * Spec: `specs/navigation-overhaul/06-inline-logs-container-picker.md` ("The
+ * Spec: `specs/002-navigation-overhaul/06-inline-logs-container-picker.md` ("The
  * container dropdown"). Each dropdown item shows a phase dot whose color reflects
  * the container's lifecycle state: running = green, waiting = yellow,
  * terminated = grey. Kept as a tiny, total, fully-covered function so the

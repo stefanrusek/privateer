@@ -2,7 +2,7 @@
  * detail-view.ts — pure projection of each read-only detail tab's content into
  * the generic `ViewLine[]` the scroll viewport (chunk 03) windows over.
  *
- * Spec: `specs/navigation-overhaul/03-detail-scroll-viewport.md` ("Content as
+ * Spec: `specs/002-navigation-overhaul/03-detail-scroll-viewport.md` ("Content as
  * visual lines"). Every in-scope tab (Overview, YAML read mode, Events, Metrics)
  * flattens its structured rows / chart lines into **one `ViewLine` per visual
  * row**, already truncated to the detail pane's inner width so the viewport never

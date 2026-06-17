@@ -13,8 +13,8 @@ layout/wrapping bugs, makes the detail pane fully scrollable, makes the YAML
 tab editable, and polishes single-context switching.
 
 This spec set drives an unattended implementation pipeline. Each chunk file is
-**self-contained**: an implementer reading only `specs/navigation-overhaul/`
-(plus the codebase and the canonical `spec/`) must be able to build it without
+**self-contained**: an implementer reading only `specs/002-navigation-overhaul/`
+(plus the codebase and the canonical `specs/001-initial-features/`) must be able to build it without
 this conversation.
 
 ## Scope at a glance
@@ -69,8 +69,8 @@ this conversation.
   `src/store`, `src/k8s`, `src/exec`, …); only thin glue goes in `src/adapters/`.
   (Chunk 04's mouse parser/registry/drag-latch already exist as tested modules
   under `src/input/` — extend them, don't reinvent.)
-- When behavior conflicts, the canonical `spec/` wins; where this overhaul
-  changes canonical behavior, the relevant `spec/spec-02-navigation-layout.md`
+- When behavior conflicts, the canonical `specs/001-initial-features/` wins; where this overhaul
+  changes canonical behavior, the relevant `specs/001-initial-features/spec-02-navigation-layout.md`
   (and siblings) must be updated in the same chunk.
 
 ## Chunks

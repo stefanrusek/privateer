@@ -1,7 +1,7 @@
 /**
  * measured-widgets.tsx — the four measured React wrappers (B04b).
  *
- * Spec: `specs/navigation-overhaul/04-mouse-interaction.md` ("Components in
+ * Spec: `specs/002-navigation-overhaul/04-mouse-interaction.md` ("Components in
  * detail" + "Adapter wiring"). These live in `src/adapters/live/` — *not*
  * `src/ui/components/` — by mandate: they touch `ref.current.yogaNode` and run
  * `useEffect`-based measure/register that cannot be meaningfully asserted under

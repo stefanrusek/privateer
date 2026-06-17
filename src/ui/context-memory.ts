@@ -2,7 +2,7 @@
  * context-memory.ts — pure per-context UI memory (navigation-overhaul chunk 08 /
  * B08).
  *
- * Spec: `specs/navigation-overhaul/08-context-switching-polish.md` §4
+ * Spec: `specs/002-navigation-overhaul/08-context-switching-polish.md` §4
  * ("Per-context memory") and "Where the logic lives".
  *
  * p9r remembers, **per kube context**, the `{ namespace, activeKind }` the user

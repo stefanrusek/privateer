@@ -125,7 +125,7 @@ describe('buildOverviewSections', () => {
     expect(titles).toEqual(['METADATA', 'STATUS', 'CONTAINERS', 'VOLUMES']);
   });
 
-  it('Pod: tolerates missing spec/status', () => {
+  it('Pod: tolerates missing specs/001-initial-features/status', () => {
     const r = makeResource({ kind: 'Pod', raw: {} });
     const secs = buildOverviewSections(r, NOW_MS);
     expect(secs[0]?.title).toBe('METADATA');
@@ -385,7 +385,7 @@ describe('buildOverviewSections', () => {
     expect(dsTitles).not.toContain('SPEC');
   });
 
-  it('tolerates raw with no spec/status object at all', () => {
+  it('tolerates raw with no specs/001-initial-features/status object at all', () => {
     for (const kind of ['Deployment', 'Node', 'KafkaTopic', 'DopplerSecret']) {
       const r = makeResource({
         kind,

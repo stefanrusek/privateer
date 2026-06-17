@@ -4,7 +4,7 @@
 **Depends on:** 01 (detail keyboard/focus model + `yamlMode` arbitration), 02
 (detail `Rect` width — no wrap/spill), 03 (read-mode scroll viewport), 04
 (`<Button>` + accelerator convention for the action bars)
-**Implements / amends:** `spec/spec-04-core-views.md` §6 (YamlTab read/edit) and
+**Implements / amends:** `specs/001-initial-features/spec-04-core-views.md` §6 (YamlTab read/edit) and
 §7 (DiffView). Update it where this changes behavior.
 
 ## User stories

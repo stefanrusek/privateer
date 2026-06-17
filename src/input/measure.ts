@@ -2,7 +2,7 @@
  * measure.ts — pure absolute-rect measurement over a Yoga-like node tree
  * (navigation-overhaul chunk 04 / B04b).
  *
- * Spec: `specs/navigation-overhaul/04-mouse-interaction.md` ("measure.ts").
+ * Spec: `specs/002-navigation-overhaul/04-mouse-interaction.md` ("measure.ts").
  *
  * The one piece of geometry the framework computes for us. A measured
  * `<Button>` attaches a ref to a `<Box>`; in a post-commit `useEffect` the

@@ -2,8 +2,8 @@
 
 **Status:** DRAFT
 **Depends on:** —
-**Implements / amends:** `spec/spec-02-navigation-layout.md` (keyboard model,
-focus, region cycling) **and `spec/spec-04-core-views.md` §4.1** (detail tab
+**Implements / amends:** `specs/001-initial-features/spec-02-navigation-layout.md` (keyboard model,
+focus, region cycling) **and `specs/001-initial-features/spec-04-core-views.md` §4.1** (detail tab
 navigation — moving tab switching off `Tab` onto `←/→` is canonically specified
 there, not in spec-02). Update both canonical specs in this chunk where the
 behavior below changes them.

@@ -2,7 +2,7 @@
  * scroll-viewport.ts — the pure, generic scroll model behind every read-only
  * detail tab (navigation-overhaul chunk 03).
  *
- * Spec: `specs/navigation-overhaul/03-detail-scroll-viewport.md`.
+ * Spec: `specs/002-navigation-overhaul/03-detail-scroll-viewport.md`.
  *
  * A detail tab's content is treated as an ordered list of **visual rows**
  * (`ViewLine[]` — text plus its styling, already wrapped/truncated to the pane

@@ -194,7 +194,7 @@ gate). The discipline is integration *safety*, not just parallelism.
 
 ## 9. Build-order design — decomposition that made the build possible
 
-The build was driven by [`spec/build-order-01.md`](../spec/build-order-01.md),
+The build was driven by [`specs/001-initial-features/build-order-01.md`](../specs/001-initial-features/build-order-01.md),
 which sequences Specs 01–08 into 22 independently-buildable chunks. The plan
 itself contains the smartest moves of the whole project — the execution
 techniques above only worked because the work was carved up this way.

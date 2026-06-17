@@ -6,7 +6,7 @@ chunk reuses; the Logs tab must be focusable), 02 (`computeFrame` → `detail`
 `Rect`; the Logs tab renders inside it), 04 (`<DropdownButton>` / `<Button>` +
 accelerator convention + the hit-region registry/overlay layering used to anchor
 the dropdowns)
-**Implements / amends:** `spec/spec-05-actions.md` §3.1 (container selection)
+**Implements / amends:** `specs/001-initial-features/spec-05-actions.md` §3.1 (container selection)
 and §3.2 (Logs toolbar). Update it where this changes behavior.
 
 ## User story

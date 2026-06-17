@@ -2,7 +2,7 @@
  * yaml-edit.ts — the pure cursor + edit-op model for the in-pane YAML editor
  * (navigation-overhaul chunk 07 / B07).
  *
- * Spec: `specs/navigation-overhaul/07-yaml-editor.md` ("Pure modules" →
+ * Spec: `specs/002-navigation-overhaul/07-yaml-editor.md` ("Pure modules" →
  * `src/ui/yaml-edit.ts`). All cursor movement, text mutation, and the
  * cursor-following scroll arithmetic that used to live inline in
  * `YamlTab.handleEditKey` live here as pure functions over an immutable

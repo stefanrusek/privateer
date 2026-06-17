@@ -3,7 +3,7 @@
 **Status:** DRAFT
 **Depends on:** 01, 03, 05, 06, 07, 08 (every chunk that defines or moves a key;
 this chunk documents the **final** keymap), 04 (accelerator registry it shares)
-**Implements / amends:** `spec/spec-02-navigation-layout.md` §11 (Help Overlay).
+**Implements / amends:** `specs/001-initial-features/spec-02-navigation-layout.md` §11 (Help Overlay).
 Update where this changes behavior.
 
 ## User story

@@ -275,7 +275,7 @@ bun run gate          # format check · lint · grep-gate · typecheck ·
 bun run test:envtest  # integration tests against a real kube-apiserver
 ```
 
-The architecture is spec-driven: see `spec/` for the eight specification
+The architecture is spec-driven: see `specs/001-initial-features/` for the eight specification
 documents this implementation follows, including the quality bar
 (spec 08: 100% line/branch/function/statement coverage on all
 non-adapter code, no coverage exemptions).

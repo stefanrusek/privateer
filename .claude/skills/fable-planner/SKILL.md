@@ -7,7 +7,7 @@ description: A planning-and-implementation playbook for building software the wa
 
 A playbook distilled from how this repo was built (the worked examples live in
 [docs/PROCESS-NOTES.md](../../../docs/PROCESS-NOTES.md) and
-[spec/build-order-01.md](../../../spec/build-order-01.md)). It is not a workflow
+[specs/001-initial-features/build-order-01.md](../../../specs/001-initial-features/build-order-01.md)). It is not a workflow
 with gates — for the spec→plan→build gates use `spec-driven-development`. This
 is about *how to think* while planning a decomposition and while implementing.
 
