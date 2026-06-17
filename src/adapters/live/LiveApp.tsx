@@ -569,9 +569,10 @@ export function LiveApp({
             selectedIndex={snapshot.pfSelectedIndex}
             onStop={controller.stopForward}
             onRetry={controller.retryForward}
-            // No "new forward" entry point from the manager itself — closing
-            // returns to the list where `p` on a Service/Pod starts one.
-            onNewForward={controller.closePfManager}
+            // `[+ New Forward]` closes the manager and opens the port picker
+            // for the selected Pod (Spec 05 §5.4) — it must NOT just close the
+            // manager (that was the mis-wired-to-closePfManager bug).
+            onNewForward={controller.openNewForward}
             onClose={controller.closePfManager}
             renderButton={({ id, label, color, onClick }) => (
               <Button

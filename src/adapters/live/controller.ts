@@ -3878,6 +3878,25 @@ export class LiveController {
     this.bump();
   };
 
+  /**
+   * Open the new-forward prompt from the manager's `[+ New Forward]` button
+   * (Spec 05 §5.4). Closes the manager and opens the same port picker as `p`
+   * (§5.1) for the currently-selected Pod; if the selection isn't a forwardable
+   * Pod, the manager just closes with a hint so the click can never be a no-op
+   * that leaves the user staring at an unchanged overlay. (Previously this was
+   * mis-wired to `closePfManager`, so the button merely closed the manager.)
+   */
+  openNewForward = (): void => {
+    this.pfManagerOpen = false;
+    const resource = this.selectedRow();
+    if (resource !== null && resource.kind === 'Pod') {
+      this.openPortPrompt(resource);
+      return;
+    }
+    this.setHints(['Select a Pod, then [+ New Forward] (or press p)']);
+    this.bump();
+  };
+
   /** Stop an active forward or retry a failed one; no-op when undefined (C3). */
   private actOnForward(fwd: PortForward | undefined): void {
     if (fwd === undefined) {
