@@ -9,6 +9,8 @@ import { Box, Text } from 'ink';
 import type { KubeClient } from '../../boundaries/kube-client.js';
 import type { KubernetesObject } from '../../core/types.js';
 import { formatAge } from '../../resources/age.js';
+import { projectEventsLines } from '../detail-view.js';
+import { ScrollableLines } from './ScrollableLines.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,6 +37,12 @@ export interface EventsTabProps {
   onToggleShowAll: () => void;
   /** Current time in epoch ms — for age formatting. */
   nowMs: number;
+  /** Detail pane inner width — rows clip here (chunk 02/03). */
+  width?: number;
+  /** Topmost visible row in the scroll viewport (chunk 03). */
+  offset?: number;
+  /** Viewport height; when set the body scrolls instead of rendering all rows. */
+  viewportHeight?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +139,20 @@ export function EventsTab({
   showAll,
   onToggleShowAll: _onToggleShowAll,
   nowMs,
+  width = 80,
+  offset = 0,
+  viewportHeight,
 }: EventsTabProps): React.ReactElement {
+  if (viewportHeight !== undefined) {
+    return (
+      <ScrollableLines
+        lines={projectEventsLines(events, warningCount, showAll, nowMs, width)}
+        offset={offset}
+        viewportHeight={viewportHeight}
+      />
+    );
+  }
+
   // Empty states (Spec 04 §8.4)
   if (events.length === 0 && !showAll) {
     return (

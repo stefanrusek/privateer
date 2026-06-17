@@ -532,3 +532,81 @@ describe('YamlTab onModeChange', () => {
     expect(modes).toEqual(['discard-confirm', 'edit']);
   });
 });
+
+describe('YamlTab scroll viewport (chunk 03 / 07)', () => {
+  it('read mode windows tall YAML and clips to width', () => {
+    const big: Record<string, string> = {};
+    for (let i = 0; i < 40; i++) {
+      big[`key${String(i)}`] = `value-${String(i)}`;
+    }
+    const top = renderTab(makeConfigMap(big), {
+      width: 40,
+      offset: 0,
+      viewportHeight: 5,
+    });
+    const topOut = top.lastFrame() ?? '';
+    expect(topOut).toContain('[Edit]');
+    expect(topOut).not.toContain('key39');
+
+    const scrolled = renderTab(makeConfigMap(big), {
+      width: 40,
+      offset: 1000,
+      viewportHeight: 5,
+    });
+    // clamped to bottom — the last keys are reachable, nothing clipped beyond it
+    expect(scrolled.lastFrame()).toContain('key39');
+  });
+
+  it('edit mode follows the cursor: moving below the window scrolls it into view', async () => {
+    const lines = Array.from(
+      { length: 30 },
+      (_, i) => `line${String(i)}: v`,
+    ).join('\n');
+    const { lastFrame, stdin } = render(
+      React.createElement(
+        YamlTab,
+        makeProps(makeConfigMap({}), {
+          _testInitialContent: lines,
+          width: 60,
+          offset: 0,
+          viewportHeight: 6,
+        }),
+      ),
+    );
+    await ticks();
+    // top of the buffer is shown, the tail is below the fold
+    expect(lastFrame()).toContain('line0:');
+    expect(lastFrame()).not.toContain('line20:');
+    // push the cursor far down; the cursor-following scroll reveals later lines
+    for (let i = 0; i < 20; i++) {
+      await safeWrite(stdin, '\x1B[B'); // down arrow
+    }
+    await ticks();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('line20:');
+    expect(frame).not.toContain('line0:');
+  });
+
+  it('edit mode pans horizontally when the cursor moves past the width', async () => {
+    const longLine = 'k: ' + 'abcdefghij'.repeat(8); // 83 chars
+    const { lastFrame, stdin } = render(
+      React.createElement(
+        YamlTab,
+        makeProps(makeConfigMap({}), {
+          _testInitialContent: `${longLine}\nshort: v`,
+          width: 20,
+          offset: 0,
+          viewportHeight: 6,
+        }),
+      ),
+    );
+    await ticks();
+    for (let i = 0; i < 40; i++) {
+      await safeWrite(stdin, '\x1B[C'); // right arrow
+    }
+    await ticks();
+    // the start of the long line has scrolled out of view (left pan applied):
+    // the line no longer begins with its `k: ` prefix.
+    expect(lastFrame()).not.toContain('1 k: ');
+  });
+});

@@ -157,7 +157,13 @@ export function LiveApp({
     switch (tab) {
       case 'overview':
         return (
-          <OverviewTab resource={detail.resource} nowMs={snapshot.nowMs} />
+          <OverviewTab
+            resource={detail.resource}
+            nowMs={snapshot.nowMs}
+            width={controller.detailScrollWidth()}
+            offset={controller.detailScrollOffset()}
+            viewportHeight={controller.detailScrollViewportHeight()}
+          />
         );
       case 'yaml':
         return (
@@ -169,6 +175,9 @@ export function LiveApp({
             onReload={controller.yamlReload}
             onOpenInEditor={controller.yamlOpenInEditor}
             onModeChange={controller.yamlModeChanged}
+            width={controller.detailScrollWidth()}
+            offset={controller.detailScrollOffset()}
+            viewportHeight={controller.detailScrollViewportHeight()}
           />
         );
       case 'events':
@@ -179,6 +188,9 @@ export function LiveApp({
             showAll={detail.showAllEvents}
             onToggleShowAll={controller.toggleShowAllEvents}
             nowMs={snapshot.nowMs}
+            width={controller.detailScrollWidth()}
+            offset={controller.detailScrollOffset()}
+            viewportHeight={controller.detailScrollViewportHeight()}
           />
         );
       case 'logs': {
@@ -308,6 +320,8 @@ export function LiveApp({
             lagSeries={charts?.lag ?? []}
             rangeModel={m.range}
             onRangeChange={controller.setMetricsRange}
+            offset={controller.detailScrollOffset()}
+            viewportHeight={controller.detailScrollViewportHeight()}
           />
         );
       }

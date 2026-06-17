@@ -21,6 +21,8 @@ import { createRangeSelector, selectRange } from '../../charts/range.js';
 import type { RangeLabel, RangeSelectorModel } from '../../charts/range.js';
 import { renderTimeseriesChart } from '../../charts/timeseries.js';
 import { computeTrendIndicator } from '../../charts/timeseries.js';
+import { projectMetricsLines } from '../detail-view.js';
+import { ScrollableLines } from './ScrollableLines.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -78,6 +80,10 @@ export interface MetricsTabProps {
   readonly rangeModel?: RangeSelectorModel;
   /** Callback when user changes range. */
   readonly onRangeChange?: (label: RangeLabel) => void;
+  /** Topmost visible row in the scroll viewport (chunk 03). */
+  readonly offset?: number;
+  /** Viewport height; when set the body scrolls instead of rendering all rows. */
+  readonly viewportHeight?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -475,8 +481,46 @@ export function MetricsTab({
   recordsOutSeries = [],
   rangeModel,
   onRangeChange,
+  offset = 0,
+  viewportHeight,
 }: MetricsTabProps): React.ReactElement {
   const effectiveRange = rangeModel ?? createRangeSelector();
+
+  const chartWidth =
+    paneWidth !== undefined && paneWidth > 0
+      ? Math.min(paneWidth, MAX_CHART_WIDTH)
+      : MAX_CHART_WIDTH;
+
+  // Measured host: project to ViewLine[] and scroll via the chunk-03 viewport.
+  if (viewportHeight !== undefined) {
+    return (
+      <ScrollableLines
+        lines={projectMetricsLines(
+          {
+            resourceKind,
+            resourceName,
+            tier,
+            capabilities,
+            chartWidth,
+            cpuSeries,
+            memorySeries,
+            networkInSeries,
+            networkOutSeries,
+            restartSeries,
+            replicaSeries,
+            lagSeries,
+            rangeOptions: effectiveRange.options,
+            rangeSelected: effectiveRange.selected,
+          },
+          paneWidth !== undefined && paneWidth > 0
+            ? paneWidth
+            : MAX_CHART_WIDTH,
+        )}
+        offset={offset}
+        viewportHeight={viewportHeight}
+      />
+    );
+  }
 
   // §4.5 No-metrics state
   if (tier === 'none') {
@@ -579,11 +623,6 @@ export function MetricsTab({
         );
     }
   };
-
-  const chartWidth =
-    paneWidth !== undefined && paneWidth > 0
-      ? Math.min(paneWidth, MAX_CHART_WIDTH)
-      : MAX_CHART_WIDTH;
 
   return (
     <ChartWidthContext.Provider value={chartWidth}>

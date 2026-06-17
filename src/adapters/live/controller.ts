@@ -66,9 +66,18 @@ import {
   scrollBy,
   toBottom,
   toTop,
+  resetOffset,
   logsLiveAfterScroll,
   type ScrollState,
+  type ViewLine,
 } from '../../ui/scroll-viewport.js';
+import {
+  projectOverviewLines,
+  projectEventsLines,
+  projectYamlReadLines,
+  projectMetricsLines,
+} from '../../ui/detail-view.js';
+import { MAX_CHART_WIDTH } from '../../ui/components/MetricsTab.js';
 import { projectLogsView, offsetForMatch } from '../../ui/logs-view.js';
 import { helpLines, scopeForFocus } from '../../ui/keymap.js';
 import {
@@ -399,6 +408,12 @@ export class LiveController {
   private columns: ColumnDef[] = [];
   private selectedIndex = 0;
   private detail: DetailState | null = null;
+  /**
+   * Scroll offset for the non-Logs detail tabs (Spec 03). Logs keeps its own
+   * offset on `this.logs` (with the tail-pause coupling); this drives Overview,
+   * YAML read mode, Events, and Metrics. Reset to the top on tab/resource change.
+   */
+  private detailOffset: ScrollState = { offset: 0 };
   private confirm: ConfirmState | null = null;
   private health: HealthState = {
     summary: emptySummary(),
@@ -797,6 +812,144 @@ export class LiveController {
     const detail = this.frame().detail;
     const inner = detail !== null ? detail.height : 0;
     return Math.max(1, inner - 1);
+  }
+
+  /** Inner width of the detail pane — content clips here (Spec 02/03). */
+  private detailWidth(): number {
+    const detail = this.frame().detail;
+    return detail !== null ? detail.width : this.frame().list.width;
+  }
+
+  /**
+   * Project the active **non-Logs** detail tab's content to `ViewLine[]` (Spec
+   * 03), using the same `detail-view` helpers the components render through, so
+   * the controller's line count matches what is on screen. Returns `null` for
+   * Logs (own offset) and Agent (interactive, not viewport-scrolled).
+   */
+  private detailLines(): ViewLine[] | null {
+    const d = this.detail;
+    if (d === null) {
+      return null;
+    }
+    const width = this.detailWidth();
+    switch (d.tab) {
+      case 'overview':
+        return projectOverviewLines(d.resource, this.clock.now(), width);
+      case 'yaml':
+        return projectYamlReadLines(
+          this.yamlForDetail(),
+          d.resource.kind,
+          false,
+          width,
+        );
+      case 'events':
+        return projectEventsLines(
+          d.events,
+          d.warningCount,
+          d.showAllEvents,
+          this.clock.now(),
+          width,
+        );
+      case 'metrics':
+        return projectMetricsLines(this.metricsProjectionInput(width), width);
+      case 'logs':
+      case 'agent':
+        return null;
+    }
+  }
+
+  /** Assemble the metrics projection inputs (charts when present, else session). */
+  private metricsProjectionInput(
+    width: number,
+  ): Parameters<typeof projectMetricsLines>[0] {
+    const d = this.detail;
+    const resource =
+      d !== null
+        ? d.resource
+        : ({ kind: '', name: '', namespace: null } as ResourceObject);
+    const charts =
+      this.metricsTier === 'prometheus' && this.charts?.uid === resource.uid
+        ? this.charts
+        : null;
+    const session = charts === null ? this.sessionSeries(resource) : null;
+    const chartWidth =
+      width > 0 ? Math.min(width, MAX_CHART_WIDTH) : MAX_CHART_WIDTH;
+    return {
+      resourceKind: resource.kind,
+      resourceName: resource.name,
+      tier: this.metricsTier,
+      capabilities: this.metricsCaps,
+      chartWidth,
+      cpuSeries: charts?.cpu ?? session?.cpu ?? [],
+      memorySeries: charts?.memory ?? session?.memory ?? [],
+      networkInSeries: charts?.networkIn ?? [],
+      networkOutSeries: charts?.networkOut ?? [],
+      restartSeries: charts?.restarts ?? [],
+      replicaSeries: charts?.replicas ?? [],
+      lagSeries: charts?.lag ?? [],
+      rangeOptions: this.metricsRange.options,
+      rangeSelected: this.metricsRange.selected,
+    };
+  }
+
+  /** Total projected line count for the active non-Logs tab (0 when N/A). */
+  private detailTotalLines(): number {
+    return this.detailLines()?.length ?? 0;
+  }
+
+  /** The detail scroll offset exposed to LiveApp (clamped). */
+  detailScrollOffset(): number {
+    return clampOffset(
+      this.detailOffset.offset,
+      this.detailTotalLines(),
+      this.detailViewportHeight(),
+    );
+  }
+
+  /** The detail viewport height exposed to LiveApp (non-Logs tabs). */
+  detailScrollViewportHeight(): number {
+    return this.detailViewportHeight();
+  }
+
+  /** The detail pane inner width exposed to LiveApp. */
+  detailScrollWidth(): number {
+    return this.detailWidth();
+  }
+
+  /** Reset the non-Logs detail offset to the top (tab/resource change). */
+  private resetDetailOffset(): void {
+    this.detailOffset = resetOffset(
+      false,
+      this.detailTotalLines(),
+      this.detailViewportHeight(),
+    );
+  }
+
+  /**
+   * Drive the non-Logs detail viewport from a motion key (`↑/↓`, PageUp/Down,
+   * Home/End, `g`/`G`). Returns true when the key moved the viewport.
+   */
+  private scrollDetail(input: string, key: InkKey): boolean {
+    const total = this.detailTotalLines();
+    const vh = this.detailViewportHeight();
+    const start = this.detailOffset;
+    if (key.upArrow) {
+      this.detailOffset = scrollBy(start, -1, total, vh);
+    } else if (key.downArrow) {
+      this.detailOffset = scrollBy(start, 1, total, vh);
+    } else if (key.pageUp) {
+      this.detailOffset = pageBy(start, 'up', total, vh);
+    } else if (key.pageDown) {
+      this.detailOffset = pageBy(start, 'down', total, vh);
+    } else if (input === 'g') {
+      this.detailOffset = toTop();
+    } else if (input === 'G') {
+      this.detailOffset = toBottom(total, vh);
+    } else {
+      return false;
+    }
+    this.bump();
+    return true;
   }
 
   /**
@@ -1904,6 +2057,9 @@ export class LiveController {
       if (tab === 'metrics') {
         void this.fetchCharts();
       }
+      // Spec 03: the new tab starts at its top (Logs starts at its bottom,
+      // owned by `this.logs`).
+      this.resetDetailOffset();
       this.bump();
     }
   };
@@ -2276,6 +2432,8 @@ export class LiveController {
       void this.fetchCharts();
     }
     this.charts = null;
+    // Spec 03: a freshly-opened resource starts at its tab's top.
+    this.resetDetailOffset();
     this.app = { ...this.app, showDetail: true, focus: 'detail' };
     void this.fetchDetailEvents();
     this.bump();
@@ -3860,7 +4018,7 @@ export class LiveController {
       }
       case 'detail': {
         // Logs route through applyLogsOffset so tail pause/resume fires
-        // (Spec 03 coupling); other detail tabs have no scroll state yet.
+        // (Spec 03 coupling); every other in-scope tab scrolls its own offset.
         if (this.detail?.tab === 'logs' && this.logs !== null) {
           const l = this.logs;
           const total = l.ring.toArray().length;
@@ -3869,6 +4027,16 @@ export class LiveController {
             offset: l.live ? maxOffset(total, vh) : l.offset,
           };
           this.applyLogsOffset(scrollBy(start, delta * WHEEL_LINES, total, vh));
+        } else if (this.detail !== null) {
+          const total = this.detailTotalLines();
+          const vh = this.detailViewportHeight();
+          this.detailOffset = scrollBy(
+            this.detailOffset,
+            delta * WHEEL_LINES,
+            total,
+            vh,
+          );
+          this.bump();
         }
         return;
       }
@@ -4562,9 +4730,10 @@ export class LiveController {
       this.setDetailTab(jumped);
       return;
     }
-    // `↑/↓` scroll detail content — wired in chunk 03; no-op until then so they
-    // no longer leak to other regions.
-    if (key.upArrow || key.downArrow) {
+    // `↑/↓`, PageUp/PageDown, `g`/`G` scroll the active non-Logs tab's content
+    // through the chunk-03 viewport (Logs has its own scroll path). Metrics
+    // `[`/`]` range keys win over `g`/`G` only by falling through below.
+    if (this.scrollDetail(input, key)) {
       return;
     }
     if (this.detail.tab === 'metrics' && (input === '[' || input === ']')) {

@@ -126,6 +126,8 @@ export const KEYMAP: readonly KeyGroup[] = [
     bindings: [
       { keys: '← / →', description: 'Previous / next tab' },
       { keys: '↑ / ↓', description: 'Scroll the tab content' },
+      { keys: 'PageUp / PageDown', description: 'Page up / down' },
+      { keys: 'g / G', description: 'Top / bottom' },
       { keys: '1 – 6', description: 'Jump to a tab' },
       { keys: 'Esc', description: 'Close the detail pane' },
     ],

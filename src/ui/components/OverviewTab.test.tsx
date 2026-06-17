@@ -1149,3 +1149,49 @@ describe('OverviewTab DopplerSecret ?? fallback branches', () => {
     }).not.toThrow();
   });
 });
+
+describe('OverviewTab scroll viewport (chunk 03)', () => {
+  it('windows the projected lines when a viewportHeight is given', () => {
+    const resource = makeResource({
+      kind: 'Node',
+      namespace: null,
+      raw: {
+        metadata: { name: 'n' },
+        status: {
+          nodeInfo: {
+            osImage: 'linux',
+            kernelVersion: '6',
+            containerRuntimeVersion: 'containerd',
+            kubeletVersion: 'v1.30',
+          },
+          addresses: [{ type: 'InternalIP', address: '1.2.3.4' }],
+          conditions: [{ type: 'Ready', status: 'True' }],
+          capacity: { cpu: '4', memory: '8Gi', pods: '110' },
+          allocatable: { cpu: '3', memory: '7Gi', pods: '110' },
+        },
+      },
+    });
+    const top = render(
+      React.createElement(OverviewTab, {
+        resource,
+        nowMs: NOW_MS,
+        width: 80,
+        offset: 0,
+        viewportHeight: 3,
+      }),
+    );
+    expect(top.lastFrame()).toContain('METADATA');
+    expect(top.lastFrame()).not.toContain('ADDRESSES');
+
+    const scrolled = render(
+      React.createElement(OverviewTab, {
+        resource,
+        nowMs: NOW_MS,
+        width: 80,
+        offset: 100,
+        viewportHeight: 3,
+      }),
+    );
+    expect(scrolled.lastFrame()).toContain('1.2.3.4');
+  });
+});

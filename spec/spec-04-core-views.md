@@ -124,6 +124,27 @@ The tabbed container in the center bottom pane.
 
 The `Agent` tab (Spec 07) is always present, separated by a divider. Exec/Terminal is a suspend-and-handover action (`x` key), not a tab, in v1 — see Spec 05 §4.3.
 
+### 4.3 Detail scroll viewport (every read-only tab)
+
+Every read-only detail tab — **Overview, YAML (read mode), Events, Metrics, and
+Logs** — scrolls when its content is taller than the pane; content is **never
+silently clipped** (navigation-overhaul chunk 03). Each tab projects its content
+to an ordered list of visual rows and the pane shows a fixed-height window into
+it:
+
+- `↑` / `↓` scroll by one line; `PageUp` / `PageDown` by ~one pane height;
+  `g` / `G` jump to top / bottom. The **mouse wheel** over the detail region
+  scrolls the same viewport.
+- The window resets to the **top** when the active tab or the selected resource
+  changes (Logs resets to the **bottom** and tails — see Spec 05).
+- A scroll indicator (a one-column gutter thumb) is shown only when the content
+  exceeds the pane. Long lines **clip** to the detail width — they never wrap.
+
+The viewport math is owned by the pure `src/ui/scroll-viewport.ts` module and the
+per-tab line projection by `src/ui/detail-view.ts`; the controller only holds the
+offset. Logs additionally couples the offset to its live-tail (Spec 05): scrolling
+up off the bottom pauses the tail, returning to the bottom resumes it.
+
 ---
 
 ## 5. OverviewTab

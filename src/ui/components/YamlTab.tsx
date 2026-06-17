@@ -37,8 +37,13 @@ import {
   insertNewline,
   backspace,
   forwardDelete,
+  followCursor,
+  SCROLL_ORIGIN,
   type EditState,
+  type EditScroll,
 } from '../yaml-edit.js';
+import { projectYamlReadLines } from '../detail-view.js';
+import { ScrollableLines } from './ScrollableLines.js';
 import {
   initialApplyStatus,
   pressApply,
@@ -91,6 +96,16 @@ export interface YamlTabProps {
    * depend on — stdin-driven dirtiness is unreliable under ink-testing-library.)
    */
   _testInitialContent?: string;
+  /** Detail pane inner width — read-mode lines clip here (chunk 02/03/07). */
+  width?: number;
+  /** Topmost visible row in the read-mode scroll viewport (chunk 03). */
+  offset?: number;
+  /**
+   * Read-mode viewport height; when set the read body scrolls via the chunk-03
+   * viewport instead of rendering every line. (Edit mode follows the cursor on
+   * its own — see {@link followCursor}.)
+   */
+  viewportHeight?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +140,9 @@ export function YamlTab({
   onSave,
   onModeChange,
   _testInitialContent,
+  width = 80,
+  offset = 0,
+  viewportHeight,
 }: YamlTabProps): React.ReactElement {
   const initialMode: TabMode =
     _testInitialContent !== undefined
@@ -136,6 +154,13 @@ export function YamlTab({
         }
       : { kind: 'read', revealed: false };
   const [mode, setMode] = useState<TabMode>(initialMode);
+  // Edit-mode cursor-following scroll (both axes). Recomputed on every cursor
+  // move via the pure `followCursor`; read mode uses the controller's offset.
+  const [editScroll, setEditScroll] = useState<EditScroll>(SCROLL_ORIGIN);
+  // Edit body height: leave the editing banner one row; default generously when
+  // the host does not measure (component tests render the full buffer anyway).
+  const editHeight =
+    viewportHeight !== undefined ? Math.max(1, viewportHeight - 1) : 9999;
 
   function transition(next: TabMode): void {
     setMode(next);
@@ -230,6 +255,9 @@ export function YamlTab({
   ): void {
     const apply = (next: EditState): void => {
       setMode({ ...current, edit: next });
+      setEditScroll((prev) =>
+        followCursor(prev, next.cursor, width, editHeight),
+      );
     };
     if (key.leftArrow) {
       apply(moveLeft(current.edit));
@@ -313,6 +341,17 @@ export function YamlTab({
 
   // ── Read mode ────────────────────────────────────────────────────────────
   if (mode.kind === 'read') {
+    // Measured host: project to ViewLine[] and scroll via the chunk-03 viewport
+    // (long lines clip to `width`, never wrap).
+    if (viewportHeight !== undefined) {
+      return (
+        <ScrollableLines
+          lines={projectYamlReadLines(yaml, kind, mode.revealed, width)}
+          offset={offset}
+          viewportHeight={viewportHeight}
+        />
+      );
+    }
     const displayYaml = mode.revealed ? yaml : redactSecret(yaml);
     const lines = displayYaml.split('\n');
     const isSecret = kind === 'Secret';
@@ -341,6 +380,17 @@ export function YamlTab({
   if (mode.kind === 'edit') {
     const lines = mode.edit.lines;
     const modifiedLines = computeModifiedLines(mode.baseYaml, lines);
+    // Cursor-following window (both axes). Unmeasured hosts (component tests)
+    // render the whole buffer with no horizontal pan.
+    const measured = viewportHeight !== undefined;
+    const top = measured ? editScroll.top : 0;
+    const left = measured ? editScroll.left : 0;
+    const lastRow = measured
+      ? Math.min(lines.length, top + editHeight)
+      : lines.length;
+    const visibleRows = lines
+      .map((line, i) => ({ line, i }))
+      .slice(top, lastRow);
     return (
       <Box flexDirection="column">
         <Box flexDirection="row">
@@ -359,7 +409,7 @@ export function YamlTab({
           </Box>
         )}
         <Box flexDirection="column">
-          {lines.map((line, i) => (
+          {visibleRows.map(({ line, i }) => (
             <Box key={i} flexDirection="row">
               {modifiedLines.has(i) ? (
                 <Text color="yellow">│</Text>
@@ -369,11 +419,14 @@ export function YamlTab({
               {i === mode.edit.cursor.row ? (
                 <CursorLine
                   lineNum={i + 1}
-                  line={line}
-                  col={mode.edit.cursor.col}
+                  line={left > 0 ? line.slice(left) : line}
+                  col={mode.edit.cursor.col - left}
                 />
               ) : (
-                <HighlightedLine lineNum={i + 1} line={line} />
+                <HighlightedLine
+                  lineNum={i + 1}
+                  line={left > 0 ? line.slice(left) : line}
+                />
               )}
             </Box>
           ))}

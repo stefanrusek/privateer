@@ -543,3 +543,42 @@ describe('EventsTab', () => {
     expect(lastFrame()).toContain('999999');
   });
 });
+
+describe('EventsTab scroll viewport (chunk 03)', () => {
+  it('windows tall content and scrolls to the offset', () => {
+    const events = Array.from({ length: 30 }, (_, i) =>
+      makeRow('Normal', `Reason${String(i)}`, `message-${String(i)}`),
+    );
+    const top = render(
+      React.createElement(EventsTab, {
+        events,
+        warningCount: 0,
+        showAll: true,
+        onToggleShowAll: noop,
+        nowMs: NOW_MS,
+        width: 120,
+        offset: 0,
+        viewportHeight: 6,
+      }),
+    );
+    const topOut = top.lastFrame() ?? '';
+    expect(topOut).toContain('message-0');
+    // far-below rows are not rendered at the top
+    expect(topOut).not.toContain('message-25');
+
+    const scrolled = render(
+      React.createElement(EventsTab, {
+        events,
+        warningCount: 0,
+        showAll: true,
+        onToggleShowAll: noop,
+        nowMs: NOW_MS,
+        width: 120,
+        offset: 25,
+        viewportHeight: 6,
+      }),
+    );
+    const scrolledOut = scrolled.lastFrame() ?? '';
+    expect(scrolledOut).toContain('message-25');
+  });
+});

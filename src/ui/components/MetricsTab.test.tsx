@@ -617,3 +617,44 @@ describe('MetricsTab — resource name', () => {
     expect(lastFrame()).toContain('my-pod');
   });
 });
+
+describe('MetricsTab scroll viewport (chunk 03)', () => {
+  it('windows projected chart lines when a viewportHeight is given', () => {
+    const series = [
+      {
+        labels: { metric: 'cpu' },
+        points: Array.from({ length: 8 }, (_, i) => ({
+          timestampMs: i * 1000,
+          value: i,
+        })),
+      },
+    ];
+    const { lastFrame } = render(
+      React.createElement(
+        MetricsTab,
+        baseProps({
+          resourceKind: 'Pod',
+          paneWidth: 60,
+          cpuSeries: series,
+          memorySeries: series,
+          offset: 0,
+          viewportHeight: 4,
+        }),
+      ),
+    );
+    const out = lastFrame() ?? '';
+    expect(out).toContain('Metrics');
+    // a scrollbar gutter appears because the projected content overflows
+    expect(out).toContain('█');
+  });
+
+  it('no-metrics state still scrolls via the viewport', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        MetricsTab,
+        baseProps({ tier: 'none', offset: 0, viewportHeight: 2 }),
+      ),
+    );
+    expect(lastFrame()).toContain('No metrics available');
+  });
+});
