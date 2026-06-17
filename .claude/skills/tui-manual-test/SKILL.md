@@ -3,16 +3,20 @@ name: tui-manual-test
 description: >-
   Manually QA the p9r TUI by driving the REAL app under tmux against a live
   cluster — generate a test plan from the keymap + specs, exercise every
-  feature/keyboard/mouse interaction, find bugs the automated gate can't see,
-  and loop until a clean run. Use this whenever asked to manually test,
-  smoke-test, QA, "drive the app", verify the TUI actually works, or confirm a
-  fix in the running app — and ALSO use it proactively as a quality gate during
-  implementation: after building a chunk, before declaring a feature done, and
-  before any release. A green `bun run gate` (coverage/lint/tests/BDD) proves
+  keyboard/mouse/feature interaction, and find the bugs an automated gate can't
+  see (a hung quit, an off-by-one click, a dialog that won't confirm, a request
+  that always 409s, a render glitch), looping until a clean run. Reach for this
+  for ANY hands-on testing of the running TUI: a full pre-release QA pass, a
+  smoke test, "qa the app", "drive it and see what's broken", "make sure it
+  actually works in the terminal" — and PROACTIVELY as a quality gate during
+  implementation: after a build chunk lands, before declaring a feature done,
+  and before a release. A green `bun run gate` (coverage/lint/tests/BDD) proves
   the tests pass, NOT that the app works — in this codebase 14 real bugs once
-  shipped through a 100%-coverage, 560-scenario-green gate and only surfaced by
-  driving the live terminal. Reach for this skill even when the user only says
-  "test it" or "make sure it works," not just when they say "manual test."
+  shipped through a 100%-coverage, 560-scenario-green gate and surfaced only by
+  driving the live terminal. This skill owns comprehensive and exploratory QA,
+  periodic implementation gates, and bug-hunting; for confirming that one
+  specific change works the built-in `verify` skill also applies. Trigger even
+  when the user only says "test it" or "make sure it works."
 ---
 
 # Manual TUI testing — drive the real thing
