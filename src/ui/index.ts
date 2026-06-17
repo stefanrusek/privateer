@@ -29,6 +29,22 @@ export { ContextSwitcher } from './components/ContextSwitcher.js';
 export type { ContextSwitcherProps } from './components/ContextSwitcher.js';
 export { HelpOverlay } from './components/HelpOverlay.js';
 export type { HelpOverlayProps } from './components/HelpOverlay.js';
+export {
+  KEYMAP,
+  groupsFor,
+  scopeForFocus,
+  helpLines,
+  acceleratorSet,
+  keymapIssues,
+  renderKeymapMarkdown,
+} from './keymap.js';
+export type {
+  Scope,
+  KeyBinding,
+  KeyGroup,
+  HelpLine,
+  KeymapIssue,
+} from './keymap.js';
 export { Layout } from './components/Layout.js';
 export type { LayoutProps } from './components/Layout.js';
 

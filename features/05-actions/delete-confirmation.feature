@@ -8,27 +8,26 @@ Feature: Delete confirmation dialog
     Then the delete dialog frame contains "my-pod"
     And the delete dialog frame contains "Cancel"
 
-  Scenario: Default selection is Cancel
+  Scenario: Default selection is Confirm so Enter confirms
     Given a delete confirm dialog for kind "Pod" named "my-pod" in namespace "default"
-    Then the delete dialog default selection is "Cancel"
+    Then the delete dialog default selection is "Confirm"
 
-  Scenario: Enter on Cancel calls onCancel and not onConfirm
+  Scenario: Enter on the default selection calls onConfirm and not onCancel
     Given a delete confirm dialog for kind "Pod" named "my-pod" in namespace "default"
     When I press Enter on the delete dialog
-    Then onCancel was called
-    And onConfirm was not called
-
-  Scenario: Navigating to Confirm and pressing Enter calls onConfirm
-    Given a delete confirm dialog for kind "Pod" named "my-pod" in namespace "default"
-    When I press the right arrow on the delete dialog
-    And I press Enter on the delete dialog
     Then onConfirm was called
     And onCancel was not called
 
-  Scenario: Escape always calls onCancel regardless of selection
+  Scenario: Navigating to Cancel and pressing Enter calls onCancel
     Given a delete confirm dialog for kind "Pod" named "my-pod" in namespace "default"
     When I press the right arrow on the delete dialog
-    And I press Escape on the delete dialog
+    And I press Enter on the delete dialog
+    Then onCancel was called
+    And onConfirm was not called
+
+  Scenario: Escape always calls onCancel regardless of selection
+    Given a delete confirm dialog for kind "Pod" named "my-pod" in namespace "default"
+    When I press Escape on the delete dialog
     Then onCancel was called
     And onConfirm was not called
 

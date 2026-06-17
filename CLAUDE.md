@@ -4,6 +4,14 @@ A single-binary Kubernetes TUI — Bun · Ink 5 · React 18 · local LLM agent.
 The files in `spec/` together form the specification; when behavior is in
 question, the spec wins.
 
+## Working with me
+
+- Do **not** use the `AskUserQuestion` tool / multiple-choice dialog. Its option
+  text truncates and the previews mangle ASCII. Ask clarifying questions inline
+  as plain Markdown prose instead — lay out the options and your recommendation
+  in the message body.
+
+
 ## Commands
 
 ```sh

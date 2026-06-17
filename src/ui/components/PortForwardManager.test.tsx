@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
+import { Text } from 'ink';
 import {
   PortForwardManager,
   ForwardCountIndicator,
   QuitGuardPrompt,
+  pfManagerRemeasureKey,
 } from './PortForwardManager.js';
 import type { PortForward, RecentForward } from '../../portforward/types.js';
 
@@ -41,6 +43,58 @@ function makeRecent(overrides?: Partial<RecentForward>): RecentForward {
 
 const NO_FORWARDS: readonly PortForward[] = [];
 const NO_RECENTS: readonly RecentForward[] = [];
+
+// ---------------------------------------------------------------------------
+// pfManagerRemeasureKey
+// ---------------------------------------------------------------------------
+
+describe('pfManagerRemeasureKey', () => {
+  it('changes when a forward is added or removed', () => {
+    const a = pfManagerRemeasureKey({
+      forwards: [makeForward({ id: 'a' })],
+      recents: NO_RECENTS,
+    });
+    const b = pfManagerRemeasureKey({
+      forwards: [makeForward({ id: 'a' }), makeForward({ id: 'b' })],
+      recents: NO_RECENTS,
+    });
+    expect(a).not.toEqual(b);
+  });
+
+  it('changes when a forward status changes (active → failed grows the row)', () => {
+    const active = pfManagerRemeasureKey({
+      forwards: [makeForward({ id: 'a', status: 'active' })],
+      recents: NO_RECENTS,
+    });
+    const failed = pfManagerRemeasureKey({
+      forwards: [
+        makeForward({ id: 'a', status: 'failed', failReason: 'boom' }),
+      ],
+      recents: NO_RECENTS,
+    });
+    expect(active).not.toEqual(failed);
+  });
+
+  it('changes when the recents count changes', () => {
+    const none = pfManagerRemeasureKey({
+      forwards: NO_FORWARDS,
+      recents: NO_RECENTS,
+    });
+    const one = pfManagerRemeasureKey({
+      forwards: NO_FORWARDS,
+      recents: [makeRecent()],
+    });
+    expect(none).not.toEqual(one);
+  });
+
+  it('is stable for identical state', () => {
+    const state = {
+      forwards: [makeForward({ id: 'a', status: 'active' as const })],
+      recents: [makeRecent()],
+    };
+    expect(pfManagerRemeasureKey(state)).toEqual(pfManagerRemeasureKey(state));
+  });
+});
 
 // ---------------------------------------------------------------------------
 // PortForwardManager
@@ -252,6 +306,72 @@ describe('PortForwardManager', () => {
       }),
     );
     expect(lastFrame()).toContain('kube-system');
+  });
+
+  it('marks the selected forward with a cursor', () => {
+    const fwd1 = makeForward({ id: '1', localPort: 8080 });
+    const fwd2 = makeForward({ id: '2', localPort: 9090 });
+    const { lastFrame } = render(
+      React.createElement(PortForwardManager, {
+        forwards: [fwd1, fwd2],
+        recents: NO_RECENTS,
+        onStop: noop,
+        onRetry: noop,
+        onNewForward: noop,
+        onClose: noop,
+        selectedIndex: 1,
+      }),
+    );
+    expect(lastFrame()).toContain('›');
+  });
+
+  it('uses an injected renderButton for action controls and fires it', () => {
+    const stopped: string[] = [];
+    const ids: string[] = [];
+    const fwd = makeForward({ id: 'abc', status: 'active' });
+    render(
+      React.createElement(PortForwardManager, {
+        forwards: [fwd],
+        recents: NO_RECENTS,
+        onStop: (id: string) => stopped.push(id),
+        onRetry: noop,
+        onNewForward: noop,
+        onClose: noop,
+        renderButton: ({ id, label, onClick }) => {
+          ids.push(id);
+          if (label === '[✕]') {
+            onClick();
+          }
+          return React.createElement(Text, null, label);
+        },
+      }),
+    );
+    expect(ids).toContain('pfm.action.abc');
+    expect(ids).toContain('pfm.new');
+    expect(ids).toContain('pfm.close');
+    expect(stopped).toEqual(['abc']);
+  });
+
+  it('fires the injected retry button for a failed forward', () => {
+    const retried: string[] = [];
+    const fwd = makeForward({ id: 'def', status: 'failed' });
+    render(
+      React.createElement(PortForwardManager, {
+        forwards: [fwd],
+        recents: NO_RECENTS,
+        onStop: noop,
+        onRetry: (id: string) => retried.push(id),
+        onNewForward: noop,
+        onClose: noop,
+        renderButton: ({ label, onClick }) => {
+          if (label === '[retry]') {
+            onClick();
+          }
+          return React.createElement(Text, null, label);
+        },
+      }),
+    );
+    expect(retried).toEqual(['def']);
   });
 });
 

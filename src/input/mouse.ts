@@ -33,11 +33,22 @@ export interface MouseEvent {
   ctrl: boolean;
 }
 
-/** Enable SGR any-motion mouse reporting on the terminal. */
-export const MOUSE_ENABLE = '\x1b[?1003h\x1b[?1006h';
+/**
+ * Enable mouse reporting: click tracking (1000h) + button-held motion (1002h,
+ * gives drag events for the pane splitter while staying silent on hover) + SGR
+ * extended coordinates (1006h). Any-motion tracking (1003h) is deliberately
+ * **off** — it floods the stream and leaks escape sequences into the user's
+ * shell on unclean exits (CLAUDE.md mouse gotcha).
+ */
+export const MOUSE_ENABLE = '\x1b[?1000h\x1b[?1002h\x1b[?1006h';
 
-/** Disable SGR any-motion mouse reporting on the terminal. */
-export const MOUSE_DISABLE = '\x1b[?1003l\x1b[?1006l';
+/**
+ * Disable **every** mouse reporting mode. Includes 1003h/1015h even though we
+ * never enable them, so a terminal another tool left in any-motion/urxvt mode is
+ * cleaned up too — escape sequences must never leak into the shell.
+ */
+export const MOUSE_DISABLE =
+  '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l';
 
 /**
  * Suspend mouse reporting via an injected writer. Used for exec-handover
@@ -68,6 +79,59 @@ const WHEEL_BIT = 0b01000000; // bit 6 (64)
 const SGR_MOUSE_RE = new RegExp(
   `^${String.fromCodePoint(0x1b)}\\[<(\\d+);(\\d+);(\\d+)([Mm])$`,
 );
+
+// A global, non-anchored variant for splitting a chunk that may carry several
+// reports (terminals coalesce rapid events into one read) plus interleaved
+// non-mouse bytes.
+const SGR_MOUSE_SPLIT_RE = new RegExp(
+  `${String.fromCodePoint(0x1b)}\\[<\\d+;\\d+;\\d+[Mm]`,
+  'g',
+);
+
+/**
+ * Split one stdin read into its constituent SGR mouse events. A single read can
+ * carry several reports (terminals deliver rapid motion as one chunk — CLAUDE.md
+ * gotcha) interleaved with unrelated bytes; this extracts every SGR sequence in
+ * order and parses each one. Non-mouse bytes are ignored.
+ */
+export function parseSgrMouseChunk(chunk: string): MouseEvent[] {
+  const events: MouseEvent[] = [];
+  for (const match of chunk.matchAll(SGR_MOUSE_SPLIT_RE)) {
+    const evt = parseSgrMouse(match[0]);
+    if (evt !== null) {
+      events.push(evt);
+    }
+  }
+  return events;
+}
+
+// Ink's own input parser strips the leading ESC, so a mouse report reaches
+// `useInput` as the bare CSI body `[<button;x;yM|m` (or a fragment of it). The
+// SGR-mouse introducer is specifically `[<` (CSI `<`); matching that is enough
+// to recognise and drop the leak before the keyboard handler can misread the
+// digits as `1`–`6` tab jumps (B3a).
+//
+// A *lone* `[` is deliberately NOT treated as a leak: it is a real key binding
+// (the metrics tab's "previous time range" accelerator), and dropping it made
+// `[` a no-op there. A genuine mouse report always carries the `<`, so requiring
+// `[<` keeps the leak filter intact while letting the bare `[` key through. (In
+// the rare case Ink splits a read exactly after `[`, that stray `[` falls
+// through as a keypress — harmless, since the real click is handled off raw
+// stdin by parseSgrMouseChunk.)
+const INK_MOUSE_INPUT_RE = /^\[<\d*;?\d*;?\d*[Mm]?$/;
+
+/**
+ * True when a `useInput` payload is an SGR mouse report (or a fragment of one)
+ * that leaked past Ink's filter — the controller must ignore it so the digits
+ * inside the sequence never act as keyboard input. The dedicated mouse path
+ * (`parseSgrMouseChunk` off raw stdin) handles the real click.
+ */
+export function isLeakedMouseInput(input: string): boolean {
+  // The full bare sequence (`[<0;60;24M`) and the `[<…` introducer fragments
+  // Ink can deliver when it splits the read are dropped; a lone `[` is a real
+  // keypress (see note above) and is allowed through.
+  return INK_MOUSE_INPUT_RE.test(input);
+}
 
 /**
  * Parse one SGR mouse sequence into a structured MouseEvent. Returns null if

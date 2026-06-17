@@ -129,3 +129,39 @@ Feature: Keyboard navigation input parsing
     And the current focus is "sidebar"
     When I press Shift+Tab
     Then the current focus is "list"
+
+  Scenario: Tab works from inside the detail pane
+    Given the layout has detail visible
+    And the current focus is "detail"
+    When I press Tab
+    Then the current focus is "sidebar"
+
+  Scenario: Detail right arrow switches to the next tab
+    Given a "Pod" detail pane is open on tab "overview"
+    When the detail pane moves to the next tab
+    Then the active detail tab is "yaml"
+
+  Scenario: Detail left arrow switches to the previous tab
+    Given a "Pod" detail pane is open on tab "yaml"
+    When the detail pane moves to the previous tab
+    Then the active detail tab is "overview"
+
+  Scenario: Detail tab wraps around at the end
+    Given a "Pod" detail pane is open on tab "agent"
+    When the detail pane moves to the next tab
+    Then the active detail tab is "overview"
+
+  Scenario: Detail tab wraps around at the start
+    Given a "Pod" detail pane is open on tab "overview"
+    When the detail pane moves to the previous tab
+    Then the active detail tab is "agent"
+
+  Scenario: Number key jumps directly to a tab
+    Given a "Pod" detail pane is open on tab "overview"
+    When the detail pane jumps to tab number "3"
+    Then the active detail tab is "events"
+
+  Scenario: Deployment skips the Logs tab when cycling
+    Given a "Deployment" detail pane is open on tab "events"
+    When the detail pane moves to the next tab
+    Then the active detail tab is "metrics"

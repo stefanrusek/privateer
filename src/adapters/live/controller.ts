@@ -5,19 +5,108 @@
 // health registry, rollups); this class only routes events and holds state.
 
 import { spawn } from 'node:child_process';
-import { homedir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  unlinkSync,
+} from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import jsYaml from 'js-yaml';
 import { KubeConfig } from '@kubernetes/client-node';
 import type { LaunchOptions } from '../../cli/args.js';
 import type { KubeError } from '../../boundaries/kube-client.js';
-import type { ResourceEvent, ResourceObject } from '../../core/types.js';
+import type {
+  ResourceEvent,
+  ResourceObject,
+  KubernetesObject,
+} from '../../core/types.js';
+import type {
+  YamlReplaceResult,
+  YamlReloadResult,
+} from '../../ui/components/YamlTab.js';
+import {
+  confirmDialogKeyAction,
+  applyConfirmKeyAction,
+  type ConfirmSelection,
+} from '../../ui/components/ConfirmDialog.js';
 import type { AppState, FocusRegion } from '../../ui/types.js';
 import type { TableModel } from '../../ui/resource-table-model.js';
 import type { ColumnDef } from '../../resources/columns.js';
 import {
-  getAvailableTabs,
+  navigableTabsFor,
+  prevTab,
+  nextTab,
+  jumpTab,
   type TabId,
-} from '../../ui/components/DetailPane.js';
+} from '../../ui/detail-tabs.js';
+import { nextRegion, regionOrder, clampIndex } from '../../ui/navigation.js';
+import {
+  type ContextMemory,
+  remember as rememberContext,
+  restore as restoreContext,
+  parseContextMemory,
+  serializeContextMemory,
+} from '../../ui/context-memory.js';
+import {
+  type SwitchStatus,
+  beginSwitch,
+  onSync as switchOnSync,
+  onError as switchOnError,
+  retryTarget as switchRetryTarget,
+} from '../../ui/context-switch.js';
+import {
+  buildContainerItems,
+  buildLineLimitItems,
+  LOGS_TOOLBAR_ACCELERATORS,
+  type LogsContainerItem,
+  type LogsLineLimitItem,
+} from '../../ui/logs-toolbar.js';
+import {
+  clampOffset,
+  maxOffset,
+  pageBy,
+  scrollBy,
+  toBottom,
+  toTop,
+  resetOffset,
+  logsLiveAfterScroll,
+  type ScrollState,
+  type ViewLine,
+} from '../../ui/scroll-viewport.js';
+import {
+  projectOverviewLines,
+  projectEventsLines,
+  projectYamlReadLines,
+  projectMetricsLines,
+} from '../../ui/detail-view.js';
+import { reconcileResourceVersion } from '../../ui/yaml-apply.js';
+import { MAX_CHART_WIDTH } from '../../ui/components/MetricsTab.js';
+import { projectLogsView, offsetForMatch } from '../../ui/logs-view.js';
+import { helpLines, scopeForFocus } from '../../ui/keymap.js';
+import {
+  computeFrame,
+  resourceListBand,
+  type Frame,
+  type Segment,
+} from '../../ui/layout-geometry.js';
+import {
+  dispatch as dispatchMouse,
+  entriesEqual,
+  type Action as MouseAction,
+  type DragLatch,
+  type Entry as HitEntry,
+  type RegistrySnapshot,
+} from '../../input/dispatch.js';
+import { sidebarRatioFromX, verticalRatioFromY } from '../../input/ratios.js';
+import {
+  parseSgrMouseChunk,
+  isLeakedMouseInput,
+  type MouseEvent,
+} from '../../input/mouse.js';
+import { MouseLifecycle } from './mouse-lifecycle.js';
 import type { PickerItem } from '../../ui/components/PickerOverlay.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
 import type { ClusterSummary } from '../../ui/components/HealthDashboard.js';
@@ -32,8 +121,14 @@ import {
   applySearch,
   scrollDown,
   scrollUp,
+  setHorizontalOffset,
 } from '../../ui/resource-table-model.js';
 import { getColumns } from '../../resources/columns.js';
+import {
+  naturalWidths,
+  pinnedCount,
+  clampHOffset,
+} from '../../ui/list-horizontal.js';
 import { initialAppState } from '../../cli/initial-state.js';
 import { normalize } from '../../resources/normalize.js';
 import { StateStore } from '../../store/state-store.js';
@@ -95,11 +190,13 @@ import {
 } from '../../exec/command-history.js';
 import { PortForwardManager } from '../../portforward/manager.js';
 import type { PortForwardManagerState } from '../../portforward/manager.js';
+import type { PortForward } from '../../portforward/types.js';
 import type { MetricsTier } from '../../metrics/discovery.js';
 import { SystemTunnel } from '../../metrics/system-tunnel.js';
 import {
   createRangeSelector,
   selectRange,
+  stepRange,
   rangeStartMs,
   rangeDurationMs,
   type RangeLabel,
@@ -159,6 +256,13 @@ export interface ConfirmState {
   destructive: boolean;
   confirmLabel: string;
   action: () => void;
+  /**
+   * Which button is highlighted (B3b). The controller owns this so keyboard
+   * (Enter/Tab/arrows) and the measured [confirm]/[cancel] Buttons share one
+   * source of truth — the dialog's own `useInput` raced the global one and
+   * leaked Enter to the list. Defaults to `confirm` so Enter confirms.
+   */
+  selection: ConfirmSelection;
 }
 
 export interface HealthState {
@@ -181,6 +285,22 @@ export interface LogsViewState {
   searchFocused: boolean;
   newLinesAvailable: boolean;
   confirmation: string | undefined;
+  /** Container dropdown items (B06); current container marked. */
+  containerItems: readonly LogsContainerItem[];
+  /** Index of the streamed container within `containerItems`. */
+  containerIndex: number;
+  /** Whether the inline container dropdown is open. */
+  containerPickerOpen: boolean;
+  /** Highlighted index while the container dropdown is open. */
+  containerPickerIndex: number;
+  /** Line-limit dropdown items (B06); current limit marked. */
+  lineLimitItems: readonly LogsLineLimitItem[];
+  /** Index of the current limit within `lineLimitItems`. */
+  lineLimitIndex: number;
+  /** Whether the inline line-limit dropdown is open. */
+  lineLimitOpen: boolean;
+  /** Highlighted index while the line-limit dropdown is open. */
+  lineLimitPickerIndex: number;
 }
 
 /** Modal picker state (namespace dropdown, container picker). */
@@ -233,6 +353,7 @@ export interface LiveSnapshot {
   logs: LogsViewState | null;
   portForwards: PortForwardManagerState;
   pfManagerOpen: boolean;
+  pfSelectedIndex: number;
   agentPaneOpen: boolean;
   picker: PickerViewState | null;
   portPrompt: PortPromptState | null;
@@ -264,6 +385,31 @@ const ANIMATION_TICK_MS = 250;
 const HEALTH_INTERVAL_MS = 60_000;
 const BADGE_INTERVAL_MS = 60_000;
 const DEFAULT_VISIBLE_HEIGHT = 20;
+/** Lines the detail wheel scrolls per wheel notch (Spec 02 §9). */
+const WHEEL_LINES = 3;
+
+/** Flatten a frame border {@link Segment} into a 1-wide hit-test rectangle. */
+function segmentRect(seg: Segment): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} {
+  if (seg.orientation === 'vertical') {
+    return {
+      x: seg.position,
+      y: seg.start,
+      width: 1,
+      height: seg.end - seg.start + 1,
+    };
+  }
+  return {
+    x: seg.start,
+    y: seg.position,
+    width: seg.end - seg.start + 1,
+    height: 1,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Controller
@@ -284,6 +430,12 @@ export class LiveController {
   private columns: ColumnDef[] = [];
   private selectedIndex = 0;
   private detail: DetailState | null = null;
+  /**
+   * Scroll offset for the non-Logs detail tabs (Spec 03). Logs keeps its own
+   * offset on `this.logs` (with the tail-pause coupling); this drives Overview,
+   * YAML read mode, Events, and Metrics. Reset to the top on tab/resource change.
+   */
+  private detailOffset: ScrollState = { offset: 0 };
   private confirm: ConfirmState | null = null;
   private health: HealthState = {
     summary: emptySummary(),
@@ -291,6 +443,7 @@ export class LiveController {
     showPassing: false,
   };
   private agentExchanges: AgentExchange[] = [];
+  private switchStatus: SwitchStatus = null;
   private contextFilter = '';
   private namespacePickIndex = 0;
 
@@ -310,6 +463,16 @@ export class LiveController {
     searchCurrent: number;
     searchFocused: boolean;
     newLines: number;
+    /** Scroll offset into the ring buffer; honored only while paused. */
+    offset: number;
+    /** Inline container dropdown open state (B06; not the generic picker). */
+    containerPickerOpen: boolean;
+    /** Highlighted index in the container dropdown while it is open. */
+    containerPickerIndex: number;
+    /** Inline line-limit dropdown open state (B06). */
+    lineLimitOpen: boolean;
+    /** Highlighted index in the line-limit dropdown while it is open. */
+    lineLimitIndex: number;
     confirmation: string | undefined;
     stop: (() => void) | null;
   } | null = null;
@@ -321,6 +484,7 @@ export class LiveController {
     new SystemLifecycle(),
   );
   private pfManagerOpen = false;
+  private pfSelectedIndex = 0;
   private portPrompt: PortPromptState | null = null;
   private agentPaneOpen = false;
   // Exec command prompt (Spec 05 §4.2): editable command with ↑/↓ history.
@@ -337,6 +501,13 @@ export class LiveController {
 
   // Exec suspend/handover (Spec 05 §4.3): set by the launch adapter.
   private suspendRunner: (run: () => Promise<void>) => void = () => undefined;
+
+  // $EDITOR pop-out reentry (B2): the suspend round-trip unmounts the Ink tree
+  // and re-renders a fresh one, so the YamlTab's component-local edit state does
+  // not survive. After the external editor exits we stash its (possibly edited)
+  // content here so the remounted YamlTab can seed itself straight back into a
+  // live edit buffer; the component consumes and clears it on mount.
+  private yamlEditReentry: string | null = null;
 
   // Metrics (Spec 06): discovery tier + session buffer for the
   // metrics-server fallback (40-sample rolling window per pod/node).
@@ -365,6 +536,13 @@ export class LiveController {
   private layoutSaveDebounce: (() => void) | null = null;
   // Active detail tab remembered per resource kind (Spec 01 §4).
   private tabByKind = new Map<string, TabId>();
+  // Per-context {namespace, activeKind} memory (chunk 08 §4), persisted in
+  // layout.json under `contexts`. Pure logic lives in src/ui/context-memory.ts.
+  private contextMemory: ContextMemory = {};
+  // A remembered namespace whose validity could not yet be checked (namespaces
+  // had not loaded when the switch landed); applied once they do.
+  private pendingNamespaceRestore: { ctx: string; namespace: string } | null =
+    null;
 
   // Agent (Spec 07): engine loads lazily in the background after launch.
   private enginePromise: Promise<InferenceEngine> | null = null;
@@ -376,12 +554,18 @@ export class LiveController {
   private terminalRows = 24;
 
   private pendingG: number | null = null;
+  // Help overlay scroll offset (B09). The overlay windows the flattened keymap;
+  // ↑/↓ walk it. Reset to the top each time the overlay opens.
+  private helpScroll = 0;
   private listeners = new Set<() => void>();
   private snapshot: LiveSnapshot | null = null;
   private cancels: (() => void)[] = [];
   private healthDebounce: (() => void) | null = null;
   private readonly noAgent: boolean;
   private readonly onExit: () => void;
+  // Owns the mouse-mode lifecycle; tearDown() is the single idempotent function
+  // every exit/suspend path calls so escape sequences never leak (Spec 01 §3.5).
+  private readonly mouse = new MouseLifecycle();
 
   constructor(options: LaunchOptions, onExit: () => void) {
     this.onExit = onExit;
@@ -424,6 +608,7 @@ export class LiveController {
         verticalRatio?: number;
         collapsedCategories?: string[];
         tabByKind?: Record<string, TabId>;
+        contexts?: unknown;
       };
       this.app = {
         ...this.app,
@@ -440,6 +625,8 @@ export class LiveController {
       for (const [kind, tab] of Object.entries(raw.tabByKind ?? {})) {
         this.tabByKind.set(kind, tab);
       }
+      // Per-context memory — tolerant of the old schema (no `contexts` key).
+      this.contextMemory = parseContextMemory(raw.contexts);
     } catch {
       // Corrupt layout file — start fresh.
     }
@@ -448,25 +635,44 @@ export class LiveController {
   private saveLayout(): void {
     this.layoutSaveDebounce ??= this.clock.setTimeout(() => {
       this.layoutSaveDebounce = null;
-      try {
-        mkdirSync(join(homedir(), '.config', 'p9r'), { recursive: true });
-        writeFileSync(
-          this.layoutPath(),
-          JSON.stringify(
-            {
-              sidebarRatio: this.app.sidebarRatio,
-              verticalRatio: this.app.verticalRatio,
-              collapsedCategories: [...this.app.collapsedCategories],
-              tabByKind: Object.fromEntries(this.tabByKind),
-            },
-            null,
-            2,
-          ),
-        );
-      } catch {
-        // Persistence is best-effort.
-      }
+      this.writeLayoutNow();
     }, 1000);
+  }
+
+  /** Write `layout.json` synchronously now. The body of {@link saveLayout}. */
+  private writeLayoutNow(): void {
+    try {
+      mkdirSync(join(homedir(), '.config', 'p9r'), { recursive: true });
+      writeFileSync(
+        this.layoutPath(),
+        JSON.stringify(
+          {
+            sidebarRatio: this.app.sidebarRatio,
+            verticalRatio: this.app.verticalRatio,
+            collapsedCategories: [...this.app.collapsedCategories],
+            tabByKind: Object.fromEntries(this.tabByKind),
+            contexts: serializeContextMemory(this.contextMemory),
+          },
+          null,
+          2,
+        ),
+      );
+    } catch {
+      // Persistence is best-effort.
+    }
+  }
+
+  /**
+   * Flush any pending debounced layout write immediately. Called on quit so a
+   * just-changed namespace/kind (or any layout edit) inside the debounce window
+   * is not lost (BUG-C2).
+   */
+  private flushLayout(): void {
+    if (this.layoutSaveDebounce !== null) {
+      this.layoutSaveDebounce();
+      this.layoutSaveDebounce = null;
+    }
+    this.writeLayoutNow();
   }
 
   // -------------------------------------------------------------------------
@@ -485,6 +691,10 @@ export class LiveController {
     this.pf.onChange(() => {
       this.bump();
     });
+    // Restore the launch context's remembered namespace+kind (C2). The kind is
+    // validated against the static/CRD kind list now; the namespace is applied
+    // lazily by applyPendingNamespaceRestore once namespaces load.
+    this.restoreCurrentContext();
     this.startStreams();
 
     // Age refresh + animation ticks
@@ -568,9 +778,24 @@ export class LiveController {
   }
 
   dispose(): void {
+    // Capture the current context's view and flush any pending layout write so
+    // a namespace/kind change made just before quitting is persisted (C2).
+    this.contextMemory = rememberContext(this.contextMemory, this.app.context, {
+      namespace: this.app.namespace,
+      activeKind: this.app.activeKind,
+    });
+    this.flushLayout();
     this.streams?.stop();
     this.healthDebounce?.();
     this.healthDebounce = null;
+    // Tear down the metrics port-forward child, or its lingering kubectl
+    // keeps the Node event loop alive and quit hangs (Spec 05 §5.6).
+    this.promTunnel?.close();
+    this.promTunnel = null;
+    // Terminate any user port-forwards for the same reason.
+    for (const fwd of this.pf.getState().forwards) {
+      this.pf.stop(fwd.id);
+    }
     for (const cancel of this.cancels) {
       cancel();
     }
@@ -597,6 +822,7 @@ export class LiveController {
       logs: this.buildLogsView(),
       portForwards: this.pf.getState(),
       pfManagerOpen: this.pfManagerOpen,
+      pfSelectedIndex: this.pfSelectedIndex,
       portPrompt: this.portPrompt,
       agentPaneOpen: this.agentPaneOpen,
       picker: this.pickerView(),
@@ -619,25 +845,191 @@ export class LiveController {
     }
   };
 
-  /** Rows available to the resource table (header, table header, command bar). */
+  /**
+   * The single layout-geometry source (Spec 02 §"Single source of truth").
+   * Every size/position below derives from this frame; the controller does no
+   * geometry arithmetic of its own.
+   */
+  frame(): Frame {
+    return computeFrame({
+      columns: this.terminalColumns,
+      rows: this.terminalRows,
+      sidebarRatio: this.app.sidebarRatio,
+      verticalRatio: this.app.verticalRatio,
+      showDetail: this.app.showDetail,
+    });
+  }
+
+  /** Rows available to the resource table (= the list region inner height). */
   visibleHeight(): number {
-    const usable = this.terminalRows - 5;
-    if (usable <= 0) {
-      return DEFAULT_VISIBLE_HEIGHT;
+    const h = this.frame().list.height;
+    return h > 0 ? h : DEFAULT_VISIBLE_HEIGHT;
+  }
+
+  /** Columns available to the resource table (= the list region inner width). */
+  tableWidth(): number {
+    return this.frame().list.width;
+  }
+
+  /**
+   * Rows of scrollable content the detail pane shows (Spec 03). The tab bar
+   * occupies the detail region's top row, so the generic viewport is one row
+   * shorter than the inner height.
+   */
+  private detailViewportHeight(): number {
+    const detail = this.frame().detail;
+    const inner = detail !== null ? detail.height : 0;
+    return Math.max(1, inner - 1);
+  }
+
+  /** Inner width of the detail pane — content clips here (Spec 02/03). */
+  private detailWidth(): number {
+    const detail = this.frame().detail;
+    return detail !== null ? detail.width : this.frame().list.width;
+  }
+
+  /**
+   * Project the active **non-Logs** detail tab's content to `ViewLine[]` (Spec
+   * 03), using the same `detail-view` helpers the components render through, so
+   * the controller's line count matches what is on screen. Returns `null` for
+   * Logs (own offset) and Agent (interactive, not viewport-scrolled).
+   */
+  private detailLines(): ViewLine[] | null {
+    const d = this.detail;
+    if (d === null) {
+      return null;
     }
-    return Math.max(
-      3,
-      this.app.showDetail ? Math.floor(usable * 0.45) : usable,
+    const width = this.detailWidth();
+    switch (d.tab) {
+      case 'overview':
+        return projectOverviewLines(d.resource, this.clock.now(), width);
+      case 'yaml':
+        return projectYamlReadLines(
+          this.yamlForDetail(),
+          d.resource.kind,
+          false,
+          width,
+        );
+      case 'events':
+        return projectEventsLines(
+          d.events,
+          d.warningCount,
+          d.showAllEvents,
+          this.clock.now(),
+          width,
+        );
+      case 'metrics':
+        return projectMetricsLines(this.metricsProjectionInput(width), width);
+      case 'logs':
+      case 'agent':
+        return null;
+    }
+  }
+
+  /** Assemble the metrics projection inputs (charts when present, else session). */
+  private metricsProjectionInput(
+    width: number,
+  ): Parameters<typeof projectMetricsLines>[0] {
+    const d = this.detail;
+    const resource =
+      d !== null
+        ? d.resource
+        : ({ kind: '', name: '', namespace: null } as ResourceObject);
+    const charts =
+      this.metricsTier === 'prometheus' && this.charts?.uid === resource.uid
+        ? this.charts
+        : null;
+    const session = charts === null ? this.sessionSeries(resource) : null;
+    const chartWidth =
+      width > 0 ? Math.min(width, MAX_CHART_WIDTH) : MAX_CHART_WIDTH;
+    return {
+      resourceKind: resource.kind,
+      resourceName: resource.name,
+      tier: this.metricsTier,
+      capabilities: this.metricsCaps,
+      chartWidth,
+      cpuSeries: charts?.cpu ?? session?.cpu ?? [],
+      memorySeries: charts?.memory ?? session?.memory ?? [],
+      networkInSeries: charts?.networkIn ?? [],
+      networkOutSeries: charts?.networkOut ?? [],
+      restartSeries: charts?.restarts ?? [],
+      replicaSeries: charts?.replicas ?? [],
+      lagSeries: charts?.lag ?? [],
+      rangeOptions: this.metricsRange.options,
+      rangeSelected: this.metricsRange.selected,
+    };
+  }
+
+  /** Total projected line count for the active non-Logs tab (0 when N/A). */
+  private detailTotalLines(): number {
+    return this.detailLines()?.length ?? 0;
+  }
+
+  /** The detail scroll offset exposed to LiveApp (clamped). */
+  detailScrollOffset(): number {
+    return clampOffset(
+      this.detailOffset.offset,
+      this.detailTotalLines(),
+      this.detailViewportHeight(),
     );
   }
 
-  /** Columns available to the resource table. */
-  tableWidth(): number {
-    const sidebar = Math.max(
-      16,
-      Math.round(this.app.sidebarRatio * this.terminalColumns),
+  /** The detail viewport height exposed to LiveApp (non-Logs tabs). */
+  detailScrollViewportHeight(): number {
+    return this.detailViewportHeight();
+  }
+
+  /** The detail pane inner width exposed to LiveApp. */
+  detailScrollWidth(): number {
+    return this.detailWidth();
+  }
+
+  /** Reset the non-Logs detail offset to the top (tab/resource change). */
+  private resetDetailOffset(): void {
+    this.detailOffset = resetOffset(
+      false,
+      this.detailTotalLines(),
+      this.detailViewportHeight(),
     );
-    return Math.max(60, this.terminalColumns - sidebar - 2);
+  }
+
+  /**
+   * Drive the non-Logs detail viewport from a motion key (`↑/↓`, PageUp/Down,
+   * Home/End, `g`/`G`). Returns true when the key moved the viewport.
+   */
+  private scrollDetail(input: string, key: InkKey): boolean {
+    const total = this.detailTotalLines();
+    const vh = this.detailViewportHeight();
+    const start = this.detailOffset;
+    if (key.upArrow) {
+      this.detailOffset = scrollBy(start, -1, total, vh);
+    } else if (key.downArrow) {
+      this.detailOffset = scrollBy(start, 1, total, vh);
+    } else if (key.pageUp) {
+      this.detailOffset = pageBy(start, 'up', total, vh);
+    } else if (key.pageDown) {
+      this.detailOffset = pageBy(start, 'down', total, vh);
+    } else if (input === 'g') {
+      this.detailOffset = toTop();
+    } else if (input === 'G') {
+      this.detailOffset = toBottom(total, vh);
+    } else {
+      return false;
+    }
+    this.bump();
+    return true;
+  }
+
+  /**
+   * Rows available to the Logs body specifically. Beyond the tab bar, LogsTab
+   * draws four chrome rows above the lines (title, toolbar, state hints,
+   * divider); the viewport is sized so the windowed lines never overflow.
+   */
+  private logsViewportHeight(): number {
+    return Math.max(
+      1,
+      this.detailViewportHeight() - LiveController.LOGS_CHROME_ROWS,
+    );
   }
 
   terminalSize(): { columns: number; rows: number } {
@@ -667,25 +1059,27 @@ export class LiveController {
     return this.commandOpen ? this.inputText : '';
   }
 
-  /** Lines shown at once in the logs tab (LogsTab renders all it is given). */
-  private static readonly LOGS_VIEW_LINES = 200;
+  /** LogsTab chrome rows above the lines (title, toolbar, hints, divider). */
+  private static readonly LOGS_CHROME_ROWS = 4;
 
   private buildLogsView(): LogsViewState | null {
     if (this.logs === null) {
       return null;
     }
     const l = this.logs;
-    const raw = l.ring.toArray();
-    const tail = raw.slice(-LiveController.LOGS_VIEW_LINES);
-    const display = l.timestamps
-      ? tail
-      : tail.map((line) => {
-          const space = line.indexOf(' ');
-          return space > 0 ? line.slice(space + 1) : line;
-        });
+    const projection = projectLogsView({
+      raw: l.ring.toArray(),
+      offset: l.offset,
+      viewportHeight: this.logsViewportHeight(),
+      timestamps: l.timestamps,
+      live: l.live,
+    });
+    // Search runs over the full projected list; the cursor stays in range.
     const base =
-      l.searchQuery === '' ? emptySearch() : runSearch(display, l.searchQuery);
-    const search: SearchState =
+      l.searchQuery === ''
+        ? emptySearch()
+        : runSearch(projection.display, l.searchQuery);
+    const ranged: SearchState =
       base.matches.length === 0
         ? base
         : {
@@ -695,10 +1089,22 @@ export class LiveController {
               base.matches.length - 1,
             ),
           };
+    // Shift match indices to window coordinates so LogsTab highlights the right
+    // visible row; the count (`matches.length`, `current`) is unchanged.
+    const search: SearchState = {
+      ...ranged,
+      matches: ranged.matches.map((m) => m - projection.offset),
+    };
+    const containerItems = buildContainerItems(l.containers, l.container);
+    const lineLimitItems = buildLineLimitItems(l.limit);
+    const containerIndex = l.containers.findIndex(
+      (c) => c.name === l.container,
+    );
+    const lineLimitIndex = LINE_OPTIONS.findIndex((o) => o.id === l.limit);
     return {
       podName: l.podName,
       container: l.container,
-      lines: display,
+      lines: projection.visible,
       live: l.live,
       timestamps: l.timestamps,
       wrap: l.wrap,
@@ -708,6 +1114,14 @@ export class LiveController {
       searchFocused: l.searchFocused,
       newLinesAvailable: l.newLines > 0,
       confirmation: l.confirmation,
+      containerItems,
+      containerIndex: containerIndex < 0 ? 0 : containerIndex,
+      containerPickerOpen: l.containerPickerOpen,
+      containerPickerIndex: l.containerPickerIndex,
+      lineLimitItems,
+      lineLimitIndex: lineLimitIndex < 0 ? 0 : lineLimitIndex,
+      lineLimitOpen: l.lineLimitOpen,
+      lineLimitPickerIndex: l.lineLimitIndex,
     };
   }
 
@@ -831,6 +1245,9 @@ export class LiveController {
   }
 
   private onStoreChanged(): void {
+    // A store change is the first/ongoing sync from the new context's streams —
+    // it clears any `connecting` switch status (chunk 08 §3).
+    this.settleSwitchOnSync();
     // Coalesced refresh: badges for core kinds, namespaces, health summary.
     this.refreshNamespaces();
     this.refreshCoreBadges();
@@ -841,6 +1258,15 @@ export class LiveController {
     this.bump();
   }
 
+  /** Clear `connecting` once the new context's first sync arrives. */
+  private settleSwitchOnSync(): void {
+    const next = switchOnSync(this.switchStatus, this.app.context);
+    if (next !== this.switchStatus) {
+      this.switchStatus = next;
+      this.app = { ...this.app, switchStatus: next };
+    }
+  }
+
   private refreshNamespaces(): void {
     const namespaces = this.store
       .list(this.app.context, 'Namespace')
@@ -848,6 +1274,22 @@ export class LiveController {
       .sort();
     if (namespaces.join(',') !== this.app.allNamespaces.join(',')) {
       this.app = { ...this.app, allNamespaces: namespaces };
+    }
+    this.applyPendingNamespaceRestore(namespaces);
+  }
+
+  /**
+   * Apply a context's remembered namespace once its namespaces have loaded and
+   * the value still exists (chunk 08 §4); otherwise leave all-namespaces.
+   */
+  private applyPendingNamespaceRestore(namespaces: readonly string[]): void {
+    const pending = this.pendingNamespaceRestore;
+    if (pending?.ctx !== this.app.context) {
+      return;
+    }
+    if (namespaces.includes(pending.namespace)) {
+      this.pendingNamespaceRestore = null;
+      this.setNamespace(pending.namespace);
     }
   }
 
@@ -937,8 +1379,21 @@ export class LiveController {
       const dimmed = new Set(this.app.dimmedKinds);
       dimmed.add(label);
       this.app = { ...this.app, dimmedKinds: dimmed };
+      // A non-RBAC stream error during a switch is a connection failure: surface
+      // the "Could not connect" banner with [Retry] / [Switch context]
+      // (chunk 08 §3). Forbidden is per-kind RBAC, not a connect failure.
+      this.failSwitchOnError(error.message);
     }
     this.bump();
+  }
+
+  /** Transition a `connecting` switch to `error` on a connection failure. */
+  private failSwitchOnError(reason: string): void {
+    const next = switchOnError(this.switchStatus, this.app.context, reason);
+    if (next !== this.switchStatus) {
+      this.switchStatus = next;
+      this.app = { ...this.app, switchStatus: next };
+    }
   }
 
   private matchesNamespaceFilter(
@@ -1552,13 +2007,17 @@ export class LiveController {
       return;
     }
     const now = this.clock.now();
+    const present = new Set<string>();
     for (const item of result.value.items) {
+      const namespace = item.metadata?.namespace ?? null;
+      const name = item.metadata?.name ?? '';
+      present.add(`${namespace ?? '~'}/${name}`);
       const event: ResourceEvent = {
         type: 'ADDED',
         apiVersion: item.apiVersion ?? '',
         kind: item.kind ?? kind,
-        namespace: item.metadata?.namespace ?? null,
-        name: item.metadata?.name ?? '',
+        namespace,
+        name,
         object: { ...item, kind: item.kind ?? kind },
         receivedAt: now,
       };
@@ -1569,6 +2028,18 @@ export class LiveController {
           this.table,
           { type: 'ADDED', resource },
           now - 10_000,
+        );
+      }
+    }
+    // Reconcile removals: drop stored resources of this kind absent from the
+    // fresh LIST (a DELETED event we never saw) and prune them from the table.
+    const removed = this.store.reconcileList(this.app.context, kind, present);
+    for (const resource of removed) {
+      if (this.matchesNamespaceFilter(resource.namespace, kind)) {
+        this.table = applyResourceEvent(
+          this.table,
+          { type: 'DELETED', resource },
+          now,
         );
       }
     }
@@ -1621,6 +2092,8 @@ export class LiveController {
     } else {
       this.seedTable(kindLabel);
     }
+    // Remember this context's active kind so it is restored next launch (C2).
+    this.persistContextMemory(this.app.context);
     this.bump();
   };
 
@@ -1642,6 +2115,8 @@ export class LiveController {
       this.seedTable(this.app.activeKind);
     }
     this.refreshCoreBadges();
+    // Remember this context's namespace so it is restored next launch (C2).
+    this.persistContextMemory(this.app.context);
     this.bump();
   };
 
@@ -1670,6 +2145,9 @@ export class LiveController {
       if (tab === 'metrics') {
         void this.fetchCharts();
       }
+      // Spec 03: the new tab starts at its top (Logs starts at its bottom,
+      // owned by `this.logs`).
+      this.resetDetailOffset();
       this.bump();
     }
   };
@@ -1689,6 +2167,141 @@ export class LiveController {
       this.app = { ...this.app, mode: mode === 'read' ? 'normal' : 'edit' };
       this.bump();
     }
+  };
+
+  // -------------------------------------------------------------------------
+  // YAML editor cluster boundary (B07). The YamlTab component owns the editor
+  // state and the pure apply/conflict reducer; these callbacks perform the only
+  // side effects the reducer asks for. The component never touches kubeClient.
+  // -------------------------------------------------------------------------
+
+  /** The resource currently shown in the YAML tab, serialized to YAML. */
+  yamlForDetail(): string {
+    const raw = this.detail?.resource.raw ?? {};
+    return jsYaml.dump(raw, { lineWidth: -1, indent: 2 });
+  }
+
+  /** A header label for the diff (`Kind/namespace/name`). */
+  yamlTitle(): string {
+    const r = this.detail?.resource;
+    if (r === undefined) {
+      return '';
+    }
+    return `${r.kind}/${r.namespace ?? ''}/${r.name}`;
+  }
+
+  /** Apply the edited YAML via kubeClient.replace; map the result for the reducer. */
+  yamlReplace = async (newYaml: string): Promise<YamlReplaceResult> => {
+    let parsed: unknown;
+    try {
+      parsed = jsYaml.load(newYaml);
+    } catch (err) {
+      return {
+        ok: false,
+        conflict: false,
+        message: err instanceof Error ? err.message : 'invalid YAML',
+      };
+    }
+    // The edit buffer froze the resource's `resourceVersion` when the user
+    // pressed `e`; the watch has since advanced it in the store. Replace with
+    // the stale buffer version and the apiserver rejects every save as a 409
+    // even when nothing actually conflicts (B1). Reconcile to the latest
+    // version the live store has observed before the PUT — mirroring what
+    // `kubectl replace` does — so benign edits land while a genuinely newer
+    // concurrent write (one we haven't observed) still produces a real 409.
+    const latest = this.detail?.resource.resourceVersion ?? '';
+    const object = reconcileResourceVersion(parsed as KubernetesObject, latest);
+    const result = await this.client.replace(object);
+    if (result.ok) {
+      return { ok: true };
+    }
+    if (result.error.kind === 'conflict') {
+      return { ok: false, conflict: true };
+    }
+    return { ok: false, conflict: false, message: result.error.message };
+  };
+
+  /** Re-fetch the YAML-tab resource fresh (reload-&-re-edit after a 409). */
+  yamlReload = async (): Promise<YamlReloadResult> => {
+    const r = this.detail?.resource;
+    if (r === undefined) {
+      return { ok: false, message: 'no resource' };
+    }
+    const result = await this.client.get(r.kind, r.name, r.namespace);
+    if (!result.ok) {
+      return { ok: false, message: result.error.message };
+    }
+    return {
+      ok: true,
+      yaml: jsYaml.dump(result.value, { lineWidth: -1, indent: 2 }),
+    };
+  };
+
+  /**
+   * Pop out to `$EDITOR` (fallback `vi`): write the buffer to a temp file,
+   * suspend the TUI (which tears down mouse reporting — the chunk-04 invariant,
+   * re-asserted here), spawn the editor, read the file back, and best-effort
+   * unlink it. Errors never reach stdout; on failure the input is returned
+   * unchanged. Resolves to the (possibly externally edited) YAML.
+   */
+  yamlOpenInEditor = (yaml: string): Promise<string> => {
+    const r = this.detail?.resource;
+    const tag = r === undefined ? 'resource' : `${r.kind}-${r.name}`;
+    const safeTag = tag.replace(/[^A-Za-z0-9_-]/g, '_');
+    const path = join(
+      tmpdir(),
+      `p9r-edit-${safeTag}-${randomBytes(4).toString('hex')}.yaml`,
+    );
+    return new Promise<string>((resolve) => {
+      let result = yaml;
+      try {
+        writeFileSync(path, yaml, 'utf8');
+      } catch {
+        resolve(yaml);
+        return;
+      }
+      this.suspendRunner(
+        () =>
+          new Promise<void>((done) => {
+            const editor = process.env.EDITOR ?? 'vi';
+            const child = spawn(editor, [path], { stdio: 'inherit' });
+            const finish = (): void => {
+              try {
+                result = readFileSync(path, 'utf8');
+              } catch {
+                // Read failed — keep the original buffer.
+              }
+              try {
+                unlinkSync(path);
+              } catch {
+                // Best-effort cleanup.
+              }
+              // Stash the result so the YamlTab that remounts after the suspend
+              // round-trip re-enters edit mode on the externally-edited content
+              // (B2). `result` reflects the on-disk edits when the read-back
+              // succeeded, or the original buffer when it failed.
+              this.yamlEditReentry = result;
+              resolve(result);
+              done();
+            };
+            child.on('exit', finish);
+            child.on('error', finish);
+          }),
+      );
+    });
+  };
+
+  /**
+   * The content the YamlTab should seed an edit buffer with after a `$EDITOR`
+   * pop-out (B2), or `null` when there is no pending reentry. Pure read — the
+   * value is cleared via {@link clearYamlEditReentry} once the remounted tab has
+   * consumed it (on mount), so a render alone has no side effect.
+   */
+  peekYamlEditReentry = (): string | null => this.yamlEditReentry;
+
+  /** Clear the pending `$EDITOR` reentry once the YamlTab has consumed it. */
+  clearYamlEditReentry = (): void => {
+    this.yamlEditReentry = null;
   };
 
   toggleShowAllEvents = (): void => {
@@ -1719,6 +2332,46 @@ export class LiveController {
     action?.();
   };
 
+  /** Move the highlight between [confirm] and [cancel] (B3b). */
+  confirmSelect = (selection: ConfirmSelection): void => {
+    if (this.confirm === null || this.confirm.selection === selection) {
+      return;
+    }
+    this.confirm = { ...this.confirm, selection };
+    this.bump();
+  };
+
+  /**
+   * Keyboard for the active confirm dialog (B3b). Esc cancels; Enter activates
+   * the highlighted button (defaulting to confirm); ←/→/Tab toggle the
+   * highlight. The pure reducer in ConfirmDialog decides the action.
+   */
+  private handleConfirmInput(input: string, key: InkKey): void {
+    if (this.confirm === null) {
+      return;
+    }
+    const action = confirmDialogKeyAction(input, key);
+    switch (action.kind) {
+      case 'cancel':
+        this.confirmCancel();
+        return;
+      case 'confirm':
+        if (this.confirm.selection === 'confirm') {
+          this.confirmAccept();
+        } else {
+          this.confirmCancel();
+        }
+        return;
+      case 'toggle':
+        this.confirmSelect(
+          applyConfirmKeyAction(action, this.confirm.selection),
+        );
+        return;
+      case 'none':
+        return;
+    }
+  }
+
   selectContext = (ctx: string): void => {
     this.app = { ...this.app, contextSwitcherOpen: false };
     this.contextFilter = '';
@@ -1734,10 +2387,84 @@ export class LiveController {
     this.bump();
   };
 
+  /**
+   * Open the context switcher (B04b: the header context `<Button>` and chunk
+   * 08's `c` key both call this). Chunk 08 adds the reconnect/error state; for
+   * now it just raises the existing switcher overlay.
+   */
+  openContextSwitcher = (): void => {
+    this.app = { ...this.app, contextSwitcherOpen: true };
+    this.bump();
+  };
+
+  /**
+   * Re-run the connection for the context that failed to switch (chunk 08 §3,
+   * the error banner's [Retry]). Restarts the streams and returns the header to
+   * the `connecting` state. No-op unless we are in the error state.
+   */
+  retrySwitch = (): void => {
+    const target = switchRetryTarget(this.switchStatus);
+    if (target === null) {
+      return;
+    }
+    this.streams?.stop();
+    this.switchStatus = beginSwitch(target);
+    this.app = {
+      ...this.app,
+      forbiddenKinds: new Set(),
+      dimmedKinds: new Set(),
+      switchStatus: this.switchStatus,
+    };
+    this.startStreams();
+    void this.badgeSweep();
+    this.bump();
+  };
+
+  /**
+   * Dismiss the error banner and reopen the switcher so another context can be
+   * picked (chunk 08 §3, the banner's [Switch context]). The failed
+   * `switchStatus` is cleared so the banner does not linger behind the modal.
+   */
+  switchContextFromError = (): void => {
+    this.switchStatus = null;
+    this.app = {
+      ...this.app,
+      switchStatus: null,
+      contextSwitcherOpen: true,
+    };
+    this.bump();
+  };
+
   closeHelp = (): void => {
     this.app = { ...this.app, helpOpen: false };
     this.bump();
   };
+
+  /** The help overlay's current scroll offset (consumed by AppRoot). */
+  getHelpScroll(): number {
+    return this.helpScroll;
+  }
+
+  /** Body rows the help overlay shows before scrolling (matches AppRoot math). */
+  private helpViewportHeight(): number {
+    return Math.max(1, this.terminalRows - 7);
+  }
+
+  /**
+   * Scroll the help overlay by `delta` lines, clamped via the pure scroll seam
+   * against the flattened keymap for the current focus/tab. The detail tab is
+   * read from the open detail state so the leading group matches the overlay.
+   */
+  private scrollHelp(delta: number): void {
+    const scope = scopeForFocus(this.app.focus, this.detail?.tab ?? null);
+    const total = helpLines(scope).length;
+    const vh = this.helpViewportHeight();
+    const next = scrollBy({ offset: this.helpScroll }, delta, total, vh);
+    if (next.offset !== this.helpScroll) {
+      this.helpScroll = next.offset;
+      this.bump();
+    }
+  }
 
   clearAgentHistory = (): void => {
     this.agentExchanges = [];
@@ -1752,7 +2479,29 @@ export class LiveController {
   // Context switching (Spec 01 §6 — tear down streams, reinitialize)
   // -------------------------------------------------------------------------
 
+  /**
+   * Kind labels valid for the active context: the static sidebar leaves plus
+   * any CRD-derived kinds (Strimzi's Kafka/KafkaTopic) detected for this
+   * cluster. Used to validate a remembered `activeKind` on restore (chunk 08
+   * §4) — a kind the new cluster lacks falls back to Overview.
+   */
+  private availableKindLabels(): string[] {
+    const labels: string[] = [];
+    for (const cat of SIDEBAR_CATEGORIES) {
+      for (const leaf of cat.children) {
+        labels.push(leaf.label);
+      }
+    }
+    if (this.kafkaDetected.deploymentType !== 'none') {
+      labels.push('Kafka', 'KafkaTopic');
+    }
+    return labels;
+  }
+
   private switchContext(ctx: string): void {
+    // Save the OUTGOING context's view before tearing it down (chunk 08 §4).
+    this.persistContextMemory(this.app.context);
+
     this.streams?.stop();
     this.kc.setCurrentContext(ctx);
     this.client = new KubeClientAdapter(this.kc);
@@ -1760,6 +2509,22 @@ export class LiveController {
     this.store.subscribe(() => {
       this.onStoreChanged();
     });
+
+    // Restore the INCOMING context's remembered view, validated against what
+    // exists now. Namespaces have not loaded yet, so the namespace is restored
+    // lazily once they do (pendingNamespaceRestore); the kind is validated
+    // against the static/CRD kind list immediately.
+    const restored = restoreContext(this.contextMemory, ctx, {
+      availableKinds: this.availableKindLabels(),
+      availableNamespaces: [],
+    });
+    const remembered = this.contextMemory[ctx];
+    this.pendingNamespaceRestore =
+      remembered !== undefined && remembered.namespace !== ''
+        ? { ctx, namespace: remembered.namespace }
+        : null;
+
+    this.switchStatus = beginSwitch(ctx);
     this.app = {
       ...this.app,
       context: ctx,
@@ -1768,15 +2533,57 @@ export class LiveController {
       badgeCounts: new Map(),
       dimmedKinds: new Set(),
       forbiddenKinds: new Set(),
-      activeKind: 'Overview',
+      activeKind: restored.activeKind,
       showDetail: false,
+      switchStatus: this.switchStatus,
     };
     this.detail = null;
     this.stopLogs();
     this.table = null;
     this.health = { summary: emptySummary(), rules: [], showPassing: false };
+    if (restored.activeKind === 'Overview') {
+      this.columns = [];
+    } else {
+      this.seedTable(restored.activeKind);
+    }
+    this.cursorKind = restored.activeKind;
     this.startStreams();
     void this.badgeSweep();
+  }
+
+  /**
+   * Apply the current (launch) context's remembered view (C2). Mirrors the
+   * restore half of {@link switchContext} but for the context already loaded at
+   * construction: the kind is validated immediately; the namespace is deferred
+   * to {@link applyPendingNamespaceRestore} since namespaces have not loaded.
+   */
+  private restoreCurrentContext(): void {
+    const ctx = this.app.context;
+    const restored = restoreContext(this.contextMemory, ctx, {
+      availableKinds: this.availableKindLabels(),
+      availableNamespaces: [],
+    });
+    const remembered = this.contextMemory[ctx];
+    this.pendingNamespaceRestore =
+      remembered !== undefined && remembered.namespace !== ''
+        ? { ctx, namespace: remembered.namespace }
+        : null;
+    if (restored.activeKind !== this.app.activeKind) {
+      this.app = { ...this.app, activeKind: restored.activeKind };
+      this.cursorKind = restored.activeKind;
+      if (restored.activeKind !== 'Overview') {
+        this.seedTable(restored.activeKind);
+      }
+    }
+  }
+
+  /** Record `ctx`'s current `{ namespace, activeKind }` in memory + persist. */
+  private persistContextMemory(ctx: string): void {
+    this.contextMemory = rememberContext(this.contextMemory, ctx, {
+      namespace: this.app.namespace,
+      activeKind: this.app.activeKind,
+    });
+    this.saveLayout();
   }
 
   // -------------------------------------------------------------------------
@@ -1806,6 +2613,8 @@ export class LiveController {
       void this.fetchCharts();
     }
     this.charts = null;
+    // Spec 03: a freshly-opened resource starts at its tab's top.
+    this.resetDetailOffset();
     this.app = { ...this.app, showDetail: true, focus: 'detail' };
     void this.fetchDetailEvents();
     this.bump();
@@ -1852,6 +2661,7 @@ export class LiveController {
       message: `Delete ${resource.kind} ${resource.name}?${scaleNote}`,
       destructive: true,
       confirmLabel: 'Delete',
+      selection: 'confirm',
       action: () => {
         void this.client
           .delete(resource.kind, resource.name, resource.namespace)
@@ -2237,6 +3047,7 @@ export class LiveController {
         message: `${String(active)} port-forward${active === 1 ? '' : 's'} active. Quit anyway?`,
         destructive: false,
         confirmLabel: 'Quit',
+        selection: 'confirm',
         action: () => {
           this.forceQuit();
         },
@@ -2253,6 +3064,8 @@ export class LiveController {
     }
     this.stopLogs();
     this.dispose();
+    // Hard-disable mouse modes before handing the terminal back (Spec 01 §3.5).
+    this.mouse.tearDown();
     this.onExit();
   }
 
@@ -2260,6 +3073,15 @@ export class LiveController {
   // Logs (Spec 05 §3)
   // -------------------------------------------------------------------------
 
+  /**
+   * Open Logs for a pod (B06 / Spec 05 §3.1, amended). No blocking full-screen
+   * picker: compute the container set and **stream the default container
+   * immediately**. Three cases follow `buildContainerPicker`:
+   *   - `options.length === 0` → "✗ No containers found" hint, stop.
+   *   - `defaultIndex >= 0` → stream `options[defaultIndex]` right away.
+   *   - `defaultIndex < 0` (all terminated/waiting) → stream nothing and
+   *     auto-open the inline container dropdown.
+   */
   private initLogs(resource: ResourceObject): void {
     if (
       this.logs !== null &&
@@ -2269,13 +3091,14 @@ export class LiveController {
       return;
     }
     this.stopLogs();
-    this.pickContainer(resource, 'Logs — choose container', (container) => {
-      this.startLogsFor(resource, container);
-    });
-  }
-
-  private startLogsFor(resource: ResourceObject, container: string): void {
     const picker = buildContainerPicker(resource.raw);
+    if (picker.options.length === 0) {
+      this.setHints(['✗ No containers found']);
+      return;
+    }
+    const hasDefault = picker.defaultIndex >= 0;
+    const index = Math.max(picker.defaultIndex, 0);
+    const container = picker.options[index]?.name ?? '';
     this.logs = {
       podName: resource.name,
       namespace: resource.namespace ?? '',
@@ -2291,10 +3114,22 @@ export class LiveController {
       searchCurrent: 0,
       searchFocused: false,
       newLines: 0,
+      offset: 0,
+      containerPickerOpen: !hasDefault,
+      containerPickerIndex: index,
+      lineLimitOpen: false,
+      lineLimitIndex: LINE_OPTIONS.findIndex(
+        (o) => o.id === DEFAULT_LINE_OPTION,
+      ),
       confirmation: undefined,
       stop: null,
     };
-    this.startLogStream();
+    if (hasDefault) {
+      this.startLogStream();
+    } else {
+      // All containers terminated/waiting: wait for the user to choose one.
+      this.bump();
+    }
   }
 
   private startLogStream(): void {
@@ -2305,6 +3140,9 @@ export class LiveController {
     l.stop?.();
     l.ring = new RingBuffer(10_000);
     l.newLines = 0;
+    // A restarted stream tails the newest lines again.
+    l.live = true;
+    l.offset = 0;
     const adapter = new LogStreamAdapter(this.kc);
     const params = streamParamsFor(l.limit);
     l.stop = adapter.tail(
@@ -2404,31 +3242,39 @@ export class LiveController {
       return true;
     }
 
+    // An open inline dropdown (B06) captures navigation keys before scrolling:
+    // ↑/↓ (and j/k) move the highlight, Enter selects, Esc closes unchanged.
+    if (l.containerPickerOpen) {
+      return this.handleContainerDropdownKey(input, key);
+    }
+    if (l.lineLimitOpen) {
+      return this.handleLineLimitDropdownKey(input, key);
+    }
+
+    // Viewport scrolling (Spec 03): motion keys walk the ring buffer; scrolling
+    // up off the bottom pauses the tail, returning to the bottom resumes it.
+    if (this.scrollLogs(input, key)) {
+      return true;
+    }
+
     if (input === '/') {
       l.searchFocused = true;
       this.bump();
       return true;
     }
     if (input === 'n' && l.searchQuery !== '') {
-      const view = this.buildLogsView();
-      if (view !== null) {
-        l.searchCurrent = nextMatch(view.search).current;
-        this.bump();
-      }
+      this.jumpLogsSearch('next');
       return true;
     }
     if (input === 'N' && l.searchQuery !== '') {
-      const view = this.buildLogsView();
-      if (view !== null) {
-        l.searchCurrent = prevMatch(view.search).current;
-        this.bump();
-      }
+      this.jumpLogsSearch('prev');
       return true;
     }
     if (input === 'p') {
       l.live = !l.live;
       if (l.live) {
         l.newLines = 0;
+        l.offset = this.logsBottomOffset();
       }
       this.bump();
       return true;
@@ -2440,6 +3286,12 @@ export class LiveController {
     }
     if (input === 'w') {
       l.wrap = !l.wrap;
+      // Re-clamp the offset after a wrap change re-projects the lines.
+      l.offset = clampOffset(
+        l.offset,
+        l.ring.toArray().length,
+        this.logsViewportHeight(),
+      );
       this.bump();
       return true;
     }
@@ -2453,25 +3305,330 @@ export class LiveController {
       }
       return true;
     }
-    if (input === 'L') {
-      const ids = LINE_OPTIONS.map((o) => o.id);
-      const next = ids[(ids.indexOf(l.limit) + 1) % ids.length];
-      l.limit = next ?? DEFAULT_LINE_OPTION;
-      this.startLogStream();
+    // `o` opens/closes the inline container dropdown (B06; plain `c` is reserved
+    // for the chunk-08 context switcher — no blind container cycle anymore).
+    if (input === LOGS_TOOLBAR_ACCELERATORS['logs.container']) {
+      this.toggleContainerDropdown();
       return true;
     }
-    if (input === 'c' && l.containers.length > 1) {
-      const names = l.containers.map((c) => c.name);
-      const next = names[(names.indexOf(l.container) + 1) % names.length];
-      l.container = next ?? l.container;
-      this.startLogStream();
+    // `l` opens/closes the inline line-limit dropdown (replaces the `L` cycle).
+    if (input === LOGS_TOOLBAR_ACCELERATORS['logs.lineLimit']) {
+      this.toggleLineLimitDropdown();
       return true;
     }
-    if (input === 'D') {
+    if (input === LOGS_TOOLBAR_ACCELERATORS['logs.download']) {
       void this.downloadCurrentLogs();
       return true;
     }
     return false;
+  }
+
+  // -------------------------------------------------------------------------
+  // Inline Logs dropdowns (B06). The open/highlight state lives on the logs
+  // model (separate from the generic `this.picker`); these methods toggle it,
+  // move the highlight via the pure `clampIndex`, and apply the selection by
+  // reusing the existing container-switch / line-limit stream-restart paths.
+  // -------------------------------------------------------------------------
+
+  /** Toggle the container dropdown (accelerator `o`). */
+  private toggleContainerDropdown(): void {
+    this.setContainerDropdownOpen(!(this.logs?.containerPickerOpen ?? false));
+  }
+
+  /** Toggle the line-limit dropdown (accelerator `l`). */
+  private toggleLineLimitDropdown(): void {
+    this.setLineLimitDropdownOpen(!(this.logs?.lineLimitOpen ?? false));
+  }
+
+  /**
+   * Set the container dropdown's open state. Opening resets the highlight to the
+   * current container and closes the line-limit dropdown (only one open at a
+   * time). Click parity uses this so it never re-toggles after a selection.
+   */
+  setContainerDropdownOpen = (open: boolean): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.containerPickerOpen = open;
+    if (open) {
+      l.lineLimitOpen = false;
+      const idx = l.containers.findIndex((c) => c.name === l.container);
+      l.containerPickerIndex = idx < 0 ? 0 : idx;
+    }
+    this.bump();
+  };
+
+  /** Set the line-limit dropdown's open state (mirror of the container one). */
+  setLineLimitDropdownOpen = (open: boolean): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.lineLimitOpen = open;
+    if (open) {
+      l.containerPickerOpen = false;
+      const idx = LINE_OPTIONS.findIndex((o) => o.id === l.limit);
+      l.lineLimitIndex = idx < 0 ? 0 : idx;
+    }
+    this.bump();
+  };
+
+  /** Keyboard handling while the container dropdown is open. */
+  private handleContainerDropdownKey(input: string, key: InkKey): boolean {
+    const l = this.logs;
+    if (l === null) {
+      return false;
+    }
+    if (key.escape) {
+      l.containerPickerOpen = false;
+      this.bump();
+      return true;
+    }
+    if (key.return) {
+      this.selectContainerByIndex(l.containerPickerIndex);
+      return true;
+    }
+    if (key.downArrow || input === 'j') {
+      l.containerPickerIndex = clampIndex(
+        l.containerPickerIndex,
+        1,
+        l.containers.length,
+      );
+      this.bump();
+      return true;
+    }
+    if (key.upArrow || input === 'k') {
+      l.containerPickerIndex = clampIndex(
+        l.containerPickerIndex,
+        -1,
+        l.containers.length,
+      );
+      this.bump();
+      return true;
+    }
+    return true;
+  }
+
+  /** Keyboard handling while the line-limit dropdown is open. */
+  private handleLineLimitDropdownKey(input: string, key: InkKey): boolean {
+    const l = this.logs;
+    if (l === null) {
+      return false;
+    }
+    if (key.escape) {
+      l.lineLimitOpen = false;
+      this.bump();
+      return true;
+    }
+    if (key.return) {
+      this.selectLineLimitByIndex(l.lineLimitIndex);
+      return true;
+    }
+    if (key.downArrow || input === 'j') {
+      l.lineLimitIndex = clampIndex(l.lineLimitIndex, 1, LINE_OPTIONS.length);
+      this.bump();
+      return true;
+    }
+    if (key.upArrow || input === 'k') {
+      l.lineLimitIndex = clampIndex(l.lineLimitIndex, -1, LINE_OPTIONS.length);
+      this.bump();
+      return true;
+    }
+    return true;
+  }
+
+  /**
+   * Switch the streamed container to `containers[index]` and close the dropdown.
+   * No-op (just closes) if the index is out of range or already current.
+   */
+  selectContainerByIndex = (index: number): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.containerPickerOpen = false;
+    const chosen = l.containers[index];
+    if (chosen === undefined) {
+      this.bump();
+      return;
+    }
+    if (chosen.name !== l.container) {
+      l.container = chosen.name;
+      l.previous = false;
+      this.startLogStream();
+    } else {
+      this.bump();
+    }
+  };
+
+  /**
+   * Set the line limit to `LINE_OPTIONS[index]` and restart the stream; close
+   * the dropdown. No-op restart if the index is out of range.
+   */
+  selectLineLimitByIndex = (index: number): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.lineLimitOpen = false;
+    const chosen = LINE_OPTIONS[index];
+    if (chosen === undefined) {
+      this.bump();
+      return;
+    }
+    l.limit = chosen.id;
+    this.startLogStream();
+  };
+
+  /** Toggle a Logs toolbar control by its registry id (mouse-click parity). */
+  logsToolbarAction = (id: string): void => {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    switch (id) {
+      case 'logs.container':
+        this.toggleContainerDropdown();
+        return;
+      case 'logs.lineLimit':
+        this.toggleLineLimitDropdown();
+        return;
+      case 'logs.pause':
+        l.live = !l.live;
+        if (l.live) {
+          l.newLines = 0;
+          l.offset = this.logsBottomOffset();
+        }
+        this.bump();
+        return;
+      case 'logs.timestamps':
+        l.timestamps = !l.timestamps;
+        this.bump();
+        return;
+      case 'logs.wrap':
+        l.wrap = !l.wrap;
+        l.offset = clampOffset(
+          l.offset,
+          l.ring.toArray().length,
+          this.logsViewportHeight(),
+        );
+        this.bump();
+        return;
+      case 'logs.download':
+        void this.downloadCurrentLogs();
+        return;
+      default:
+        return;
+    }
+  };
+
+  /** The offset that pins the Logs viewport to the newest lines. */
+  private logsBottomOffset(): number {
+    const l = this.logs;
+    if (l === null) {
+      return 0;
+    }
+    return maxOffset(l.ring.toArray().length, this.logsViewportHeight());
+  }
+
+  /**
+   * Apply a new Logs scroll offset and re-couple the live flag: at the bottom
+   * the tail resumes (and the "new lines" badge clears); above it the tail
+   * pauses. Returns whether anything changed (always true here — callers gate).
+   */
+  private applyLogsOffset(next: ScrollState): void {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    const total = l.ring.toArray().length;
+    const vh = this.logsViewportHeight();
+    const offset = clampOffset(next.offset, total, vh);
+    const live = logsLiveAfterScroll({ offset }, total, vh);
+    l.offset = offset;
+    l.live = live;
+    if (live) {
+      l.newLines = 0;
+    }
+    this.bump();
+  }
+
+  /**
+   * Handle a Logs viewport motion key (`↑/↓`, PageUp/PageDown, Home/End,
+   * `g`/`G`). Returns true when the key drove the viewport.
+   */
+  private scrollLogs(input: string, key: InkKey): boolean {
+    const l = this.logs;
+    if (l === null) {
+      return false;
+    }
+    const total = l.ring.toArray().length;
+    const vh = this.logsViewportHeight();
+    // While live the offset trails the bottom; start from there so the first
+    // up-arrow steps off the newest line rather than from a stale value.
+    const start: ScrollState = {
+      offset: l.live ? maxOffset(total, vh) : l.offset,
+    };
+    if (key.upArrow) {
+      this.applyLogsOffset(scrollBy(start, -1, total, vh));
+      return true;
+    }
+    if (key.downArrow) {
+      this.applyLogsOffset(scrollBy(start, 1, total, vh));
+      return true;
+    }
+    if (key.pageUp) {
+      this.applyLogsOffset(pageBy(start, 'up', total, vh));
+      return true;
+    }
+    if (key.pageDown) {
+      this.applyLogsOffset(pageBy(start, 'down', total, vh));
+      return true;
+    }
+    if (input === 'g') {
+      // `g` jumps to the top, `G` to the bottom (vi-style).
+      this.applyLogsOffset(toTop());
+      return true;
+    }
+    if (input === 'G') {
+      this.applyLogsOffset(toBottom(total, vh));
+      return true;
+    }
+    return false;
+  }
+
+  /** Advance the Logs search cursor and scroll the match into view. */
+  private jumpLogsSearch(dir: 'next' | 'prev'): void {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    const view = this.buildLogsView();
+    if (view === null) {
+      return;
+    }
+    const stepped =
+      dir === 'next' ? nextMatch(view.search) : prevMatch(view.search);
+    l.searchCurrent = stepped.current;
+    // Recompute against the full (non-window-shifted) projection to find the
+    // absolute match line, then scroll it into view and pause the tail.
+    const display = projectLogsView({
+      raw: l.ring.toArray(),
+      offset: l.offset,
+      viewportHeight: this.logsViewportHeight(),
+      timestamps: l.timestamps,
+      live: false,
+    }).display;
+    const matches = runSearch(display, l.searchQuery).matches;
+    const matchLine = matches[stepped.current] ?? -1;
+    const next = offsetForMatch(
+      l.offset,
+      matchLine,
+      display.length,
+      this.logsViewportHeight(),
+    );
+    this.applyLogsOffset({ offset: next });
   }
 
   private async downloadCurrentLogs(): Promise<void> {
@@ -2674,18 +3831,89 @@ export class LiveController {
       this.bump();
       return;
     }
+    const forwards = this.pf.getState().forwards;
+    // ↑/↓ move the keyboard cursor over the active forwards.
+    if (key.upArrow || key.downArrow) {
+      this.pfSelectedIndex = clampIndex(
+        this.pfSelectedIndex,
+        key.downArrow ? 1 : -1,
+        forwards.length,
+      );
+      this.bump();
+      return;
+    }
+    // Positional digit shortcut (1–9) acts on that forward directly.
     const digit = Number(input);
     if (Number.isInteger(digit) && digit >= 1 && digit <= 9) {
-      const fwd = this.pf.getState().forwards[digit - 1];
-      if (fwd !== undefined) {
-        if (fwd.status === 'failed') {
-          this.pf.retry(fwd.id);
-        } else {
-          this.pf.stop(fwd.id);
-        }
-        this.bump();
-      }
+      this.actOnForward(forwards[digit - 1]);
+      return;
     }
+    // x / Delete / Backspace / Enter act on the selected forward: stop an
+    // active one, or retry a failed one (C3).
+    if (input === 'x' || key.delete || key.backspace || key.return) {
+      this.actOnForward(forwards[this.pfSelectedIndex]);
+    }
+  }
+
+  /** Stop the forward `id` (click handler for the [✕] Button — C3). */
+  stopForward = (id: string): void => {
+    this.pf.stop(id);
+    this.pfSelectedIndex = clampIndex(
+      this.pfSelectedIndex,
+      0,
+      this.pf.getState().forwards.length,
+    );
+    this.bump();
+  };
+
+  /** Retry the failed forward `id` (click handler for the [retry] Button — C3). */
+  retryForward = (id: string): void => {
+    this.pf.retry(id);
+    this.bump();
+  };
+
+  /** Close the port-forward manager overlay (click handler — C3). */
+  closePfManager = (): void => {
+    this.pfManagerOpen = false;
+    this.bump();
+  };
+
+  /**
+   * Open the new-forward prompt from the manager's `[+ New Forward]` button
+   * (Spec 05 §5.4). Closes the manager and opens the same port picker as `p`
+   * (§5.1) for the currently-selected Pod; if the selection isn't a forwardable
+   * Pod, the manager just closes with a hint so the click can never be a no-op
+   * that leaves the user staring at an unchanged overlay. (Previously this was
+   * mis-wired to `closePfManager`, so the button merely closed the manager.)
+   */
+  openNewForward = (): void => {
+    this.pfManagerOpen = false;
+    const resource = this.selectedRow();
+    if (resource !== null && resource.kind === 'Pod') {
+      this.openPortPrompt(resource);
+      return;
+    }
+    this.setHints(['Select a Pod, then [+ New Forward] (or press p)']);
+    this.bump();
+  };
+
+  /** Stop an active forward or retry a failed one; no-op when undefined (C3). */
+  private actOnForward(fwd: PortForward | undefined): void {
+    if (fwd === undefined) {
+      return;
+    }
+    if (fwd.status === 'failed') {
+      this.pf.retry(fwd.id);
+    } else {
+      this.pf.stop(fwd.id);
+    }
+    // Keep the cursor in range after the list shrinks.
+    this.pfSelectedIndex = clampIndex(
+      this.pfSelectedIndex,
+      0,
+      this.pf.getState().forwards.length,
+    );
+    this.bump();
   }
 
   // -------------------------------------------------------------------------
@@ -2693,18 +3921,13 @@ export class LiveController {
   // -------------------------------------------------------------------------
 
   // -------------------------------------------------------------------------
-  // Mouse routing (Spec 01 §3.5, Spec 02 §5) — coordinates are 1-based SGR.
-  // The adapter owns the layout geometry, so hit-testing is plain math:
-  // row 1 = header, rows 2.. = sidebar (left) / list+detail (right),
-  // last row = command bar.
+  // Mouse routing (Spec 01 §3.5, Spec 04 / B04a). One SGR stdin stream →
+  // parseSgrMouseChunk → the pure `dispatch` reducer over a frame-derived
+  // registry snapshot → an Action this controller executes. No geometry
+  // arithmetic lives in the handlers; coordinates are 0-based (matching
+  // computeFrame) after the single 1-based→0-based conversion in
+  // handleStdinChunk.
   // -------------------------------------------------------------------------
-
-  private sidebarWidthCols(): number {
-    return Math.max(
-      16,
-      Math.round(this.app.sidebarRatio * this.terminalColumns),
-    );
-  }
 
   /** Replicates the Sidebar component's cursor-centered window math. */
   private sidebarWindow(): {
@@ -2736,194 +3959,400 @@ export class LiveController {
     return { keys, offset, clippedTop: offset > 0 };
   }
 
-  handleMouseClick(x: number, y: number): void {
+  // The drag-resize latch: once a press lands on a border handle, every drag
+  // routes to it until release (no slip). Pure dispatch decides; we hold state.
+  private dragLatch: DragLatch = null;
+
+  // -------------------------------------------------------------------------
+  // Measured-widget registry (B04b). The four React wrappers (`Button`,
+  // `FocusableRegion`, `SelectableList`, `DropdownButton` in
+  // src/adapters/live/) measure their absolute rect in a `useEffect` and call
+  // registerMeasured / unregisterMeasured. registry() merges these onto the
+  // frame-derived snapshot so the *same* pure dispatcher routes them — Button
+  // entries also carry an `onClick`, looked up by id when a `buttonPress`
+  // action fires. All decisions stay pure (measure.ts / dispatch.ts); the
+  // controller only stores the entries and runs the handler.
+  // -------------------------------------------------------------------------
+  private measured = new Map<string, HitEntry>();
+  private buttonHandlers = new Map<string, () => void>();
+
+  /**
+   * Register (or replace) a measured hit-target by id. Buttons pass an
+   * `onClick`; it is invoked when the pure dispatcher returns a `buttonPress`
+   * for this id. Idempotent per id, so a re-measure on resize just overwrites.
+   */
+  registerMeasured = (entry: HitEntry, onClick?: () => void): void => {
+    const id = entry.id;
+    if (id === undefined) {
+      return;
+    }
+    // Always store the latest handler (looked up by id at press time — a fresh
+    // closure with identical geometry must still fire the current callback).
+    if (onClick !== undefined) {
+      this.buttonHandlers.set(id, onClick);
+    }
+    const prev = this.measured.get(id);
+    this.measured.set(id, entry);
+    // Idempotent at the seam: a re-register that lands a value-equal entry must
+    // NOT churn the snapshot, or the measured wrappers' commit-time re-register
+    // would notify `useSyncExternalStore` → re-render → re-register forever.
+    // Real changes (rect moved on resize, new id, new selection) still notify.
+    if (prev !== undefined && entriesEqual(prev, entry)) {
+      return;
+    }
+    this.bump();
+  };
+
+  /** Remove a measured hit-target on unmount. */
+  unregisterMeasured = (id: string): void => {
+    const had = this.measured.delete(id);
+    this.buttonHandlers.delete(id);
+    // Only notify when something was actually removed (a no-op delete of an
+    // already-absent id must not churn the snapshot).
+    if (had) {
+      this.bump();
+    }
+  };
+
+  /**
+   * Build the frame-derived hit-test registry snapshot for the current layout:
+   * the focusable regions (sidebar, list, detail, command bar) plus the two
+   * draggable border handles. B04b's measured `<Button>` / `<SelectableList>`
+   * wrappers will register their entries onto this same snapshot model.
+   *
+   * The sidebar is modeled as a `list` so a press maps to a row index against
+   * its cursor-centered window; the resource list carries its scroll offset and
+   * the selected index so the dispatcher can decide select-vs-open-detail
+   * without any geometry of its own.
+   */
+  private registry(): RegistrySnapshot {
+    const frame = this.frame();
+    const entries: HitEntry[] = [];
+
+    // Sidebar: a list whose rowOffset folds in the window offset and the
+    // optional "↑ …" clipped-top indicator row.
+    const win = this.sidebarWindow();
+    entries.push({
+      kind: 'list',
+      region: 'sidebar',
+      rect: frame.sidebar,
+      layer: 0,
+      rowOffset: win.offset - (win.clippedTop ? 1 : 0),
+    });
+
+    // Resource list: rowOffset = the table's scroll offset; selectedIndex
+    // drives the second-click-opens-detail rule. The hit rect is the
+    // *selectable-row band* (`resourceListBand`) — `frame.list` minus its
+    // column-header row — so the first data row maps to index 0 (no off-by-one).
+    const listEntry: HitEntry = {
+      kind: 'list',
+      region: 'list',
+      rect: resourceListBand(frame),
+      layer: 0,
+      rowOffset: this.table?.scrollOffset ?? 0,
+      ...(this.app.focus === 'list'
+        ? { selectedIndex: this.selectedIndex }
+        : {}),
+    };
+    entries.push(listEntry);
+
+    if (frame.detail !== null) {
+      entries.push({
+        kind: 'region',
+        region: 'detail',
+        rect: frame.detail,
+        layer: 0,
+      });
+    }
+    entries.push({
+      kind: 'region',
+      region: 'commandbar',
+      rect: frame.commandBar,
+      layer: 0,
+    });
+
+    // The two shared border lines, as draggable handles. The dispatcher applies
+    // a ±1-cell grab tolerance, so the thin lines are easy to grab.
+    entries.push({
+      kind: 'handle',
+      handle: 'sidebar',
+      rect: segmentRect(frame.handles.sidebar),
+      layer: 0,
+    });
+    if (frame.handles.vertical !== null) {
+      entries.push({
+        kind: 'handle',
+        handle: 'vertical',
+        rect: segmentRect(frame.handles.vertical),
+        layer: 0,
+      });
+    }
+    // Measured widgets (tabs, ✕, header chips, dropdown overlays) register last
+    // so they win equal-layer ties; the nested-Button winner rule in
+    // pressTarget routes a click on a Button over its region to the Button.
+    for (const entry of this.measured.values()) {
+      entries.push(entry);
+    }
+    return entries;
+  }
+
+  /**
+   * Hit-test registry while a confirm dialog is open: only its measured
+   * [confirm]/[cancel] Buttons, so a click anywhere else is a no-op (B3b).
+   */
+  private confirmRegistry(): RegistrySnapshot {
+    const entries: HitEntry[] = [];
+    for (const entry of this.measured.values()) {
+      if (entry.id?.startsWith('confirm.') === true) {
+        entries.push(entry);
+      }
+    }
+    return entries;
+  }
+
+  /**
+   * Hit-test registry while the port-forward manager is open: only its measured
+   * `pfm.*` Buttons ([✕]/[retry]/[New]/[Close]) are clickable (C3).
+   */
+  private pfManagerRegistry(): RegistrySnapshot {
+    const entries: HitEntry[] = [];
+    for (const entry of this.measured.values()) {
+      if (entry.id?.startsWith('pfm.') === true) {
+        entries.push(entry);
+      }
+    }
+    return entries;
+  }
+
+  /** The session's mouse-mode lifecycle (enable / idempotent teardown). */
+  mouseLifecycle(): MouseLifecycle {
+    return this.mouse;
+  }
+
+  /**
+   * Parse one raw stdin read into its SGR mouse events and route each. A single
+   * read may carry several reports (terminals coalesce rapid motion — CLAUDE.md
+   * gotcha); {@link parseSgrMouseChunk} splits them. SGR coordinates are 1-based;
+   * we subtract 1 at this single seam so everything downstream is 0-based and
+   * agrees with `computeFrame`.
+   */
+  handleStdinChunk(chunk: string): void {
+    for (const event of parseSgrMouseChunk(chunk)) {
+      this.handleMouseEvent({ ...event, x: event.x - 1, y: event.y - 1 });
+    }
+  }
+
+  /**
+   * Route one parsed SGR mouse event (already 0-based). Overlays (confirm/help/
+   * context switcher/picker) swallow mouse input for now; the port-forward
+   * manager routes clicks to its own measured Buttons (C3); otherwise the pure
+   * {@link dispatchMouse} reducer decides the action and we execute it.
+   */
+  handleMouseEvent(event: MouseEvent): void {
+    // The port-forward manager's [✕]/[retry]/[New]/[Close] are clickable; any
+    // click outside them is swallowed so it can't act on the list behind.
+    if (this.pfManagerOpen) {
+      const result = dispatchMouse(event, this.pfManagerRegistry(), null);
+      this.executeMouseAction(result.action);
+      return;
+    }
     if (
-      this.confirm !== null ||
       this.app.helpOpen ||
       this.app.contextSwitcherOpen ||
-      this.pfManagerOpen
+      this.picker !== null
     ) {
       return;
     }
-    const contentTop = 2; // row 1 is the header
-    const lastRow = this.terminalRows;
-    if (y < contentTop || y >= lastRow) {
-      if (y >= lastRow) {
-        // Command bar click focuses agent input (Spec 02 §7).
-        this.commandOpen = true;
-        this.inputText = '';
-        this.app = { ...this.app, mode: 'command', focus: 'commandbar' };
-        this.bump();
-      }
+    // While a confirm dialog is open, only its own [confirm]/[cancel] Buttons
+    // (registered on the overlay layer) may be clicked — everything else is
+    // swallowed so a click can't act on the list behind the prompt (B3b).
+    if (this.confirm !== null) {
+      const result = dispatchMouse(event, this.confirmRegistry(), null);
+      this.executeMouseAction(result.action);
       return;
     }
+    const result = dispatchMouse(event, this.registry(), this.dragLatch);
+    this.dragLatch = result.latch;
+    this.executeMouseAction(result.action);
+  }
 
-    if (x <= this.sidebarWidthCols()) {
-      const win = this.sidebarWindow();
-      let row = y - contentTop + win.offset;
-      if (win.clippedTop) {
-        row -= 1; // the "↑ …" indicator occupies the first visible line
-      }
-      const key = win.keys[row];
-      if (key === undefined) {
+  private executeMouseAction(action: MouseAction): void {
+    switch (action.kind) {
+      case 'none':
+        return;
+      case 'focusRegion': {
+        if (action.region === 'commandbar') {
+          // Command bar click focuses the agent input (Spec 02 §7).
+          this.commandOpen = true;
+          this.inputText = '';
+          this.app = { ...this.app, mode: 'command', focus: 'commandbar' };
+          this.bump();
+          return;
+        }
+        this.setFocus(action.region);
         return;
       }
-      this.cursorKind = key;
+      case 'selectRow': {
+        if (action.region === 'sidebar') {
+          this.clickSidebarRow(action.index);
+          return;
+        }
+        this.clickListRow(action.index, false);
+        return;
+      }
+      case 'openDetailRow': {
+        if (action.region === 'sidebar') {
+          this.clickSidebarRow(action.index);
+          return;
+        }
+        this.clickListRow(action.index, true);
+        return;
+      }
+      case 'buttonPress': {
+        // Run the handler the measured <Button> registered for this id.
+        this.buttonHandlers.get(action.id)?.();
+        return;
+      }
+      case 'beginDrag':
+        this.setFocus(action.handle === 'sidebar' ? 'sidebar' : 'detail');
+        return;
+      case 'dragTo': {
+        this.applyDragRatio(action.handle, action.x, action.y);
+        return;
+      }
+      case 'endDrag':
+        this.saveLayout();
+        return;
+      case 'wheel': {
+        this.wheelRegion(action.region, action.dir);
+        return;
+      }
+    }
+  }
+
+  /** Apply a sidebar-row press: focus, select the kind, toggle a category. */
+  private clickSidebarRow(index: number): void {
+    const win = this.sidebarWindow();
+    const key = win.keys[index];
+    if (key === undefined) {
       this.setFocus('sidebar');
-      if (key === 'Overview') {
-        this.selectKind('Overview');
-      } else if (SIDEBAR_CATEGORIES.some((cat) => cat.id === key)) {
-        this.toggleCategory(key);
-      } else {
-        this.selectKind(key);
-        this.setFocus('list');
-      }
-      this.bump();
       return;
     }
-
-    // Right side: list on top, detail below when open.
-    const contentRows = Math.max(8, this.terminalRows - 3);
-    const listRows = this.app.showDetail
-      ? Math.max(4, Math.round(contentRows * (1 - this.app.verticalRatio)))
-      : contentRows;
-    const inDetail = this.app.showDetail && y >= contentTop + listRows;
-
-    if (inDetail) {
-      const detailTop = contentTop + listRows;
-      if (this.detail !== null && y === detailTop) {
-        this.clickDetailTabBar(x);
-      }
-      this.setFocus('detail');
-      this.bump();
-      return;
+    this.cursorKind = key;
+    this.setFocus('sidebar');
+    if (key === 'Overview') {
+      this.selectKind('Overview');
+    } else if (SIDEBAR_CATEGORIES.some((cat) => cat.id === key)) {
+      this.toggleCategory(key);
+    } else {
+      this.selectKind(key);
+      this.setFocus('list');
     }
+    this.bump();
+  }
 
-    // List region: row at contentTop is the column header.
+  /** Apply a resource-list press: select the row, or open detail when asked. */
+  private clickListRow(index: number, openDetail: boolean): void {
     if (this.table === null) {
       this.setFocus('list');
-      this.bump();
       return;
     }
-    const rowIndex = y - contentTop - 1 + this.table.scrollOffset;
     const rows = getSortedFilteredRows(this.table);
-    if (rowIndex < 0 || rowIndex >= rows.length) {
+    if (index < 0 || index >= rows.length) {
       this.setFocus('list');
-      this.bump();
       return;
     }
-    if (this.selectedIndex === rowIndex && this.app.focus === 'list') {
-      // Second click on the selected row opens the detail pane.
-      const resource = rows[rowIndex]?.resource;
+    if (openDetail) {
+      const resource = rows[index]?.resource;
       if (resource !== undefined) {
         this.openDetail(resource, 'overview');
         return;
       }
     }
-    this.selectedIndex = rowIndex;
+    this.selectedIndex = index;
     this.setFocus('list');
     this.bump();
   }
 
-  /** Map an x coordinate on the detail tab bar to a tab id. */
-  private clickDetailTabBar(x: number): void {
-    if (this.detail === null) {
-      return;
-    }
-    const left = this.sidebarWidthCols() + 1;
-    // Mirror DetailPane's bar: "<name> [Tab1] [Tab2] … · [Agent] ✕"
-    const tabs = getAvailableTabs(
-      this.detail.resource.kind,
-      this.metricsTier === 'prometheus',
-    );
-    let cursor = left + this.detail.resource.name.length + 2;
-    for (const tab of tabs) {
-      const label =
-        tab.id === 'events' && this.detail.warningCount > 0
-          ? `Events (${String(this.detail.warningCount)})`
-          : tab.label;
-      const width = label.length + 2; // [label]
-      if (x >= cursor && x < cursor + width) {
-        this.setDetailTab(tab.id);
+  /** Re-derive and store the pane ratio implied by a drag cursor position. */
+  private applyDragRatio(
+    handle: 'sidebar' | 'vertical',
+    x: number,
+    y: number,
+  ): void {
+    if (handle === 'sidebar') {
+      this.app = {
+        ...this.app,
+        sidebarRatio: sidebarRatioFromX(this.terminalColumns, x),
+      };
+    } else {
+      if (!this.app.showDetail) {
         return;
       }
-      cursor += width + 1;
+      this.app = {
+        ...this.app,
+        verticalRatio: verticalRatioFromY(this.frame(), y),
+      };
     }
-    // Past the divider: the Agent tab.
-    if (x >= cursor && x < cursor + 10) {
-      this.setDetailTab('agent');
-    }
-  }
-
-  private draggingSplitter = false;
-
-  /** Row of the splitter between list and detail (1-based screen coords). */
-  private splitterRow(): number {
-    const contentRows = Math.max(8, this.terminalRows - 3);
-    const listRows = Math.max(
-      4,
-      Math.round(contentRows * (1 - this.app.verticalRatio)),
-    );
-    return 2 + listRows;
-  }
-
-  handleMouseDrag(x: number, y: number, dragging: boolean): void {
-    log.debug({ x, y, dragging, splitter: this.splitterRow() }, 'drag');
-    if (!dragging) {
-      this.draggingSplitter = false;
-      return;
-    }
-    if (!this.app.showDetail || x <= this.sidebarWidthCols()) {
-      return;
-    }
-    if (!this.draggingSplitter) {
-      if (Math.abs(y - this.splitterRow()) > 1) {
-        return;
-      }
-      this.draggingSplitter = true;
-    }
-    const contentRows = Math.max(8, this.terminalRows - 3);
-    const listRows = Math.min(contentRows - 4, Math.max(4, y - 2));
-    const ratio = 1 - listRows / contentRows;
-    this.app = {
-      ...this.app,
-      verticalRatio: Math.min(0.8, Math.max(0.2, ratio)),
-    };
-    this.saveLayout();
     this.bump();
   }
 
-  handleMouseScroll(x: number, direction: 'scrollup' | 'scrolldown'): void {
-    if (
-      this.confirm !== null ||
-      this.app.helpOpen ||
-      this.app.contextSwitcherOpen ||
-      this.pfManagerOpen
-    ) {
-      return;
-    }
-    const delta = direction === 'scrolldown' ? 1 : -1;
-    if (x <= this.sidebarWidthCols()) {
-      const win = this.sidebarWindow();
-      const idx = Math.max(
-        0,
-        Math.min(
-          win.keys.indexOf(this.cursorKind) + delta,
-          win.keys.length - 1,
-        ),
-      );
-      this.cursorKind = win.keys[idx] ?? this.cursorKind;
-      this.bump();
-      return;
-    }
-    if (this.table !== null) {
-      const rows = getSortedFilteredRows(this.table);
-      this.selectedIndex = Math.max(
-        0,
-        Math.min(this.selectedIndex + delta, rows.length - 1),
-      );
-      this.ensureVisible();
-      this.bump();
+  /** Scroll the region under the wheel cursor (focus-independent, Spec 02 §9). */
+  private wheelRegion(region: FocusRegion, dir: 'up' | 'down'): void {
+    const delta = dir === 'down' ? 1 : -1;
+    switch (region) {
+      case 'sidebar': {
+        const win = this.sidebarWindow();
+        const idx = Math.max(
+          0,
+          Math.min(
+            win.keys.indexOf(this.cursorKind) + delta,
+            win.keys.length - 1,
+          ),
+        );
+        this.cursorKind = win.keys[idx] ?? this.cursorKind;
+        this.bump();
+        return;
+      }
+      case 'list': {
+        if (this.table === null) {
+          return;
+        }
+        const rows = getSortedFilteredRows(this.table);
+        this.selectedIndex = Math.max(
+          0,
+          Math.min(this.selectedIndex + delta, rows.length - 1),
+        );
+        this.ensureVisible();
+        this.bump();
+        return;
+      }
+      case 'detail': {
+        // Logs route through applyLogsOffset so tail pause/resume fires
+        // (Spec 03 coupling); every other in-scope tab scrolls its own offset.
+        if (this.detail?.tab === 'logs' && this.logs !== null) {
+          const l = this.logs;
+          const total = l.ring.toArray().length;
+          const vh = this.logsViewportHeight();
+          const start: ScrollState = {
+            offset: l.live ? maxOffset(total, vh) : l.offset,
+          };
+          this.applyLogsOffset(scrollBy(start, delta * WHEEL_LINES, total, vh));
+        } else if (this.detail !== null) {
+          const total = this.detailTotalLines();
+          const vh = this.detailViewportHeight();
+          this.detailOffset = scrollBy(
+            this.detailOffset,
+            delta * WHEEL_LINES,
+            total,
+            vh,
+          );
+          this.bump();
+        }
+        return;
+      }
+      case 'commandbar':
+        return;
     }
   }
 
@@ -3062,6 +4491,14 @@ export class LiveController {
   }
 
   handleInput(input: string, key: InkKey): void {
+    // SGR mouse reports leak past Ink's filter as the bare CSI body
+    // (`[<0;60;24M`); the real click is handled off raw stdin in
+    // handleStdinChunk. Drop the leaked payload here (see isLeakedMouseInput),
+    // or its digits would be misread as `1`–`6` tab jumps in the detail pane
+    // (B3a).
+    if (isLeakedMouseInput(input)) {
+      return;
+    }
     // Terminals can deliver rapid keystrokes as one chunk ("jj"); split so
     // navigation handlers see single keypresses. Text-entry handlers append
     // per character, which is equivalent to appending the chunk.
@@ -3073,7 +4510,11 @@ export class LiveController {
     }
     // Ctrl+C is handled by Ink's exitOnCtrlC; q routing below.
     if (this.confirm !== null) {
-      // ConfirmDialog's own useInput handles selection.
+      // The confirm dialog owns all input while open. Routing through the
+      // controller (rather than the dialog's own `useInput`) keeps a single
+      // source of truth, so Enter no longer leaks past the dialog to the list
+      // (B3b). Enter activates the highlighted button; ←/→/Tab toggle it.
+      this.handleConfirmInput(input, key);
       return;
     }
     if (this.execPrompt !== null) {
@@ -3095,6 +4536,18 @@ export class LiveController {
     if (this.app.helpOpen) {
       if (input === '?' || key.escape) {
         this.closeHelp();
+        return;
+      }
+      // ↑/↓ scroll the overlay (B09). The clamp lives in the pure scroll seam;
+      // the controller only holds the offset. PageUp/PageDown page by a screen.
+      if (key.upArrow) {
+        this.scrollHelp(-1);
+      } else if (key.downArrow) {
+        this.scrollHelp(1);
+      } else if (key.pageUp) {
+        this.scrollHelp(-this.helpViewportHeight());
+      } else if (key.pageDown) {
+        this.scrollHelp(this.helpViewportHeight());
       }
       return;
     }
@@ -3131,21 +4584,58 @@ export class LiveController {
     // Normal mode — global keys
     if (input === 'F') {
       this.pfManagerOpen = true;
+      this.pfSelectedIndex = 0;
       this.bump();
       return;
     }
-    if (input === 'q' && this.app.focus !== 'detail') {
+    // `q` quits from every region in normal navigation mode. Text-entry modes
+    // (search/command/edit/namespace picker/Logs search) are handled earlier in
+    // the dispatch, so reaching here means `q` is a quit, not a literal char.
+    if (input === 'q') {
       this.quit();
       return;
     }
+    // Escape closes the detail pane from any region while it is open; it never
+    // quits. (Search/command/edit/overlay Escapes are consumed earlier.)
+    if (key.escape && this.app.showDetail) {
+      this.closeDetail();
+      return;
+    }
+    // Error banner (chunk 08 §3): while a switch has failed, `r` retries the
+    // connection and `c` reopens the switcher. Checked before the global `c`
+    // and `r` so the banner's actions win while it is showing.
+    if (this.switchStatus?.phase === 'error') {
+      if (input === 'r') {
+        this.retrySwitch();
+        return;
+      }
+      if (input === 'c') {
+        this.switchContextFromError();
+        return;
+      }
+    }
+    // `c` opens the context switcher (chunk 08 §1). Text-entry modes are handled
+    // earlier in dispatch, so reaching here means `c` is the switch key.
+    if (input === 'c') {
+      this.openContextSwitcher();
+      return;
+    }
     if (input === '?') {
+      this.helpScroll = 0;
       this.app = { ...this.app, helpOpen: true };
       this.bump();
       return;
     }
     if (input === '/') {
-      this.app = { ...this.app, mode: 'search', headerFocus: 'search' };
-      this.bump();
+      // `/` is scoped to the focused region (Spec 02 region model). It opens
+      // the global pod-list filter only from the list or sidebar. The Logs tab
+      // claims `/` for its in-pane search earlier; every other detail tab has
+      // no search, so `/` is a no-op there rather than leaking to the list
+      // filter (B4).
+      if (this.app.focus === 'list' || this.app.focus === 'sidebar') {
+        this.app = { ...this.app, mode: 'search', headerFocus: 'search' };
+        this.bump();
+      }
       return;
     }
     if (input === 'n') {
@@ -3166,7 +4656,8 @@ export class LiveController {
       this.bump();
       return;
     }
-    if (key.tab && this.app.focus !== 'detail') {
+    // Tab / Shift+Tab cycle regions from EVERY region including detail.
+    if (key.tab) {
       this.cycleFocus(key.shift);
       return;
     }
@@ -3175,6 +4666,14 @@ export class LiveController {
         this.evaluateHealth();
       } else {
         this.seedTable(this.app.activeKind);
+        // A manual refresh re-LISTs from the cluster and reconciles removals so
+        // a resource deleted while a DELETED watch event was missed leaves the
+        // list. `seedTable` already kicks off `listSeed` for on-demand kinds;
+        // core kinds rebuild from the (possibly stale) store, so re-LIST them.
+        const kind = labelToKind(this.app.activeKind);
+        if (kind !== undefined && CORE_KINDS.has(kind)) {
+          void this.listSeed(kind);
+        }
       }
       this.bump();
       return;
@@ -3217,15 +4716,8 @@ export class LiveController {
   }
 
   private cycleFocus(reverse: boolean): void {
-    const order: FocusRegion[] = this.app.showDetail
-      ? ['sidebar', 'list', 'detail']
-      : ['sidebar', 'list'];
-    const idx = order.indexOf(this.app.focus);
-    const next =
-      order[
-        (idx + (reverse ? order.length - 1 : 1) + order.length) % order.length
-      ] ?? 'sidebar';
-    this.setFocus(next);
+    const order = regionOrder(this.app.showDetail);
+    this.setFocus(nextRegion(order, this.app.focus, reverse));
   }
 
   private handleContextSwitcherInput(input: string, key: InkKey): void {
@@ -3425,12 +4917,10 @@ export class LiveController {
       this.bump();
       return;
     }
-    if (key.leftArrow) {
-      this.setFocus('sidebar');
-      return;
-    }
-    if (key.rightArrow && this.app.showDetail) {
-      this.setFocus('detail');
+    // List `←/→` pan the columns horizontally (Spec nav-05). The status dot +
+    // Name columns stay pinned; the clamp/width math lives in list-horizontal.
+    if (key.leftArrow || key.rightArrow) {
+      this.scrollListHorizontal(key.rightArrow ? 1 : -1);
       return;
     }
     if (input === 'g') {
@@ -3504,6 +4994,31 @@ export class LiveController {
     }
   }
 
+  /**
+   * Pan the list columns horizontally by `delta` columns (Spec nav-05). All
+   * width/clamp arithmetic lives in the pure `list-horizontal` module; this
+   * only reads the current pane width and stores the clamped offset.
+   */
+  private scrollListHorizontal(delta: number): void {
+    if (this.table === null) {
+      return;
+    }
+    const widths = naturalWidths(this.columns);
+    const pinned = pinnedCount(this.columns);
+    const next = clampHOffset(
+      this.columns,
+      widths,
+      pinned,
+      this.tableWidth(),
+      this.table.horizontalOffset + delta,
+    );
+    const updated = setHorizontalOffset(this.table, next);
+    if (updated !== this.table) {
+      this.table = updated;
+      this.bump();
+    }
+  }
+
   private ensureVisible(): void {
     if (this.table === null) {
       return;
@@ -3520,35 +5035,56 @@ export class LiveController {
   }
 
   private handleDetailInput(input: string, key: InkKey): void {
-    // DetailPane handles Tab/Shift+Tab/number tab navigation itself.
     if (
       this.detail?.yamlMode !== undefined &&
       this.detail.yamlMode !== 'read'
     ) {
       return;
     }
-    if (key.escape) {
-      this.closeDetail();
+    // Escape (close pane) is handled by the global dispatch before this runs.
+    if (this.detail === null) {
       return;
     }
+    // `←/→` switch tabs (previous/next, wrapping); `1`–`6` jump to a tab.
+    const tabs = navigableTabsFor(
+      this.detail.resource.kind,
+      this.metricsTier === 'prometheus',
+    );
     if (key.leftArrow) {
-      this.setFocus('list');
-      return;
-    }
-    if (this.detail?.tab === 'metrics' && (input === '[' || input === ']')) {
-      const options = this.metricsRange.options;
-      const idx = options.indexOf(this.metricsRange.selected);
-      const next =
-        options[
-          (idx + (input === ']' ? 1 : options.length - 1)) % options.length
-        ];
-      if (next !== undefined) {
-        this.setMetricsRange(next);
+      const target = prevTab(tabs, this.detail.tab);
+      if (target !== null) {
+        this.setDetailTab(target);
       }
       return;
     }
-    if (input === 'q') {
-      this.quit();
+    if (key.rightArrow) {
+      const target = nextTab(tabs, this.detail.tab);
+      if (target !== null) {
+        this.setDetailTab(target);
+      }
+      return;
+    }
+    const jumped = jumpTab(tabs, input);
+    if (jumped !== null) {
+      this.setDetailTab(jumped);
+      return;
+    }
+    // `↑/↓`, PageUp/PageDown, `g`/`G` scroll the active non-Logs tab's content
+    // through the chunk-03 viewport (Logs has its own scroll path). Metrics
+    // `[`/`]` range keys win over `g`/`G` only by falling through below.
+    if (this.scrollDetail(input, key)) {
+      return;
+    }
+    if (this.detail.tab === 'metrics' && (input === '[' || input === ']')) {
+      // `]` steps to the next (longer) range, `[` to the previous (shorter)
+      // one; both clamp at the ends (stepRange does not wrap).
+      const stepped = stepRange(
+        this.metricsRange,
+        input === ']' ? 'next' : 'prev',
+      );
+      if (stepped.selected !== this.metricsRange.selected) {
+        this.setMetricsRange(stepped.selected);
+      }
     }
   }
 }

@@ -5,4 +5,4 @@ Feature: Walking skeleton
 
   Scenario: The version command reports the build version
     When I run p9r with arguments "version"
-    Then the output contains "p9r 0.2.0"
+    Then the output contains "p9r 0.3.0"

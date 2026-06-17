@@ -12,6 +12,8 @@ import {
   ContextSwitcher,
   HelpOverlay,
   Layout,
+  KEYMAP,
+  renderKeymapMarkdown,
 } from './index.js';
 
 describe('ui/index', () => {
@@ -59,5 +61,10 @@ describe('ui/index', () => {
 
   it('exports Layout component', () => {
     expect(typeof Layout).toBe('function');
+  });
+
+  it('exports the KEYMAP registry and its README generator', () => {
+    expect(Array.isArray(KEYMAP)).toBe(true);
+    expect(typeof renderKeymapMarkdown).toBe('function');
   });
 });

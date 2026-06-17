@@ -21,6 +21,8 @@ import { createRangeSelector, selectRange } from '../../charts/range.js';
 import type { RangeLabel, RangeSelectorModel } from '../../charts/range.js';
 import { renderTimeseriesChart } from '../../charts/timeseries.js';
 import { computeTrendIndicator } from '../../charts/timeseries.js';
+import { projectMetricsLines } from '../detail-view.js';
+import { ScrollableLines } from './ScrollableLines.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,6 +33,13 @@ export interface MetricsTabProps {
   readonly resourceKind: string;
   /** The resource name. */
   readonly resourceName: string;
+  /**
+   * Inner width of the detail pane (from the layout-geometry frame). Charts
+   * render at `min(paneWidth, MAX_CHART_WIDTH)` so they never wrap; defaults to
+   * `MAX_CHART_WIDTH` when the pane width is not supplied (Spec 02
+   * §"Content fits its pane").
+   */
+  readonly paneWidth?: number;
   /** Current metrics tier from discovery. */
   readonly tier: MetricsTier;
   /** Exporter capabilities (used for per-chart gating). */
@@ -71,6 +80,10 @@ export interface MetricsTabProps {
   readonly rangeModel?: RangeSelectorModel;
   /** Callback when user changes range. */
   readonly onRangeChange?: (label: RangeLabel) => void;
+  /** Topmost visible row in the scroll viewport (chunk 03). */
+  readonly offset?: number;
+  /** Viewport height; when set the body scrolls instead of rendering all rows. */
+  readonly viewportHeight?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,13 +119,21 @@ interface ChartPlaceholderProps {
   readonly series: readonly MetricSeries[];
 }
 
-/** Width of rendered charts (Spec 06 §4.2 — fills the pane). */
-const CHART_WIDTH = 64;
+/**
+ * Upper bound on chart width (Spec 02 §"Content fits its pane"). The effective
+ * width is `min(paneWidth, MAX_CHART_WIDTH)`, threaded via context so charts
+ * never wrap when the detail pane is narrow.
+ */
+export const MAX_CHART_WIDTH = 64;
+
+/** Effective chart width, provided by MetricsTab from the layout frame. */
+const ChartWidthContext = React.createContext<number>(MAX_CHART_WIDTH);
 
 function ChartPlaceholder({
   title,
   series,
 }: ChartPlaceholderProps): React.ReactElement {
+  const chartWidth = React.useContext(ChartWidthContext);
   const firstSeries = series[0];
   const pointCount = firstSeries !== undefined ? firstSeries.points.length : 0;
   const hasData = series.length > 0 && pointCount > 0;
@@ -126,7 +147,7 @@ function ChartPlaceholder({
   }
   const chart = renderTimeseriesChart({
     series,
-    width: CHART_WIDTH,
+    width: chartWidth,
   });
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -439,6 +460,7 @@ function NoMetricsState(): React.ReactElement {
 export function MetricsTab({
   resourceKind,
   resourceName,
+  paneWidth,
   tier,
   capabilities,
   cpuSeries = [],
@@ -459,8 +481,46 @@ export function MetricsTab({
   recordsOutSeries = [],
   rangeModel,
   onRangeChange,
+  offset = 0,
+  viewportHeight,
 }: MetricsTabProps): React.ReactElement {
   const effectiveRange = rangeModel ?? createRangeSelector();
+
+  const chartWidth =
+    paneWidth !== undefined && paneWidth > 0
+      ? Math.min(paneWidth, MAX_CHART_WIDTH)
+      : MAX_CHART_WIDTH;
+
+  // Measured host: project to ViewLine[] and scroll via the chunk-03 viewport.
+  if (viewportHeight !== undefined) {
+    return (
+      <ScrollableLines
+        lines={projectMetricsLines(
+          {
+            resourceKind,
+            resourceName,
+            tier,
+            capabilities,
+            chartWidth,
+            cpuSeries,
+            memorySeries,
+            networkInSeries,
+            networkOutSeries,
+            restartSeries,
+            replicaSeries,
+            lagSeries,
+            rangeOptions: effectiveRange.options,
+            rangeSelected: effectiveRange.selected,
+          },
+          paneWidth !== undefined && paneWidth > 0
+            ? paneWidth
+            : MAX_CHART_WIDTH,
+        )}
+        offset={offset}
+        viewportHeight={viewportHeight}
+      />
+    );
+  }
 
   // §4.5 No-metrics state
   if (tier === 'none') {
@@ -565,12 +625,14 @@ export function MetricsTab({
   };
 
   return (
-    <Box flexDirection="column">
-      <Text bold>Metrics — {resourceName}</Text>
-      {sessionBanner}
-      {rangeSelector}
-      {renderCharts()}
-    </Box>
+    <ChartWidthContext.Provider value={chartWidth}>
+      <Box flexDirection="column">
+        <Text bold>Metrics — {resourceName}</Text>
+        {sessionBanner}
+        {rangeSelector}
+        {renderCharts()}
+      </Box>
+    </ChartWidthContext.Provider>
   );
 }
 

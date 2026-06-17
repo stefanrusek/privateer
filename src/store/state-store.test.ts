@@ -164,6 +164,99 @@ describe('StateStore mutations', () => {
     store.applyEvent('ctx', makeEvent('ADDED', 'my-node', null));
     expect(store.get('ctx', 'Pod', null, 'my-node')).toBeDefined();
   });
+});
+
+// ---------------------------------------------------------------------------
+// StateStore — reconcileList (refresh prune; BUG-C1 regression)
+// ---------------------------------------------------------------------------
+
+describe('StateStore.reconcileList', () => {
+  it('removes stored items of the kind absent from the fresh LIST', () => {
+    const store = makeStore();
+    store.applyEvent('ctx', makeEvent('ADDED', 'web-1'));
+    store.applyEvent('ctx', makeEvent('ADDED', 'web-2'));
+    // Fresh LIST only saw web-1 — web-2 was deleted while we missed the event.
+    const removed = store.reconcileList(
+      'ctx',
+      'Pod',
+      new Set(['default/web-1']),
+    );
+    expect(removed.map((r) => r.name)).toEqual(['web-2']);
+    expect(store.get('ctx', 'Pod', 'default', 'web-1')).toBeDefined();
+    expect(store.get('ctx', 'Pod', 'default', 'web-2')).toBeUndefined();
+  });
+
+  it('keeps items present in the fresh LIST and returns nothing removed', () => {
+    const store = makeStore();
+    store.applyEvent('ctx', makeEvent('ADDED', 'web-1'));
+    const removed = store.reconcileList(
+      'ctx',
+      'Pod',
+      new Set(['default/web-1']),
+    );
+    expect(removed).toEqual([]);
+    expect(store.get('ctx', 'Pod', 'default', 'web-1')).toBeDefined();
+  });
+
+  it('only prunes the requested kind, leaving other kinds intact', () => {
+    const store = makeStore();
+    store.applyEvent('ctx', makeEvent('ADDED', 'web-1'));
+    const svc = makeEvent('ADDED', 'svc-1');
+    svc.kind = 'Service';
+    (svc.object as { kind: string }).kind = 'Service';
+    store.applyEvent('ctx', svc);
+    // Reconcile Pods with an empty present set — Service must survive.
+    const removed = store.reconcileList('ctx', 'Pod', new Set());
+    expect(removed.map((r) => r.name)).toEqual(['web-1']);
+    expect(store.get('ctx', 'Service', 'default', 'svc-1')).toBeDefined();
+  });
+
+  it('narrows to a namespace when one is given', () => {
+    const store = makeStore();
+    store.applyEvent('ctx', makeEvent('ADDED', 'a', 'demo'));
+    store.applyEvent('ctx', makeEvent('ADDED', 'b', 'prod'));
+    // Reconcile only the demo namespace with an empty present set: b (prod)
+    // is out of scope and must remain.
+    const removed = store.reconcileList('ctx', 'Pod', new Set(), 'demo');
+    expect(removed.map((r) => r.name)).toEqual(['a']);
+    expect(store.get('ctx', 'Pod', 'prod', 'b')).toBeDefined();
+  });
+
+  it('handles cluster-scoped (null namespace) identities', () => {
+    const store = makeStore();
+    store.applyEvent('ctx', makeEvent('ADDED', 'node-1', null));
+    store.applyEvent('ctx', makeEvent('ADDED', 'node-2', null));
+    const removed = store.reconcileList('ctx', 'Pod', new Set(['~/node-1']));
+    expect(removed.map((r) => r.name)).toEqual(['node-2']);
+    expect(store.get('ctx', 'Pod', null, 'node-1')).toBeDefined();
+  });
+
+  it('returns nothing for an unknown context', () => {
+    const store = makeStore();
+    expect(store.reconcileList('missing', 'Pod', new Set())).toEqual([]);
+  });
+
+  it('notifies subscribers when something was removed', async () => {
+    const store = makeStore();
+    store.applyEvent('ctx', makeEvent('ADDED', 'web-1'));
+    await Promise.resolve();
+    const fn = vi.fn();
+    store.subscribe(fn);
+    store.reconcileList('ctx', 'Pod', new Set());
+    await Promise.resolve();
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not notify when nothing was removed', async () => {
+    const store = makeStore();
+    store.applyEvent('ctx', makeEvent('ADDED', 'web-1'));
+    await Promise.resolve();
+    const fn = vi.fn();
+    store.subscribe(fn);
+    store.reconcileList('ctx', 'Pod', new Set(['default/web-1']));
+    await Promise.resolve();
+    expect(fn).not.toHaveBeenCalled();
+  });
 
   it('strips managedFields before storing', () => {
     const store = makeStore();

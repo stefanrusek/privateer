@@ -1,71 +1,21 @@
 /**
  * DetailPane — tabbed detail container.
  * Spec 04 §4. Tab availability by resource kind, Agent tab always present.
+ *
+ * Navigation-overhaul chunk 01: tab switching is driven entirely by the
+ * controller (`←`/`→` switch tabs, `1`–`6` jump, `Tab` cycles regions). This
+ * component is now purely presentational — it no longer owns a `useInput`. The
+ * navigable-tab logic lives in the pure `src/ui/detail-tabs.ts` module, which
+ * this component re-exports for existing importers.
  */
 
 import React from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text } from 'ink';
 import type { ResourceObject } from '../../core/types.js';
+import { getAvailableTabs, type TabId, type TabDef } from '../detail-tabs.js';
 
-// ---------------------------------------------------------------------------
-// Tab definitions
-// ---------------------------------------------------------------------------
-
-export type TabId =
-  | 'overview'
-  | 'yaml'
-  | 'events'
-  | 'logs'
-  | 'metrics'
-  | 'agent';
-
-export interface TabDef {
-  id: TabId;
-  label: string;
-}
-
-const ALL_TABS: readonly TabDef[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'yaml', label: 'YAML' },
-  { id: 'events', label: 'Events' },
-  { id: 'logs', label: 'Logs' },
-  { id: 'metrics', label: 'Metrics' },
-];
-
-const AGENT_TAB: TabDef = { id: 'agent', label: 'Agent' };
-
-// ---------------------------------------------------------------------------
-// Tab availability matrix (Spec 04 §4.2)
-// ---------------------------------------------------------------------------
-
-function getAvailableTabs(kind: string, hasPrometheus: boolean): TabDef[] {
-  switch (kind) {
-    case 'Pod':
-      return ALL_TABS.filter((t) =>
-        ['overview', 'yaml', 'events', 'logs', 'metrics'].includes(t.id),
-      );
-    case 'Deployment':
-    case 'StatefulSet':
-    case 'DaemonSet':
-    case 'Node':
-    case 'KafkaTopic':
-    case 'Kafka':
-      return ALL_TABS.filter((t) =>
-        ['overview', 'yaml', 'events', 'metrics'].includes(t.id),
-      );
-    default:
-      // All others: Overview, YAML, Events, and Metrics only if Prometheus available
-      return ALL_TABS.filter((t) => {
-        if (['overview', 'yaml', 'events'].includes(t.id)) {
-          return true;
-        }
-        if (t.id === 'metrics' && hasPrometheus) {
-          return true;
-        }
-        return false;
-      });
-  }
-}
+export type { TabId, TabDef };
+export { getAvailableTabs };
 
 // ---------------------------------------------------------------------------
 // Props
@@ -85,6 +35,14 @@ export interface DetailPaneProps {
   /** Called when the Agent tab should auto-open (Spec 04 §4.1 / Spec 07 §6). */
   onAgentTabRequest?: () => void;
   renderTabContent: (tab: TabId) => React.ReactNode;
+  /**
+   * Optional measured tab-bar slot (navigation-overhaul chunk 04 / B04b). When
+   * provided (by the live adapter), it replaces the presentational tab row with
+   * measured `<Button>`s (clickable tabs + `✕`); the default inline row is kept
+   * for tests and any non-measured host. Receives the available tabs and the
+   * active tab so the adapter can build the right Buttons.
+   */
+  renderTabBar?: (tabs: readonly TabDef[], activeTab: TabId) => React.ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,32 +54,12 @@ export function DetailPane({
   activeTab,
   warningCount,
   hasPrometheus,
-  focused,
   onClose: _onClose,
-  onTabChange,
+  onTabChange: _onTabChange,
   renderTabContent,
+  renderTabBar,
 }: DetailPaneProps): React.ReactElement {
   const availableTabs = getAvailableTabs(resource.kind, hasPrometheus);
-
-  // All navigable tabs: available content tabs + agent (always present)
-  const navigableTabs: TabDef[] = [...availableTabs, AGENT_TAB];
-
-  // Keyboard navigation (Spec 04 §4.1)
-  useInput(
-    (input, key) => {
-      const next = navigateTab(
-        input,
-        key.tab,
-        key.shift,
-        activeTab,
-        navigableTabs,
-      );
-      if (next !== null) {
-        onTabChange(next);
-      }
-    },
-    { isActive: focused },
-  );
 
   // Tab label builder
   function tabLabel(tab: TabDef): string {
@@ -146,6 +84,15 @@ export function DetailPane({
   });
 
   const isAgentActive = activeTab === 'agent';
+
+  if (renderTabBar !== undefined) {
+    return (
+      <Box flexDirection="column">
+        {renderTabBar(availableTabs, activeTab)}
+        <Box flexDirection="column">{renderTabContent(activeTab)}</Box>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column">
@@ -175,43 +122,4 @@ export function DetailPane({
       <Box flexDirection="column">{renderTabContent(activeTab)}</Box>
     </Box>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Exported helper — compute available tabs for a given kind
-// (used by tests and container components)
-// ---------------------------------------------------------------------------
-
-export { getAvailableTabs };
-
-/**
- * Pure keyboard navigation helper — compute the next tab ID for a given input.
- * Exposed for unit testing and reuse.
- */
-export function navigateTab(
-  input: string,
-  isTab: boolean,
-  isShift: boolean,
-  activeTab: TabId,
-  navigableTabs: readonly TabDef[],
-): TabId | null {
-  // Number keys 1–6
-  const numMatch = /^[1-6]$/.exec(input);
-  if (numMatch !== null) {
-    const idx = parseInt(input, 10) - 1;
-    const tab = navigableTabs[idx];
-    return tab !== undefined ? tab.id : null;
-  }
-
-  // Tab / Shift+Tab cycling
-  if (isTab) {
-    const currentIdx = navigableTabs.findIndex((t) => t.id === activeTab);
-    const nextIdx = isShift
-      ? (currentIdx - 1 + navigableTabs.length) % navigableTabs.length
-      : (currentIdx + 1) % navigableTabs.length;
-    const next = navigableTabs[nextIdx];
-    return next !== undefined ? next.id : null;
-  }
-
-  return null;
 }

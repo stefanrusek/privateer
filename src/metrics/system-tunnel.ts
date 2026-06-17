@@ -10,7 +10,10 @@
  *   - ProcessRunner — spawn kubectl port-forward
  *   - Clock         — backoff timer (no Date.now / setTimeout)
  */
-import type { ProcessRunner } from '../boundaries/process-runner.js';
+import type {
+  ProcessRunner,
+  ProcessHandle,
+} from '../boundaries/process-runner.js';
 import type { Clock, CancelHandle } from '../boundaries/clock.js';
 
 /** Readiness signal from kubectl port-forward stdout (same as user PF). */
@@ -52,6 +55,7 @@ export class SystemTunnel {
   private processRunning = false;
   private closed = false;
   private changeHandlers: (() => void)[] = [];
+  private handle: ProcessHandle | null = null;
 
   constructor(
     private readonly runner: ProcessRunner,
@@ -93,6 +97,13 @@ export class SystemTunnel {
       this.cancelBackoff();
       this.cancelBackoff = null;
     }
+    // Terminate the live kubectl child, or it lingers and holds the event
+    // loop open after quit (the bun process never exits — Spec 05 §5.6).
+    if (this.handle?.running === true) {
+      this.handle.terminate();
+    }
+    this.handle = null;
+    this.processRunning = false;
     this.notify();
   }
 
@@ -108,6 +119,7 @@ export class SystemTunnel {
       '-n',
       this.options.namespace,
     ]);
+    this.handle = handle;
 
     handle.onStdout((line) => {
       if (this.closed) {

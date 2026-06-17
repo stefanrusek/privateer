@@ -109,26 +109,62 @@ function getResourceData(
   return raw;
 }
 
+/** Build the B07 prop-driven YamlTab props from the world's fake client. */
+function yamlProps(
+  world: PrivateerWorld,
+  testInitialContent?: string,
+): Parameters<typeof YamlTab>[0] {
+  const yaml = jsYaml.dump(world.yamlResource, { lineWidth: -1, indent: 2 });
+  const meta = world.yamlResource.metadata ?? {};
+  const kind = world.yamlResource.kind ?? '';
+  const props: Parameters<typeof YamlTab>[0] = {
+    yaml,
+    kind,
+    title: `${kind}/${meta.namespace ?? ''}/${meta.name ?? ''}`,
+    onReplace: async (newYaml: string) => {
+      const parsed = jsYaml.load(newYaml) as KubernetesObject;
+      const res = await world.yamlFakeClient.replace(parsed);
+      if (res.ok) {
+        return { ok: true };
+      }
+      if (res.error.kind === 'conflict') {
+        return { ok: false, conflict: true };
+      }
+      return { ok: false, conflict: false, message: res.error.message };
+    },
+    onReload: async () => {
+      const res = await world.yamlFakeClient.get(
+        kind,
+        meta.name ?? '',
+        meta.namespace ?? null,
+      );
+      if (!res.ok) {
+        return { ok: false, message: res.error.message };
+      }
+      return {
+        ok: true,
+        yaml: jsYaml.dump(res.value, { lineWidth: -1, indent: 2 }),
+      };
+    },
+    onOpenInEditor: (input: string) => Promise.resolve(input),
+    onSave: (): void => {
+      world.yamlSaved = true;
+    },
+  };
+  if (testInitialContent !== undefined) {
+    props._testInitialContent = testInitialContent;
+  }
+  return props;
+}
+
 function renderYamlTab(
   this: PrivateerWorld,
   testInitialContent?: string,
 ): RenderResult {
   this.yamlFakeClient.seed(this.yamlResource);
-
-  const props: Parameters<typeof YamlTab>[0] = {
-    resource: this.yamlResource,
-    kubeClient: this.yamlFakeClient,
-    clock: this.yamlClock,
-    onSave: (): void => {
-      this.yamlSaved = true;
-    },
-  };
-
-  if (testInitialContent !== undefined) {
-    props._testInitialContent = testInitialContent;
-  }
-
-  const result = render(React.createElement(YamlTab, props));
+  const result = render(
+    React.createElement(YamlTab, yamlProps(this, testInitialContent)),
+  );
   this.yamlRenderResult = result;
   this.yamlFrame = result.lastFrame() ?? '';
   return result;
@@ -268,15 +304,7 @@ When('I open the diff view', async function (this: PrivateerWorld) {
   // (Prior steps like "I enter yaml edit mode" already seed the resource.)
 
   const result = render(
-    React.createElement(YamlTab, {
-      resource: this.yamlResource,
-      kubeClient: this.yamlFakeClient,
-      clock: this.yamlClock,
-      onSave: (): void => {
-        this.yamlSaved = true;
-      },
-      _testInitialContent: modifiedYaml,
-    }),
+    React.createElement(YamlTab, yamlProps(this, modifiedYaml)),
   );
   this.yamlRenderResult = result;
 
@@ -344,15 +372,7 @@ When(
     this.yamlFakeClient.seed(this.yamlResource);
 
     const result = render(
-      React.createElement(YamlTab, {
-        resource: this.yamlResource,
-        kubeClient: this.yamlFakeClient,
-        clock: this.yamlClock,
-        onSave: (): void => {
-          this.yamlSaved = true;
-        },
-        _testInitialContent: invalidYaml,
-      }),
+      React.createElement(YamlTab, yamlProps(this, invalidYaml)),
     );
     this.yamlRenderResult = result;
 

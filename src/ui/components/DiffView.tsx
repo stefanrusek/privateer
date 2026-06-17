@@ -1,118 +1,79 @@
 /**
- * DiffView — modal overlay showing a unified diff before save.
- * Spec 04 §7: removed lines in red, added lines in green, context lines dimmed.
- * Apply sends the replace() call; Cancel returns to edit mode.
- * On 409 Conflict: shows [Reload & re-edit] [Discard] options (spec-review-01 N2).
+ * DiffView — the diff review shown before a YAML save (Spec 04 §7;
+ * navigation-overhaul chunk 07). Removed lines in red, added in green, context
+ * dimmed; this IS the "save with confirm" step — `[Apply]`/Enter applies.
+ *
+ * **Prop-driven (B07):** the cluster boundary has moved to the controller. This
+ * component renders the diff and the action bar for a given {@link ApplyStatus}
+ * and routes keys/clicks to callbacks; it never calls `kubeClient`. The apply /
+ * conflict / error transitions are decided by the pure `yaml-apply` reducer the
+ * owner (YamlTab) drives.
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { Box, Text, useInput } from 'ink';
-import type { KubernetesObject } from '../../core/types.js';
-import type { KubeClient } from '../../boundaries/kube-client.js';
 import { computeDiff } from '../../yaml/diff.js';
 import type { DiffLine } from '../../yaml/diff.js';
+import type { ApplyStatus } from '../yaml-apply.js';
 
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 export interface DiffViewProps {
-  /** The original resource body (before editing). */
-  original: KubernetesObject;
-  /** The modified resource body (after editing). */
-  modified: KubernetesObject;
-  /** The edited YAML string (for re-edit merging on conflict). */
-  editedYaml: string;
-  kubeClient: KubeClient;
-  onApplied: () => void;
-  /** Called when the user cancels — returns to edit mode with changes preserved. */
+  /** Original YAML (before editing). */
+  originalYaml: string;
+  /** Edited YAML (after editing). */
+  modifiedYaml: string;
+  /** A header label, e.g. `ConfigMap/default/my-cfg`. */
+  title: string;
+  /** The apply machine's current status (controller-owned). */
+  status: ApplyStatus;
+  /** `[Apply]` / Enter — start (or retry) the replace. */
+  onApply: () => void;
+  /** `[Cancel]` / Esc — leave the diff (keep edits, or discard on conflict). */
   onCancel: () => void;
-  /**
-   * Called when the user chooses "Reload & re-edit" after a 409 conflict.
-   * Receives the freshly fetched resource.
-   */
-  onReloadAndRedit: (freshResource: KubernetesObject) => void;
+  /** `[Reload & re-edit]` / r — fetch the fresh resource (conflict only). */
+  onReloadAndRedit: () => void;
 }
-
-// ---------------------------------------------------------------------------
-// Status
-// ---------------------------------------------------------------------------
-
-type ViewStatus =
-  | { kind: 'ready' }
-  | { kind: 'applying' }
-  | { kind: 'conflict' }
-  | { kind: 'error'; message: string };
 
 // ---------------------------------------------------------------------------
 // DiffView component
 // ---------------------------------------------------------------------------
 
 export function DiffView({
-  original,
-  modified,
-  editedYaml: _editedYaml,
-  kubeClient,
-  onApplied,
+  originalYaml,
+  modifiedYaml,
+  title,
+  status,
+  onApply,
   onCancel,
   onReloadAndRedit,
 }: DiffViewProps): React.ReactElement {
-  const [status, setStatus] = useState<ViewStatus>({ kind: 'ready' });
-
-  // Keyboard handling: Enter to apply, Escape to cancel, r to reload-and-redit
   useInput((input, key) => {
     switch (status.kind) {
       case 'applying':
-        return; // ignore input while applying
+      case 'reloading':
+        return; // ignore input while a request is in flight
       case 'conflict':
         if (input === 'r' || input === 'R') {
-          void handleReloadAndRedit();
+          onReloadAndRedit();
         } else if (key.escape) {
           onCancel();
         }
-        break;
-      case 'ready':
+        return;
+      case 'diff':
       case 'error':
         if (key.return) {
-          void handleApply();
+          onApply();
         } else if (key.escape) {
           onCancel();
         }
-        break;
+        return;
     }
   });
 
-  // Compute diff lines
-  const originalYaml = toYaml(original);
-  const modifiedYaml = toYaml(modified);
   const diffLines = computeDiff(originalYaml, modifiedYaml);
-
-  async function handleApply(): Promise<void> {
-    setStatus({ kind: 'applying' });
-    const result = await kubeClient.replace(modified);
-    if (result.ok) {
-      onApplied();
-    } else if (result.error.kind === 'conflict') {
-      setStatus({ kind: 'conflict' });
-    } else {
-      setStatus({ kind: 'error', message: result.error.message });
-    }
-  }
-
-  async function handleReloadAndRedit(): Promise<void> {
-    const kind = original.kind ?? '';
-    const name = original.metadata?.name ?? '';
-    const namespace = original.metadata?.namespace ?? null;
-    const result = await kubeClient.get(kind, name, namespace);
-    if (result.ok) {
-      onReloadAndRedit(result.value);
-    } else {
-      setStatus({ kind: 'error', message: result.error.message });
-    }
-  }
-
-  // Render diff content
-  const diffContent = renderDiffLines(diffLines);
 
   return (
     <Box flexDirection="column" borderStyle="single" borderColor="yellow">
@@ -122,15 +83,12 @@ export function DiffView({
           Review Changes
         </Text>
         <Text dimColor>—</Text>
-        <Text dimColor>
-          {original.kind}/{original.metadata?.namespace ?? ''}/
-          {original.metadata?.name ?? ''}
-        </Text>
+        <Text dimColor>{title}</Text>
       </Box>
 
       {/* Diff lines */}
       <Box flexDirection="column" paddingX={1}>
-        {diffContent}
+        {renderDiffLines(diffLines)}
       </Box>
 
       {/* Status & action bar */}
@@ -149,7 +107,7 @@ export function DiffView({
         ) : (
           <Box flexDirection="row" gap={2}>
             <Text color="green" underline>
-              {status.kind === 'applying' ? '[Applying…]' : '[Apply] (Enter)'}
+              {applyLabel(status)}
             </Text>
             <Text color="yellow" underline>
               [Cancel] (Esc)
@@ -165,9 +123,17 @@ export function DiffView({
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Convert a KubernetesObject to a YAML string for diffing. */
-function toYaml(obj: KubernetesObject): string {
-  return JSON.stringify(obj, null, 2);
+function applyLabel(status: ApplyStatus): string {
+  switch (status.kind) {
+    case 'applying':
+      return '[Applying…]';
+    case 'reloading':
+      return '[Reloading…]';
+    case 'diff':
+    case 'error':
+    case 'conflict':
+      return '[Apply] (Enter)';
+  }
 }
 
 function renderDiffLines(lines: DiffLine[]): React.ReactElement[] {

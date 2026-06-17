@@ -207,6 +207,24 @@ describe('SystemTunnel', () => {
     expect(tunnel.getState().status).toBe('closed');
   });
 
+  it('terminates the running kubectl child on close()', () => {
+    tunnel.open();
+    const handle = runner.last();
+    expect(handle.terminated).toBe(false);
+    tunnel.close();
+    // The child must be killed, or it lingers and holds the event loop open.
+    expect(handle.terminated).toBe(true);
+    expect(tunnel.isRunning).toBe(false);
+  });
+
+  it('does not terminate an already-exited child on close()', () => {
+    tunnel.open();
+    const handle = runner.last();
+    handle.finish(0);
+    tunnel.close();
+    expect(handle.terminated).toBe(false);
+  });
+
   it('does not retry after close', () => {
     tunnel.open();
     tunnel.close();

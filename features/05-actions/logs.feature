@@ -33,6 +33,33 @@ Feature: LogsTab — pod log streaming, container selection, and download
     When I open logs for the pod
     Then the selected log container offers a previous instance
 
+  Scenario: Opening multi-container logs streams the default with no modal
+    Given a pod "order-api-7d9f" with a running container "order-api"
+    And the pod has a terminated container "config-reloader"
+    When I open logs for the pod
+    Then logs stream the default container "order-api" immediately
+    And the inline container dropdown is closed
+
+  Scenario: All-terminated pod auto-opens the inline container dropdown
+    Given a pod "order-api-7d9f" with a terminated container "order-api"
+    And the pod has a terminated container "sidecar"
+    When I open logs for the pod
+    Then no container streams until I choose one
+    And the inline container dropdown is open
+
+  Scenario: The container dropdown shows phase dots and marks the current one
+    Given a pod "order-api-7d9f" with a running container "order-api"
+    And the pod has a terminated container "config-reloader"
+    When I open logs for the pod
+    And I build the inline container dropdown items
+    Then container dropdown item "order-api" has a green dot and is marked current
+    And container dropdown item "config-reloader" has a gray dot and is not marked
+
+  Scenario: The line-limit dropdown marks the current limit
+    Given an open LogsTab for pod "order-api-7d9f" container "order-api"
+    When I build the line-limit dropdown items for "last-1000"
+    Then the line-limit dropdown marks "last-1000" as current
+
   Scenario: Streamed lines are colorized by level
     Given an open LogsTab for pod "order-api-7d9f" container "order-api"
     When the stream delivers the log line "ERROR payment failed"

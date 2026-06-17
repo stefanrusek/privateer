@@ -63,6 +63,28 @@ export function selectRange(
 }
 
 /**
+ * Step the selection one range in `direction` and return the updated model.
+ *
+ * `'prev'` moves to the previous (shorter) range, `'next'` to the next (longer)
+ * one. Stepping **clamps** at the ends — it does not wrap — so `prev` at the
+ * first range and `next` at the last leave the selection unchanged (Spec 06
+ * §4.1: the `[`/`]` accelerators walk the ordered list and stop at the edges).
+ */
+export function stepRange(
+  model: RangeSelectorModel,
+  direction: 'prev' | 'next',
+): RangeSelectorModel {
+  const idx = model.options.indexOf(model.selected);
+  const delta = direction === 'next' ? 1 : -1;
+  // Clamp at the ends: `prev` at index 0 and `next` at the last index stay put.
+  // A selection that is not in `options` (idx === -1) clamps to 0 and re-selects
+  // the first option; `selectRange` validates the resulting label either way.
+  const nextIdx = Math.min(Math.max(idx + delta, 0), model.options.length - 1);
+  const next = model.options[nextIdx];
+  return next === undefined ? model : selectRange(model, next);
+}
+
+/**
  * Return the duration in milliseconds for the given range label.
  */
 export function rangeDurationMs(label: RangeLabel): number {

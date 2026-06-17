@@ -73,3 +73,44 @@ Feature: Mouse interaction input parsing
     Then a drag delta event is emitted with dx 3 dy 2
     When a mouse up event at x 15 y 14
     Then a drag release event is emitted
+
+  # --- B04a: one SGR stream, dispatch, ratios, teardown -------------------
+
+  Scenario: One stdin chunk carries several SGR reports
+    When I receive the stdin chunk "<ESC>[<32;10;5M<ESC>[<32;11;6M<ESC>[<0;11;6m"
+    Then the chunk yields the mouse event types "drag,drag,up"
+
+  Scenario: A chunk with interleaved non-mouse bytes still yields its reports
+    When I receive the stdin chunk "noise<ESC>[<0;3;4Mtail<ESC>[<64;3;4Mend"
+    Then the chunk yields the mouse event types "down,scrollUp"
+
+  Scenario: Wheel over the detail pane scrolls the detail content
+    Given a frame 120 cols by 40 rows with the detail pane open
+    When I wheel down at the detail pane
+    Then the action is a wheel on "detail"
+
+  Scenario: Wheel over the list scrolls the list
+    Given a frame 120 cols by 40 rows with the detail pane open
+    When I wheel up at the list
+    Then the action is a wheel on "list"
+
+  Scenario: Pressing the list│detail border begins a vertical drag
+    Given a frame 120 cols by 40 rows with the detail pane open
+    When I press the list│detail border
+    Then the action begins a "vertical" drag
+
+  Scenario: A grabbed handle does not slip when the cursor wanders
+    Given a frame 120 cols by 40 rows with the detail pane open
+    When I press the list│detail border
+    And I drag one column to the side and down to row 25
+    Then the action drags the "vertical" handle
+
+  Scenario: Clicking the already-selected list row opens detail
+    Given a frame 120 cols by 40 rows with the detail pane open
+    When I click the selected list row again
+    Then the action opens detail for row 0
+
+  Scenario: A derived pane ratio stays within the clamp bounds
+    Given a frame 120 cols by 40 rows with the detail pane open
+    Then the derived sidebar ratio at x 100 is within bounds
+    And the derived vertical ratio at y 4 is within bounds

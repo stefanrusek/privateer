@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
+import { Text } from 'ink';
 import {
   ConfirmDialog,
   confirmDialogKeyAction,
@@ -9,7 +10,6 @@ import {
 } from './ConfirmDialog.js';
 import type { ConfirmSelection } from './ConfirmDialog.js';
 import type { Key } from 'ink';
-import { safeWrite } from '../../../test/ink-stdin.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -326,43 +326,69 @@ describe('ConfirmDialog default selection', () => {
 });
 
 // ---------------------------------------------------------------------------
-// useInput integration — exercises the component's useInput callback body.
-// safeWrite waits for Ink's stdin 'readable' subscription before each write
-// so keystrokes are never dropped while effects are still pending.
+// Controlled presentational behaviour (B3b) — the component is now driven by
+// the `selection` prop and an injected `renderButton`; input is owned by the
+// controller (controller.handleConfirmInput), so there is no internal useInput.
 // ---------------------------------------------------------------------------
 
-describe('ConfirmDialog useInput integration', () => {
-  it('Enter on default (Cancel) selection calls onCancel', async () => {
-    const onConfirm = vi.fn();
-    const onCancel = vi.fn();
-    const { stdin } = render(
+describe('ConfirmDialog controlled component', () => {
+  it('defaults the highlight to Cancel when selection is omitted', () => {
+    const calls: { which: ConfirmSelection; selected: boolean }[] = [];
+    render(
       React.createElement(ConfirmDialog, {
-        message: 'Delete?',
-        onConfirm,
-        onCancel,
+        ...defaultProps,
+        renderButton: ({ which, selected, label }) => {
+          calls.push({ which, selected });
+          return React.createElement(Text, { key: which }, label);
+        },
       }),
     );
-    await safeWrite(stdin, '\r');
-    expect(onCancel).toHaveBeenCalledOnce();
-    expect(onConfirm).not.toHaveBeenCalled();
+    expect(calls).toContainEqual({ which: 'cancel', selected: true });
+    expect(calls).toContainEqual({ which: 'confirm', selected: false });
   });
 
-  it('right arrow then Enter calls onConfirm', async () => {
-    const onConfirm = vi.fn();
-    const onCancel = vi.fn();
-    const { stdin } = render(
+  it('highlights the confirm button when selection="confirm"', () => {
+    const calls: { which: ConfirmSelection; selected: boolean }[] = [];
+    render(
       React.createElement(ConfirmDialog, {
-        message: 'Delete?',
-        onConfirm,
-        onCancel,
+        ...defaultProps,
+        selection: 'confirm',
+        renderButton: ({ which, selected, label }) => {
+          calls.push({ which, selected });
+          return React.createElement(Text, { key: which }, label);
+        },
       }),
     );
-    // ESC + [C = right arrow; triggers setSelection('confirm'). safeWrite
-    // yields after the write so React commits the state update (and the
-    // refreshed useInput handler) before Enter is written.
-    await safeWrite(stdin, '\x1B[C');
-    await safeWrite(stdin, '\r');
+    expect(calls).toContainEqual({ which: 'confirm', selected: true });
+    expect(calls).toContainEqual({ which: 'cancel', selected: false });
+  });
+
+  it('wires onClick to onConfirm / onCancel and passes destructive', () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const captured = new Map<
+      ConfirmSelection,
+      { onClick: () => void; destructive: boolean }
+    >();
+    render(
+      React.createElement(ConfirmDialog, {
+        message: 'Delete?',
+        confirmLabel: 'Delete',
+        destructive: true,
+        onConfirm,
+        onCancel,
+        renderButton: ({ which, label, onClick, destructive }) => {
+          captured.set(which, { onClick, destructive });
+          return React.createElement(Text, { key: which }, label);
+        },
+      }),
+    );
+    // The confirm button carries the destructive styling; cancel never does.
+    expect(captured.get('confirm')?.destructive).toBe(true);
+    expect(captured.get('cancel')?.destructive).toBe(false);
+    captured.get('confirm')?.onClick();
     expect(onConfirm).toHaveBeenCalledOnce();
-    expect(onCancel).not.toHaveBeenCalled();
+    captured.get('cancel')?.onClick();
+    expect(onCancel).toHaveBeenCalledOnce();
   });
 });

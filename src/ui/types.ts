@@ -3,6 +3,7 @@
  */
 
 import type { Mode } from '../input/keyboard.js';
+import type { SwitchStatus } from './context-switch.js';
 
 export type { Mode };
 
@@ -62,6 +63,13 @@ export interface AppState {
   readonly showDetail: boolean;
   /** Whether the context switcher overlay is open. */
   readonly contextSwitcherOpen: boolean;
+  /**
+   * In-flight context-switch status (chunk 08): `null` when settled,
+   * `connecting` while a switch is reconnecting, `error` (with reason) when the
+   * target could not be reached. Drives the header connecting hint and the
+   * error banner with [Retry] / [Switch context].
+   */
+  readonly switchStatus: SwitchStatus;
   /** Whether the help overlay is open. */
   readonly helpOpen: boolean;
   /** Sidebar width ratio (0..1). */

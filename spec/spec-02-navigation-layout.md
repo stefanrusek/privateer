@@ -17,23 +17,33 @@
 
 ## 2. Overall Layout
 
+All five regions are bordered and the borders **collapse** into one connected
+grid (Option A): a full-width header across the top, a full-width command bar
+across the bottom, a full-height sidebar on the left, and the list stacked above
+the detail pane in the right column. Adjacent regions share a single border line
+with correct box-drawing junctions (`┬ ┴ ├ ┤ ┼`).
+
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  Left Sidebar     │  Namespace Filter  [all ▾]  Search [      ] │
-│  (resource tree)  ├──────────────────────────────────────────────│
-│                   │                                              │
-│                   │  Resource List (center top)                  │
-│                   │                                              │
-│  ~20% width       │                                              │
-│  resizable        ├──────── drag handle ──────────────────────── │
-│                   │                                              │
-│                   │  Detail / Edit Pane (center bottom)          │
-│                   │  [hidden when nothing selected]              │
-│                   │                                              │
-├───────────────────┴──────────────────────────────────────────────│
-│  Command Bar                                                     │
-└──────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ docker-desktop  ns: [default ▾]                          /<search>  │  header (full width)
+├──────────────────┬─────────────────────────────────────────────────┤
+│  Left Sidebar    │  Resource List (center top)                      │
+│  (resource tree) │                                                  │
+│  ~20% width      ├───────────────────────────────────────────────── │  ← list│detail line (V resize)
+│  resizable       │  Detail / Edit Pane (center bottom)              │
+│                  │  [hidden when nothing selected]                  │
+├──────────────────┴─────────────────────────────────────────────────┤
+│  Command Bar                                                        │  (full width)
+└────────────────────────────────────────────────────────────────────┘
+         ↑ sidebar│right line = horizontal resize handle
 ```
+
+The **focused** region is drawn with a **double-line, accent-coloured** border
+and a bold title; unfocused regions are single dim lines. Because a double-line
+glyph occupies exactly one cell, switching focus changes only border weight,
+colour, and title style — **never any region's position or size** (no reflow).
+When detail is closed the list fills the right column and there is no list│detail
+line; the sidebar│right line (the horizontal-resize handle) always exists.
 
 ### Region summary
 
@@ -44,6 +54,38 @@
 | Center bottom (detail) | 40% of remaining height | Yes, vertical drag | Hidden until selection |
 | Command bar | 1 row | No | Never hidden |
 | Header bar | 1 row | No | Never hidden |
+
+### 2.1 Geometry — single source of truth
+
+All region sizes and positions are computed by one pure module,
+`src/ui/layout-geometry.ts`. `computeFrame({ columns, rows, sidebarRatio,
+verticalRatio, showDetail })` returns the **inner content `Rect`** of every
+region (header, sidebar, list, detail, command bar) plus the two shared border
+**`Segment`** handles (sidebar│right vertical, list│detail horizontal). Every
+consumer derives from it — `controller.tableWidth()` = `frame.list.width`,
+`controller.visibleHeight()` = `frame.list.height`, the sidebar width =
+`frame.sidebar.width`, and the metrics chart width = `min(frame.detail.width,
+MAX_CHART_WIDTH)`. No consumer performs geometry arithmetic of its own.
+
+The frame is **border-aware**: it accounts for one column/row per frame edge and
+counts shared (collapsed) edges once. There is **no `max(60, …)`-style floor**
+that could exceed the real pane: when the terminal is too small, inner
+dimensions clamp toward documented minimums and content is **truncated**, never
+wrapped. The list and the metrics charts therefore never wrap or spill at any
+terminal size, detail pane open or closed. Ratios are clamped (sidebar
+0.1–0.4, vertical 0.2–0.8) and the sidebar inner width is floored at 18
+columns.
+
+The collapsed-grid **renderer** is the pure frame model `src/ui/frame.ts`:
+`computeBorderGrid({ frame, columns, rows, focus })` emits a 2-D grid of
+box-drawing glyphs (border cells and blank content windows), drawing the
+focused region's border ring at double weight and resolving mixed
+single/double junctions (`╞ ╡ ╤ ╧ ╪ ╫ ╟ ╢ ╓ ╖ ╘ ╛` …, falling back to the
+all-single shape for the few 3-way-mixed corners Unicode lacks). Every junction
+glyph is verified width-1 so switching focus weight causes zero reflow. The thin
+Ink renderer (`src/ui/components/FrameChrome.tsx`) slices this grid into bands
+and strips and composites each region's content into its window — it carries no
+glyph or geometry decisions of its own.
 
 ---
 
@@ -107,11 +149,18 @@ Resources are grouped into logical categories matching how Lens organizes them. 
 
 ## 4. Header Bar
 
-Single row above the center pane. Always visible.
+Full-width single row across the top of the collapsed grid. Always visible. It
+shows, left to right: the **current context**, the **namespace** filter, and the
+**search** field (right-aligned).
 
 ```
- Namespace: [all namespaces ▾]    Search: [                    ]
+ docker-desktop  ns: [default ▾]                          /<search>
 ```
+
+- The **context** chip sits to the left of the namespace and is rendered as a
+  distinct inline element (chunk 04 wraps it as a `<Button>` that opens the
+  context switcher; today `!ctx`/`c` open it). Its value is `state.context`.
+- The **namespace** and **search** are the inline elements described below.
 
 ### 4.1 Namespace Filter
 
@@ -140,7 +189,8 @@ Displays the list of resources for the currently selected resource type, filtere
 - Single click or Enter → loads detail into center bottom pane (opens it if hidden)
 - Live updates via watch stream — new/modified/deleted rows animate subtly (no jarring redraws)
 - Sortable columns: click column header or `s` + column number to sort
-- Scrollable: mouse scroll or arrow keys / `j` / `k`
+- Vertically scrollable: mouse scroll or `↑` / `↓` / `j` / `k`
+- Horizontally scrollable: `←` / `→` pan the columns (§5.2)
 - Multi-select: deferred to v2 (reserved key: `v`, visual-select). `Space` is reserved globally for agent command bar focus.
 
 ### 5.1 Row Status Indicators
@@ -153,6 +203,32 @@ Each row has a leading status indicator column:
 | `●` yellow | Pending / Progressing |
 | `●` red | Error / CrashLoopBackOff / Failed |
 | `●` grey | Unknown / Terminating |
+
+### 5.2 Horizontal scrolling (natural-width viewport)
+
+When a resource kind has more column width than fits the list pane, the list is
+a horizontal **window** over fixed, **natural-width** columns — columns are
+never squeezed or wrapped to fit; the pane clips them and `←` / `→` pan the
+hidden ones into view.
+
+- **Natural widths** are stable and data-independent: fixed-width columns keep
+  their width; percentage-width columns (Spec 03) resolve against a constant
+  baseline (`LIST_BASELINE_WIDTH` = 120), *not* the live pane width, so the
+  layout never jitters as rows arrive or as the user scrolls.
+- The leading **status dot + `Name`** columns are **pinned**: they always render
+  at the left at their natural widths and never scroll. (A kind with no `Name`
+  column pins only the status column.) The remaining columns pan together as one
+  unit.
+- `→` advances the horizontal offset by one column, `←` retreats it; both snap
+  to column boundaries (headers stay aligned) and both clamp. The maximum offset
+  lands the final column flush against the right edge — you cannot scroll blank
+  space in past it. When the natural total fits the pane, `←` / `→` are no-ops.
+- When columns are hidden, a `‹` marker shows at the pinned/scrollable boundary
+  (more to the left) and a `›` at the right edge (more to the right); each
+  occupies one header cell and shifts no data column.
+- The horizontal offset **resets to 0 when the active kind changes** (the column
+  set differs) and **persists** across vertical scroll, selection, sort, and
+  search within the same kind.
 
 ---
 
@@ -263,13 +339,27 @@ A subtle indicator on the left of the input area shows current mode:
 
 Privateer uses a **modal input model** similar to vim, but deliberately minimal.
 
+The overarching rule: **`Tab` / `Shift+Tab` move *between* regions; the arrow
+keys act *within* the focused region.** Nothing else changes focus except a
+mouse click and opening the detail pane (which focuses it). In particular:
+
+- The arrow keys never jump focus to a different region.
+- In the **list**, `←` / `→` horizontally scroll the table (§5).
+- In the **detail** pane, `←` / `→` switch to the previous / next tab and
+  `↑` / `↓` scroll the tab content (Spec 04 §4.1).
+- In the **sidebar**, `←` / `→` collapse / expand (§8.4) — unchanged.
+- Opening the detail pane (Enter, `e`, `l`, second click on a selected row,
+  agent auto-open) sets focus to the detail pane, so the keys you type next go
+  to the thing you just opened (e.g. `/` in the Logs tab opens the Logs search,
+  not the global resource-list search).
+
 ### 8.1 Modes
 
 | Mode | Description |
 |---|---|
 | **Normal** | Default. Arrow keys navigate lists and tree. Shortcut keys active. |
 | **Search** | Entered via `/`. Typing filters the list. |
-| **Command** | Entered via `:`. Typing enters a command. |
+| **Command** | Entered via `Space` (agent) or `!` (command). Typing enters a command. |
 | **Edit** | Entered via `e` in YAML tab. Full text editing. |
 
 Mode is shown in the command bar (detail deferred to Spec 04).
@@ -279,11 +369,12 @@ Mode is shown in the command bar (detail deferred to Spec 04).
 | Key | Action |
 |---|---|
 | `?` | Toggle help overlay |
-| `q` | Quit |
+| `q` | Quit — from **every** region in normal mode (port-forward quit-confirm still applies). A literal `q` while a text input is active (search / command / YAML edit / Logs search) is typed, not a quit. |
+| `Escape` | Close the detail pane when it is open (focus returns to the list); cancel an active search / command / edit mode otherwise. `Escape` never quits the app. |
 | `/` | Focus search |
 | `n` | Open namespace picker |
 | `Space` | Focus command bar (agent input) |
-| `Tab` | Cycle focus: sidebar → list → detail |
+| `Tab` | Cycle focus between regions: sidebar → list → detail → sidebar (detail included only while it is open). Works from every region, **including** the detail pane. |
 | `Shift+Tab` | Cycle focus reverse |
 | `r` | Refresh current resource list |
 | `Ctrl+C` | Quit (always, any mode) |
@@ -323,24 +414,33 @@ Mode is shown in the command bar (detail deferred to Spec 04).
 
 All interactive elements support mouse interaction:
 
+All mouse gestures come from a **single SGR stdin stream** parsed by
+`parseSgrMouse`/`parseSgrMouseChunk` and routed through one pure `dispatch`
+reducer over a frame-derived hit-region registry (no ink-mouse, no second
+parser). Mouse reporting enables modes 1000h (click) + 1002h (button-held
+motion) + 1006h (SGR); any-motion 1003h stays **off**; **every** mouse mode is
+hard-disabled on quit/suspend/exit so escape sequences never leak into the
+shell.
+
 | Element | Mouse action |
 |---|---|
 | Sidebar items | Click to select / expand |
-| Sidebar resize handle | Click and drag |
-| List rows | Click to select, double-click to open detail |
+| Sidebar resize handle | Click and drag (±1-cell grab tolerance, latched) |
+| List rows | Click to select; a second click on the already-selected row opens detail |
 | List column headers | Click to sort |
 | Detail pane tabs | Click to switch |
-| Detail resize handle | Click and drag |
-| Namespace dropdown | Click to open |
+| Detail resize handle | Click and drag (±1-cell grab tolerance, latched) |
+| Header **namespace** chip | Click to open the namespace picker |
+| Header **context** chip | Click to open the context switcher |
 | Search field | Click to focus |
-| Command bar context | Click to open context switcher |
-| Scroll anywhere | Mouse wheel |
+| Scroll wheel | Scrolls the region **under the cursor** (sidebar / list / detail), independent of keyboard focus; detail Logs pause/resume tail accordingly |
 
 ---
 
 ## 10. Context Switcher
 
-Triggered by `:ctx` command or clicking context name in command bar.
+Triggered by the **`c`** key, the `!ctx` command, or clicking the header
+**context** chip (`<Button>`).
 
 - Full-screen overlay (modal)
 - Lists all contexts from kubeconfig
@@ -349,11 +449,38 @@ Triggered by `:ctx` command or clicking context name in command bar.
 - Select with Enter or click
 - Escape to cancel
 
+Selecting a context **closes the switcher immediately** and hands feedback to
+the header: it shows `… connecting to <ctx>` until the first stream sync clears
+it, or — on a connection failure — a persistent banner
+`✗ Could not connect to <ctx>: <reason>` with **[Retry]** (re-runs the
+connection) and **[Switch context]** (reopens the switcher). Switching to the
+current context is a no-op.
+
+Per-context memory: the `{ namespace, activeKind }` last viewed in each context
+is remembered and restored on return — validated against the new cluster, with
+Overview / all-namespaces fallbacks when a remembered kind/namespace is absent —
+persisted in `~/.config/p9r/layout.json` under a `contexts` map (tolerant of the
+old schema).
+
 ---
 
 ## 11. Help Overlay
 
-Triggered by `?`. Full-screen overlay showing all keybindings organized by mode and context. Dismiss with `?` or `Escape`.
+Triggered by `?`. A full-screen overlay showing all keybindings **grouped by
+scope** (Global, Sidebar, List, Detail and its tabs, Command bar, Overlays).
+
+- The bindings come from a single source of truth — the `KEYMAP` registry in
+  `src/ui/keymap.ts` — so the help text can never drift from the real bindings.
+  The same registry's `accelerator` entries are the underlined letters on the
+  measured `<Button>`/`<DropdownButton>` chips, so a button and its help line
+  always agree. A drift test asserts every button accelerator appears in
+  `KEYMAP`, and the README keymap is generated from / checked against it.
+- **Context-aware ordering:** the group for the user's **current region/tab** is
+  shown **first**, then Global, then the rest — so the help leads with where you
+  are. Accelerator letters are underlined to match the buttons.
+- The overlay is **scrollable** (`↑`/`↓`, `PageUp`/`PageDown`) when it exceeds
+  the screen, with a scrollbar. Dismiss with `?` or `Escape`; focus returns
+  where it was.
 
 ---
 

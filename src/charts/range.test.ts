@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createRangeSelector,
   selectRange,
+  stepRange,
   rangeDurationMs,
   rangeStartMs,
   ALL_RANGES,
@@ -111,5 +112,54 @@ describe('ALL_RANGES', () => {
 describe('DEFAULT_RANGE', () => {
   it('is 1h', () => {
     expect(DEFAULT_RANGE).toBe('1h');
+  });
+});
+
+describe('stepRange', () => {
+  it("'next' moves to the next (longer) range", () => {
+    const m = createRangeSelector(); // 1h
+    expect(stepRange(m, 'next').selected).toBe('4h');
+  });
+
+  it("'prev' moves to the previous (shorter) range", () => {
+    const m = selectRange(createRangeSelector(), '1h');
+    expect(stepRange(m, 'prev').selected).toBe('20m');
+  });
+
+  it("'prev' clamps at the first range (does not wrap)", () => {
+    const m = selectRange(createRangeSelector(), '20m');
+    const stepped = stepRange(m, 'prev');
+    expect(stepped.selected).toBe('20m');
+    expect(stepped).toEqual(m);
+  });
+
+  it("'next' clamps at the last range (does not wrap)", () => {
+    const m = selectRange(createRangeSelector(), '2d');
+    const stepped = stepRange(m, 'next');
+    expect(stepped.selected).toBe('2d');
+    expect(stepped).toEqual(m);
+  });
+
+  it('walks the full ordered list with repeated steps', () => {
+    let m = selectRange(createRangeSelector(), '20m');
+    const seen = [m.selected];
+    for (let i = 0; i < ALL_RANGES.length + 1; i++) {
+      m = stepRange(m, 'next');
+      seen.push(m.selected);
+    }
+    // 20m → 1h → 4h → 1d → 2d → 2d (clamped)
+    expect(seen).toEqual(['20m', '1h', '4h', '1d', '2d', '2d', '2d']);
+  });
+
+  it('re-anchors a selection that is not in options to the first option', () => {
+    // idx === -1 → clamp to 0 → the first valid option, validated by selectRange.
+    const broken = { selected: '99h', options: ALL_RANGES } as never;
+    expect(stepRange(broken, 'next').selected).toBe(ALL_RANGES[0]);
+  });
+
+  it('returns the model unchanged when options is empty', () => {
+    const empty = { selected: '1h', options: [] } as never;
+    expect(stepRange(empty, 'next')).toBe(empty);
+    expect(stepRange(empty, 'prev')).toBe(empty);
   });
 });

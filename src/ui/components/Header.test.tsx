@@ -8,12 +8,13 @@ function noop(): void {
 }
 
 const defaultProps = {
+  context: 'docker-desktop',
   namespace: 'default',
   allNamespaces: ['default', 'kube-system'],
   search: '',
   onNamespaceChange: noop,
   onSearchChange: noop,
-  focused: null as 'namespace' | 'search' | null,
+  focused: null as 'context' | 'namespace' | 'search' | null,
 };
 
 describe('Header', () => {
@@ -27,15 +28,24 @@ describe('Header', () => {
     expect(lastFrame()).toContain('ns:');
   });
 
-  it('renders search: label', () => {
+  it('renders the context chip left of the namespace', () => {
     const { lastFrame } = render(React.createElement(Header, defaultProps));
-    expect(lastFrame()).toContain('search:');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('docker-desktop');
+    // context appears before "ns:"
+    expect(frame.indexOf('docker-desktop')).toBeLessThan(frame.indexOf('ns:'));
   });
 
   it('renders search text', () => {
     const props = { ...defaultProps, search: 'nginx' };
     const { lastFrame } = render(React.createElement(Header, props));
     expect(lastFrame()).toContain('nginx');
+  });
+
+  it('renders context focused state', () => {
+    const props = { ...defaultProps, focused: 'context' as const };
+    const { lastFrame } = render(React.createElement(Header, props));
+    expect(lastFrame()).toContain('docker-desktop');
   });
 
   it('renders namespace focused state', () => {

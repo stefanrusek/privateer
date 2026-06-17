@@ -24,6 +24,7 @@ const defaultState: AppState = {
   forbiddenKinds: new Set(),
   showDetail: false,
   contextSwitcherOpen: false,
+  switchStatus: null,
   helpOpen: false,
   sidebarRatio: 0.2,
   verticalRatio: 0.6,
@@ -76,6 +77,21 @@ describe('AppRoot', () => {
     expect(lastFrame()).toContain('test-cluster');
   });
 
+  it('renders a measured headerSlot in place of the default Header', () => {
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state: defaultState,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        headerSlot: React.createElement(Text, null, 'MEASURED-HEADER'),
+      }),
+    );
+    const frame = lastFrame();
+    expect(frame).toContain('MEASURED-HEADER');
+    // The default inline namespace chip is replaced by the slot.
+    expect(frame).not.toContain('[default ▾]');
+  });
+
   it('renders help overlay when helpOpen is true', () => {
     const state = { ...defaultState, helpOpen: true };
     const { lastFrame } = render(
@@ -86,6 +102,22 @@ describe('AppRoot', () => {
       }),
     );
     expect(lastFrame()).toContain('Keyboard Reference');
+  });
+
+  it('plumbs focus / detail tab / scroll into the help overlay', () => {
+    const state = { ...defaultState, helpOpen: true, focus: 'detail' as const };
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        terminalSize: { columns: 120, rows: 40 },
+        detailTab: 'logs',
+        helpScroll: 0,
+      }),
+    );
+    // The Logs detail group leads when the Logs tab is the focused context.
+    expect(lastFrame()).toContain('Detail · Logs');
   });
 
   it('does not render help overlay when helpOpen is false', () => {
@@ -123,11 +155,14 @@ describe('AppRoot', () => {
   });
 
   it('shows > marker for active kind in sidebar', () => {
+    // The bordered chrome clips the sidebar to the body height, so give it a
+    // tall terminal where every leaf (and its active-kind marker) is visible.
     const { lastFrame } = render(
       React.createElement(AppRoot, {
         state: defaultState,
         callbacks: defaultCallbacks,
         contextFilter: '',
+        terminalSize: { columns: 120, rows: 200 },
       }),
     );
     expect(lastFrame()).toContain('>');
@@ -177,6 +212,7 @@ describe('AppRoot', () => {
         callbacks: defaultCallbacks,
         contextFilter: '',
         cursorKind: 'Pods',
+        terminalSize: { columns: 120, rows: 200 },
       }),
     );
     expect(lastFrame()).toContain('Pods');

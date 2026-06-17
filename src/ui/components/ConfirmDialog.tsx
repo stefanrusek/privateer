@@ -6,9 +6,24 @@
  * unit-tested without relying on ink's async useEffect registration.
  */
 
-import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import React from 'react';
+import { Box, Text } from 'ink';
 import type { Key } from 'ink';
+
+export type ConfirmSelection = 'confirm' | 'cancel';
+
+/**
+ * Renders one button label. The adapter injects a measured, clickable `Button`
+ * here (B3b); the default plain-`<Text>` renderer keeps the component testable
+ * under ink-testing-library without the adapter's measure/register glue.
+ */
+export type ConfirmButtonRenderer = (args: {
+  which: ConfirmSelection;
+  label: string;
+  selected: boolean;
+  destructive: boolean;
+  onClick: () => void;
+}) => React.ReactNode;
 
 export interface ConfirmDialogProps {
   message: string;
@@ -16,9 +31,14 @@ export interface ConfirmDialogProps {
   onConfirm: () => void;
   onCancel: () => void;
   destructive?: boolean;
+  /**
+   * Highlighted button (controlled by the controller so keyboard and mouse
+   * share one source of truth). Defaults to `cancel` for safety when omitted.
+   */
+  selection?: ConfirmSelection;
+  /** Injected by the adapter to render clickable measured Buttons. */
+  renderButton?: ConfirmButtonRenderer;
 }
-
-export type ConfirmSelection = 'confirm' | 'cancel';
 
 export type ConfirmKeyAction =
   | { kind: 'confirm' }
@@ -89,33 +109,56 @@ export function dispatchConfirmAction(
   }
 }
 
+/** Default (test-mode) renderer: a styled, non-clickable `<Text>` label. */
+function defaultRenderButton({
+  label,
+  selected,
+  destructive,
+}: {
+  label: string;
+  selected: boolean;
+  destructive: boolean;
+}): React.ReactNode {
+  return (
+    <Text
+      bold={selected}
+      underline={selected}
+      {...(destructive ? { color: 'red' as const } : {})}
+    >
+      [{label}]
+    </Text>
+  );
+}
+
 export function ConfirmDialog({
   message,
   confirmLabel = 'Confirm',
   onConfirm,
   onCancel,
   destructive = false,
+  selection = 'cancel',
+  renderButton = defaultRenderButton,
 }: ConfirmDialogProps): React.ReactElement {
-  const [selection, setSelection] = useState<ConfirmSelection>('cancel');
-
-  useInput((input, key) => {
-    const action = confirmDialogKeyAction(input, key);
-    dispatchConfirmAction(action, selection, onConfirm, onCancel, setSelection);
-  });
-
-  const confirmProps = {
-    bold: selection === 'confirm',
-    underline: selection === 'confirm',
-    ...(destructive ? { color: 'red' as const } : {}),
-  };
-
+  // Input is owned by the controller (single source of truth — see
+  // controller.handleConfirmInput); this component is purely presentational so
+  // keyboard and the clickable buttons never race (B3b).
   return (
     <Box flexDirection="row" gap={1}>
       <Text>{message}</Text>
-      <Text {...confirmProps}>[{confirmLabel}]</Text>
-      <Text bold={selection === 'cancel'} underline={selection === 'cancel'}>
-        [Cancel]
-      </Text>
+      {renderButton({
+        which: 'confirm',
+        label: confirmLabel,
+        selected: selection === 'confirm',
+        destructive,
+        onClick: onConfirm,
+      })}
+      {renderButton({
+        which: 'cancel',
+        label: 'Cancel',
+        selected: selection === 'cancel',
+        destructive: false,
+        onClick: onCancel,
+      })}
     </Box>
   );
 }
