@@ -13,7 +13,10 @@ import { AgentTab } from '../../ui/components/AgentTab.js';
 import { HealthDashboard } from '../../ui/components/HealthDashboard.js';
 import { ConfirmDialog } from '../../ui/components/ConfirmDialog.js';
 import { LogsTab } from '../../ui/components/LogsTab.js';
-import { PortForwardManager } from '../../ui/components/PortForwardManager.js';
+import {
+  PortForwardManager,
+  pfManagerRemeasureKey,
+} from '../../ui/components/PortForwardManager.js';
 import { MetricsTab } from '../../ui/components/MetricsTab.js';
 import { PickerOverlay } from '../../ui/components/PickerOverlay.js';
 import { LiveController } from './controller.js';
@@ -542,6 +545,14 @@ export function LiveApp({
     // Rendered inside the registry/mouse plumbing so the [✕]/[retry]/[New]/
     // [Close] controls are measured, clickable Buttons (C3); clicks are routed
     // through the controller's pfManagerRegistry.
+    //
+    // Every pfm Button shares one `remeasureKey` derived from the forwards'
+    // ids/statuses/fail-reason (a failed row grows multi-line) and the recents
+    // count: when forwards change *while the manager is open* they shift the
+    // bottom-row `[New]`/`[Close]` (and later rows) down, and a Button whose
+    // label/layer is unchanged would otherwise keep its stale registered rect
+    // and miss clicks (the offset bug).
+    const pfRemeasureKey = pfManagerRemeasureKey(snapshot.portForwards);
     return (
       <MeasuredRegistryProvider registry={controller}>
         <MouseRouter controller={controller} />
@@ -562,6 +573,7 @@ export function LiveApp({
                 label={label}
                 layer={OVERLAY_LAYER}
                 onClick={onClick}
+                remeasureKey={pfRemeasureKey}
                 {...(color !== undefined ? { color } : {})}
               />
             )}

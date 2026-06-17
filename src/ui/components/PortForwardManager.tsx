@@ -9,6 +9,23 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { PortForward, RecentForward } from '../../portforward/types.js';
+import type { PortForwardManagerState } from '../../portforward/manager.js';
+
+/**
+ * A layout signature for the manager: it changes whenever something that can
+ * shift a button's vertical position changes — the forward rows (their id,
+ * status, and whether a fail-reason makes the row multi-line) and the recents
+ * count (the RECENT section's presence/length). The adapter feeds this to each
+ * pfm `<Button>`'s `remeasureKey` so the bottom-row `[New]`/`[Close]` (and the
+ * per-row controls below a changed row) re-measure instead of keeping a stale
+ * registered rect and missing clicks. Pure + unit-tested.
+ */
+export function pfManagerRemeasureKey(state: PortForwardManagerState): string {
+  const rows = state.forwards
+    .map((f) => `${f.id}:${f.status}:${f.failReason !== undefined ? '1' : '0'}`)
+    .join('|');
+  return `${rows}#${String(state.recents.length)}`;
+}
 
 // ---------------------------------------------------------------------------
 // PortForwardManager overlay

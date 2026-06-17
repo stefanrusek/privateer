@@ -135,6 +135,15 @@ export interface ButtonProps {
   active?: boolean;
   /** Optional text colour (e.g. a destructive confirm button renders red). */
   color?: string;
+  /**
+   * An opaque value that, when changed, forces a re-measure even though the
+   * label/layer/accelerator are unchanged. Needed when *sibling* content can
+   * change this Button's absolute position (e.g. the port-forward manager's
+   * bottom-row `[New]`/`[Close]` shift down as forward rows are added/removed
+   * or grow multi-line); without it the registered rect goes stale and clicks
+   * land a row off. Pass a key derived from the layout-affecting siblings.
+   */
+  remeasureKey?: string | number;
 }
 
 /**
@@ -153,6 +162,7 @@ export function Button({
   children,
   active = false,
   color,
+  remeasureKey,
 }: ButtonProps): React.ReactElement {
   const ref = useRef<DOMElement>(null);
   useMeasuredEntry(
@@ -161,7 +171,7 @@ export function Button({
     (rect) => ({ kind: 'button', id, rect, layer }),
     onClick,
     id,
-    [layer, label, accelerator],
+    [layer, label, accelerator, remeasureKey],
   );
 
   const colorProp = color !== undefined ? { color } : {};

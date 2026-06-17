@@ -6,6 +6,7 @@ import {
   PortForwardManager,
   ForwardCountIndicator,
   QuitGuardPrompt,
+  pfManagerRemeasureKey,
 } from './PortForwardManager.js';
 import type { PortForward, RecentForward } from '../../portforward/types.js';
 
@@ -42,6 +43,58 @@ function makeRecent(overrides?: Partial<RecentForward>): RecentForward {
 
 const NO_FORWARDS: readonly PortForward[] = [];
 const NO_RECENTS: readonly RecentForward[] = [];
+
+// ---------------------------------------------------------------------------
+// pfManagerRemeasureKey
+// ---------------------------------------------------------------------------
+
+describe('pfManagerRemeasureKey', () => {
+  it('changes when a forward is added or removed', () => {
+    const a = pfManagerRemeasureKey({
+      forwards: [makeForward({ id: 'a' })],
+      recents: NO_RECENTS,
+    });
+    const b = pfManagerRemeasureKey({
+      forwards: [makeForward({ id: 'a' }), makeForward({ id: 'b' })],
+      recents: NO_RECENTS,
+    });
+    expect(a).not.toEqual(b);
+  });
+
+  it('changes when a forward status changes (active → failed grows the row)', () => {
+    const active = pfManagerRemeasureKey({
+      forwards: [makeForward({ id: 'a', status: 'active' })],
+      recents: NO_RECENTS,
+    });
+    const failed = pfManagerRemeasureKey({
+      forwards: [
+        makeForward({ id: 'a', status: 'failed', failReason: 'boom' }),
+      ],
+      recents: NO_RECENTS,
+    });
+    expect(active).not.toEqual(failed);
+  });
+
+  it('changes when the recents count changes', () => {
+    const none = pfManagerRemeasureKey({
+      forwards: NO_FORWARDS,
+      recents: NO_RECENTS,
+    });
+    const one = pfManagerRemeasureKey({
+      forwards: NO_FORWARDS,
+      recents: [makeRecent()],
+    });
+    expect(none).not.toEqual(one);
+  });
+
+  it('is stable for identical state', () => {
+    const state = {
+      forwards: [makeForward({ id: 'a', status: 'active' as const })],
+      recents: [makeRecent()],
+    };
+    expect(pfManagerRemeasureKey(state)).toEqual(pfManagerRemeasureKey(state));
+  });
+});
 
 // ---------------------------------------------------------------------------
 // PortForwardManager
