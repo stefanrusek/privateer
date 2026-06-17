@@ -48,12 +48,19 @@ A short reply is not a blank check. When a reply is terse or its referent is unc
 
 ```
 specs/
-└── <feature-name>/          # one subdirectory per spec
+└── NNN-<feature-name>/      # one numbered subdirectory per spec (001, 002, …)
     ├── README.md            # index: purpose, chunk list with ordering, dependencies, status
     ├── 01-<chunk-name>.md   # one file per chunk
     ├── 02-<chunk-name>.md
     └── ...
 ```
+
+Spec directories are **numbered** with a zero-padded ordinal prefix
+(`001-initial-features`, `002-navigation-overhaul`, …). Pick the next unused
+number by listing `specs/`. The number orders specs chronologically and, once
+chosen, is stable — it's part of the path that chunk files, source comments, and
+build-order docs reference, so don't renumber a spec after others point at it.
+(The per-chunk file prefixes `01-`, `02-` are a separate, spec-local sequence.)
 
 Break the work into discrete, independently testable chunks. Start by proposing the chunk breakdown (this becomes the README skeleton) and get the user's reaction before writing any chunk.
 
@@ -138,6 +145,41 @@ Only after explicit approval at Gate 2:
 - Update the spec README's status column as chunks complete.
 - If implementation reveals a gap or contradiction in the spec, **update the spec file first**, flag it to the user, then continue — never silently diverge from the written spec. The spec must remain the source of truth at all times.
 
+When delegating chunks to subagents or a workflow, treat each agent's "done,
+gate green" as **untrusted telemetry, not a result.** Re-verify on the
+integration branch (re-run the gate; confirm the commit and the claimed files
+actually landed). Self-reports drift, over-claim, and occasionally describe work
+that isn't on disk — the gate and the tree are the arbiters, not the summary.
+
+## Phase 8 — Verify against reality (before declaring done)
+
+A green quality gate is **necessary but not sufficient.** Coverage, lint, type,
+and BDD checks run against fakes and test doubles; they prove the tests pass, not
+that the software *works*. The most expensive rework in this workflow comes from
+treating "gate green" as "done" and discovering — after a release, or after the
+user runs it — a pile of failures the gate structurally could not see. Two kinds
+of gap survive a green gate and must be closed here:
+
+- **Behavioral failures only the running artifact reveals** — a process that
+  hangs on quit, a click that lands a row off, a dialog that can't be confirmed,
+  a request that always conflicts, a render glitch. **Drive the real artifact**
+  and exercise the feature as a user would. For this repo's TUI that's the
+  `tui-manual-test` skill (black-box driving under tmux); for other artifacts
+  it's the equivalent — run the binary, hit the endpoint, click the UI. Verify
+  the *specific* expected behavior, not "it didn't crash."
+- **Spec-conformance gaps the gate doesn't enforce** — a chunk that passes its
+  tests while quietly implementing only part of its acceptance criteria (e.g.
+  wiring one tab when the spec said every tab). Before declaring a feature done
+  or cutting a release, do a **read-only audit of the implementation against the
+  spec's acceptance criteria** — ideally an independent reviewer — and treat any
+  unmet criterion as a bug to fix, not a footnote.
+
+Then **fix what you find and re-verify**, looping until a clean run: every
+acceptance criterion is met against the running artifact, no regressions, and the
+gate is still green. Only then is the feature done. (Fold this into each chunk's
+"done when" where it's cheap — a Mode-B smoke after a chunk lands — and run the
+full pass at feature/release milestones.)
+
 ## Opting out
 
 Skip this workflow only when the user explicitly says so ("skip the spec", "just hack it", "no SDD this time") or explicitly invokes another spec framework such as Spec Kit — then follow that framework's process instead. Ambiguity is not an opt-out: a terse or urgent-sounding request still gets the full workflow, just with a fast clarification phase.
@@ -162,3 +204,7 @@ Skip this workflow only when the user explicitly says so ("skip the spec", "just
 - Inventing "human-run" steps in a plan meant for an unattended pipeline
 - A spec or plan that only makes sense alongside the chat transcript
 - Treating the user's first message as a complete spec
+- Declaring a feature done — or cutting a release — on a green gate alone, without driving the running artifact (the gate proves tests pass, not that it works)
+- Accepting a delegated chunk's "done, gate green" self-report without re-verifying it on the integration branch
+- A chunk that passes its own tests while implementing only part of its acceptance criteria, with no spec-conformance audit to catch it
+- Renumbering a spec directory after other files already reference its path
