@@ -530,17 +530,35 @@ export function LiveApp({
   }
 
   if (snapshot.pfManagerOpen) {
+    // Rendered inside the registry/mouse plumbing so the [✕]/[retry]/[New]/
+    // [Close] controls are measured, clickable Buttons (C3); clicks are routed
+    // through the controller's pfManagerRegistry.
     return (
-      <Box height={rows} width={termCols} overflow="hidden">
-        <PortForwardManager
-          forwards={snapshot.portForwards.forwards}
-          recents={snapshot.portForwards.recents}
-          onStop={() => undefined}
-          onRetry={() => undefined}
-          onNewForward={() => undefined}
-          onClose={() => undefined}
-        />
-      </Box>
+      <MeasuredRegistryProvider registry={controller}>
+        <MouseRouter controller={controller} />
+        <Box height={rows} width={termCols} overflow="hidden">
+          <PortForwardManager
+            forwards={snapshot.portForwards.forwards}
+            recents={snapshot.portForwards.recents}
+            selectedIndex={snapshot.pfSelectedIndex}
+            onStop={controller.stopForward}
+            onRetry={controller.retryForward}
+            // No "new forward" entry point from the manager itself — closing
+            // returns to the list where `p` on a Service/Pod starts one.
+            onNewForward={controller.closePfManager}
+            onClose={controller.closePfManager}
+            renderButton={({ id, label, color, onClick }) => (
+              <Button
+                id={id}
+                label={label}
+                layer={OVERLAY_LAYER}
+                onClick={onClick}
+                {...(color !== undefined ? { color } : {})}
+              />
+            )}
+          />
+        </Box>
+      </MeasuredRegistryProvider>
     );
   }
 

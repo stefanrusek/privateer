@@ -14,6 +14,19 @@ import type { PortForward, RecentForward } from '../../portforward/types.js';
 // PortForwardManager overlay
 // ---------------------------------------------------------------------------
 
+/**
+ * Renders one clickable control. The adapter injects a measured, clickable
+ * `Button` here (C3); the default plain-`<Text>` renderer keeps the component
+ * testable under ink-testing-library without the adapter's measure/register
+ * glue, mirroring {@link ConfirmDialog}'s `renderButton`.
+ */
+export type PfButtonRenderer = (args: {
+  id: string;
+  label: string;
+  color?: string;
+  onClick: () => void;
+}) => React.ReactNode;
+
 export interface PortForwardManagerProps {
   forwards: readonly PortForward[];
   recents: readonly RecentForward[];
@@ -21,6 +34,25 @@ export interface PortForwardManagerProps {
   onRetry: (id: string) => void;
   onNewForward: () => void;
   onClose: () => void;
+  /**
+   * The active forward the keyboard cursor is on (controlled by the
+   * controller). The selected row is marked so keyboard `x`/Enter/Delete act on
+   * a visible target. Defaults to 0.
+   */
+  selectedIndex?: number;
+  /** Injected by the adapter to render clickable measured Buttons. */
+  renderButton?: PfButtonRenderer;
+}
+
+/** Default (test-mode) renderer: a styled, non-clickable `<Text>` label. */
+function defaultRenderButton({
+  label,
+  color,
+}: {
+  label: string;
+  color?: string;
+}): React.ReactNode {
+  return <Text {...(color !== undefined ? { color } : {})}>{label}</Text>;
 }
 
 function statusIndicator(status: PortForward['status']): string {
@@ -45,12 +77,25 @@ function statusColor(status: PortForward['status']): string {
   }
 }
 
-function ForwardRow({ forward }: { forward: PortForward }): React.ReactElement {
+function ForwardRow({
+  forward,
+  selected,
+  onStop,
+  onRetry,
+  renderButton,
+}: {
+  forward: PortForward;
+  selected: boolean;
+  onStop: (id: string) => void;
+  onRetry: (id: string) => void;
+  renderButton: PfButtonRenderer;
+}): React.ReactElement {
   const indicator = statusIndicator(forward.status);
   const color = statusColor(forward.status);
 
   return (
     <Box flexDirection="row" gap={1}>
+      <Text bold={selected}>{selected ? '›' : ' '}</Text>
       <Text color={color}>{indicator}</Text>
       <Text>localhost:{String(forward.localPort)}</Text>
       <Text dimColor>→</Text>
@@ -63,10 +108,24 @@ function ForwardRow({ forward }: { forward: PortForward }): React.ReactElement {
           {forward.failReason !== undefined && (
             <Text dimColor>{forward.failReason}</Text>
           )}
-          <Text color="cyan">[retry]</Text>
+          {renderButton({
+            id: `pfm.action.${forward.id}`,
+            label: '[retry]',
+            color: 'cyan',
+            onClick: () => {
+              onRetry(forward.id);
+            },
+          })}
         </Box>
       ) : (
-        <Text color="red">[✕]</Text>
+        renderButton({
+          id: `pfm.action.${forward.id}`,
+          label: '[✕]',
+          color: 'red',
+          onClick: () => {
+            onStop(forward.id);
+          },
+        })
       )}
     </Box>
   );
@@ -89,13 +148,26 @@ function RecentRow({ recent }: { recent: RecentForward }): React.ReactElement {
 export function PortForwardManager({
   forwards,
   recents,
+  onStop,
+  onRetry,
+  onNewForward,
+  onClose,
+  selectedIndex = 0,
+  renderButton = defaultRenderButton,
 }: PortForwardManagerProps): React.ReactElement {
   return (
     <Box flexDirection="column" borderStyle="double" padding={1}>
       <Text bold>Port Forwards</Text>
       <Text> </Text>
-      {forwards.map((fwd) => (
-        <ForwardRow key={fwd.id} forward={fwd} />
+      {forwards.map((fwd, i) => (
+        <ForwardRow
+          key={fwd.id}
+          forward={fwd}
+          selected={i === selectedIndex}
+          onStop={onStop}
+          onRetry={onRetry}
+          renderButton={renderButton}
+        />
       ))}
       {recents.length > 0 && (
         <Box flexDirection="column">
@@ -111,8 +183,13 @@ export function PortForwardManager({
       )}
       <Text> </Text>
       <Box flexDirection="row" gap={2}>
-        <Text color="cyan">[+ New Forward]</Text>
-        <Text>[Close]</Text>
+        {renderButton({
+          id: 'pfm.new',
+          label: '[+ New Forward]',
+          color: 'cyan',
+          onClick: onNewForward,
+        })}
+        {renderButton({ id: 'pfm.close', label: '[Close]', onClick: onClose })}
       </Box>
     </Box>
   );

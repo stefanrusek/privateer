@@ -190,6 +190,7 @@ import {
 } from '../../exec/command-history.js';
 import { PortForwardManager } from '../../portforward/manager.js';
 import type { PortForwardManagerState } from '../../portforward/manager.js';
+import type { PortForward } from '../../portforward/types.js';
 import type { MetricsTier } from '../../metrics/discovery.js';
 import { SystemTunnel } from '../../metrics/system-tunnel.js';
 import {
@@ -352,6 +353,7 @@ export interface LiveSnapshot {
   logs: LogsViewState | null;
   portForwards: PortForwardManagerState;
   pfManagerOpen: boolean;
+  pfSelectedIndex: number;
   agentPaneOpen: boolean;
   picker: PickerViewState | null;
   portPrompt: PortPromptState | null;
@@ -482,6 +484,7 @@ export class LiveController {
     new SystemLifecycle(),
   );
   private pfManagerOpen = false;
+  private pfSelectedIndex = 0;
   private portPrompt: PortPromptState | null = null;
   private agentPaneOpen = false;
   // Exec command prompt (Spec 05 §4.2): editable command with ↑/↓ history.
@@ -819,6 +822,7 @@ export class LiveController {
       logs: this.buildLogsView(),
       portForwards: this.pf.getState(),
       pfManagerOpen: this.pfManagerOpen,
+      pfSelectedIndex: this.pfSelectedIndex,
       portPrompt: this.portPrompt,
       agentPaneOpen: this.agentPaneOpen,
       picker: this.pickerView(),
@@ -3827,18 +3831,70 @@ export class LiveController {
       this.bump();
       return;
     }
+    const forwards = this.pf.getState().forwards;
+    // ↑/↓ move the keyboard cursor over the active forwards.
+    if (key.upArrow || key.downArrow) {
+      this.pfSelectedIndex = clampIndex(
+        this.pfSelectedIndex,
+        key.downArrow ? 1 : -1,
+        forwards.length,
+      );
+      this.bump();
+      return;
+    }
+    // Positional digit shortcut (1–9) acts on that forward directly.
     const digit = Number(input);
     if (Number.isInteger(digit) && digit >= 1 && digit <= 9) {
-      const fwd = this.pf.getState().forwards[digit - 1];
-      if (fwd !== undefined) {
-        if (fwd.status === 'failed') {
-          this.pf.retry(fwd.id);
-        } else {
-          this.pf.stop(fwd.id);
-        }
-        this.bump();
-      }
+      this.actOnForward(forwards[digit - 1]);
+      return;
     }
+    // x / Delete / Backspace / Enter act on the selected forward: stop an
+    // active one, or retry a failed one (C3).
+    if (input === 'x' || key.delete || key.backspace || key.return) {
+      this.actOnForward(forwards[this.pfSelectedIndex]);
+    }
+  }
+
+  /** Stop the forward `id` (click handler for the [✕] Button — C3). */
+  stopForward = (id: string): void => {
+    this.pf.stop(id);
+    this.pfSelectedIndex = clampIndex(
+      this.pfSelectedIndex,
+      0,
+      this.pf.getState().forwards.length,
+    );
+    this.bump();
+  };
+
+  /** Retry the failed forward `id` (click handler for the [retry] Button — C3). */
+  retryForward = (id: string): void => {
+    this.pf.retry(id);
+    this.bump();
+  };
+
+  /** Close the port-forward manager overlay (click handler — C3). */
+  closePfManager = (): void => {
+    this.pfManagerOpen = false;
+    this.bump();
+  };
+
+  /** Stop an active forward or retry a failed one; no-op when undefined (C3). */
+  private actOnForward(fwd: PortForward | undefined): void {
+    if (fwd === undefined) {
+      return;
+    }
+    if (fwd.status === 'failed') {
+      this.pf.retry(fwd.id);
+    } else {
+      this.pf.stop(fwd.id);
+    }
+    // Keep the cursor in range after the list shrinks.
+    this.pfSelectedIndex = clampIndex(
+      this.pfSelectedIndex,
+      0,
+      this.pf.getState().forwards.length,
+    );
+    this.bump();
   }
 
   // -------------------------------------------------------------------------
@@ -4035,6 +4091,20 @@ export class LiveController {
     return entries;
   }
 
+  /**
+   * Hit-test registry while the port-forward manager is open: only its measured
+   * `pfm.*` Buttons ([✕]/[retry]/[New]/[Close]) are clickable (C3).
+   */
+  private pfManagerRegistry(): RegistrySnapshot {
+    const entries: HitEntry[] = [];
+    for (const entry of this.measured.values()) {
+      if (entry.id?.startsWith('pfm.') === true) {
+        entries.push(entry);
+      }
+    }
+    return entries;
+  }
+
   /** The session's mouse-mode lifecycle (enable / idempotent teardown). */
   mouseLifecycle(): MouseLifecycle {
     return this.mouse;
@@ -4055,15 +4125,21 @@ export class LiveController {
 
   /**
    * Route one parsed SGR mouse event (already 0-based). Overlays (confirm/help/
-   * context switcher/port-forward manager/picker) swallow mouse input for now;
-   * otherwise the pure {@link dispatchMouse} reducer decides the action and we
-   * execute it.
+   * context switcher/picker) swallow mouse input for now; the port-forward
+   * manager routes clicks to its own measured Buttons (C3); otherwise the pure
+   * {@link dispatchMouse} reducer decides the action and we execute it.
    */
   handleMouseEvent(event: MouseEvent): void {
+    // The port-forward manager's [✕]/[retry]/[New]/[Close] are clickable; any
+    // click outside them is swallowed so it can't act on the list behind.
+    if (this.pfManagerOpen) {
+      const result = dispatchMouse(event, this.pfManagerRegistry(), null);
+      this.executeMouseAction(result.action);
+      return;
+    }
     if (
       this.app.helpOpen ||
       this.app.contextSwitcherOpen ||
-      this.pfManagerOpen ||
       this.picker !== null
     ) {
       return;
@@ -4489,6 +4565,7 @@ export class LiveController {
     // Normal mode — global keys
     if (input === 'F') {
       this.pfManagerOpen = true;
+      this.pfSelectedIndex = 0;
       this.bump();
       return;
     }
