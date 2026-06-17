@@ -168,6 +168,65 @@ describe('dispatch — buttons', () => {
     const { action } = dispatch(ev({ type: 'down', x: 1, y: 0 }), [btn], null);
     expect(action).toEqual({ kind: 'buttonPress', id: '' });
   });
+
+  it('a button exactly under the point wins over a handle’s ±1 grab (B3a)', () => {
+    // The detail tab bar sits one row below the list│detail divider, so the
+    // divider's fuzzy grab would otherwise swallow tab clicks as a drag.
+    const divider = handle('vertical', { x: 20, y: 12, width: 40, height: 1 });
+    const tabButton: Entry = {
+      kind: 'button',
+      id: 'tab.yaml',
+      rect: { x: 30, y: 13, width: 6, height: 1 }, // row 13 = divider y+1 (fuzz)
+      layer: 10,
+    };
+    const { action, latch } = dispatch(
+      ev({ type: 'down', x: 32, y: 13 }),
+      [divider, tabButton],
+      null,
+    );
+    expect(action).toEqual({ kind: 'buttonPress', id: 'tab.yaml' });
+    expect(latch).toBeNull();
+  });
+
+  it('among overlapping exact buttons the higher layer wins over a handle', () => {
+    const divider = handle('vertical', { x: 20, y: 12, width: 40, height: 1 });
+    const lower: Entry = {
+      kind: 'button',
+      id: 'low',
+      rect: { x: 30, y: 13, width: 6, height: 1 },
+      layer: 0,
+    };
+    const higher: Entry = {
+      kind: 'button',
+      id: 'high',
+      rect: { x: 30, y: 13, width: 6, height: 1 },
+      layer: 10,
+    };
+    const { action } = dispatch(
+      ev({ type: 'down', x: 32, y: 13 }),
+      [divider, lower, higher],
+      null,
+    );
+    expect(action).toEqual({ kind: 'buttonPress', id: 'high' });
+  });
+
+  it('still grabs the handle when no button is exactly under the point', () => {
+    const divider = handle('vertical', { x: 20, y: 12, width: 40, height: 1 });
+    const tabButton: Entry = {
+      kind: 'button',
+      id: 'tab.yaml',
+      rect: { x: 30, y: 13, width: 6, height: 1 },
+      layer: 10,
+    };
+    // x=25,y=13 is in the divider's fuzz but not on the button → drag.
+    const { action, latch } = dispatch(
+      ev({ type: 'down', x: 25, y: 13 }),
+      [divider, tabButton],
+      null,
+    );
+    expect(action).toEqual({ kind: 'beginDrag', handle: 'vertical' });
+    expect(latch).toEqual({ handle: 'vertical' });
+  });
 });
 
 describe('dispatch — drag-resize latch', () => {

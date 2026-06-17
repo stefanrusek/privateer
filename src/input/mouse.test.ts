@@ -3,6 +3,7 @@ import * as fc from 'fast-check';
 import {
   parseSgrMouse,
   parseSgrMouseChunk,
+  isLeakedMouseInput,
   MOUSE_ENABLE,
   MOUSE_DISABLE,
   suspendMouse,
@@ -262,5 +263,34 @@ describe('suspendMouse / resumeMouse', () => {
     const written: string[] = [];
     resumeMouse((s) => written.push(s));
     expect(written).toEqual([MOUSE_ENABLE]);
+  });
+});
+
+describe('isLeakedMouseInput', () => {
+  it('drops a full bare SGR press body Ink delivers without the ESC', () => {
+    // Ink strips the leading ESC; the click would otherwise be split into
+    // chars and its digits misread as 1–6 tab jumps (B3a).
+    expect(isLeakedMouseInput('[<0;60;24M')).toBe(true);
+    expect(isLeakedMouseInput('[<0;60;24m')).toBe(true);
+    expect(isLeakedMouseInput('[<35;1;1M')).toBe(true);
+  });
+
+  it('drops the lone introducer fragments Ink can split a read into', () => {
+    expect(isLeakedMouseInput('[')).toBe(true);
+    expect(isLeakedMouseInput('[<')).toBe(true);
+    expect(isLeakedMouseInput('[<0')).toBe(true);
+    expect(isLeakedMouseInput('[<0;60')).toBe(true);
+  });
+
+  it('keeps ordinary keyboard input', () => {
+    for (const key of ['j', 'k', '1', '6', 'q', '/', 'G', 'g', '', 'jj']) {
+      expect(isLeakedMouseInput(key)).toBe(false);
+    }
+  });
+
+  it('keeps non-mouse escape-ish bracket text', () => {
+    expect(isLeakedMouseInput('[A')).toBe(false);
+    expect(isLeakedMouseInput('[<x;1;1M')).toBe(false);
+    expect(isLeakedMouseInput('hello[<0;1;1M')).toBe(false);
   });
 });

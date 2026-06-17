@@ -99,7 +99,11 @@ import {
   type RegistrySnapshot,
 } from '../../input/dispatch.js';
 import { sidebarRatioFromX, verticalRatioFromY } from '../../input/ratios.js';
-import { parseSgrMouseChunk, type MouseEvent } from '../../input/mouse.js';
+import {
+  parseSgrMouseChunk,
+  isLeakedMouseInput,
+  type MouseEvent,
+} from '../../input/mouse.js';
 import { MouseLifecycle } from './mouse-lifecycle.js';
 import type { PickerItem } from '../../ui/components/PickerOverlay.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
@@ -4278,6 +4282,14 @@ export class LiveController {
   }
 
   handleInput(input: string, key: InkKey): void {
+    // SGR mouse reports leak past Ink's filter as the bare CSI body
+    // (`[<0;60;24M`); the real click is handled off raw stdin in
+    // handleStdinChunk. Drop the leaked payload here (see isLeakedMouseInput),
+    // or its digits would be misread as `1`–`6` tab jumps in the detail pane
+    // (B3a).
+    if (isLeakedMouseInput(input)) {
+      return;
+    }
     // Terminals can deliver rapid keystrokes as one chunk ("jj"); split so
     // navigation handlers see single keypresses. Text-entry handlers append
     // per character, which is equivalent to appending the chunk.

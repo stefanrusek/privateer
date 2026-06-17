@@ -105,6 +105,24 @@ export function parseSgrMouseChunk(chunk: string): MouseEvent[] {
   return events;
 }
 
+// Ink's own input parser strips the leading ESC, so a mouse report reaches
+// `useInput` as the bare CSI body `[<button;x;yM|m` (or a fragment of it).
+// Matching the introducer is enough to recognise and drop it before the
+// keyboard handler can misread the digits as `1`–`6` tab jumps (B3a).
+const INK_MOUSE_INPUT_RE = /^\[<\d*;?\d*;?\d*[Mm]?$/;
+
+/**
+ * True when a `useInput` payload is an SGR mouse report (or a fragment of one)
+ * that leaked past Ink's filter — the controller must ignore it so the digits
+ * inside the sequence never act as keyboard input. The dedicated mouse path
+ * (`parseSgrMouseChunk` off raw stdin) handles the real click.
+ */
+export function isLeakedMouseInput(input: string): boolean {
+  // The full bare sequence (`[<0;60;24M`) and the introducer fragments Ink can
+  // deliver when it splits the read (`[`, `[<`, `[<0`, …) are all dropped.
+  return input === '[' || INK_MOUSE_INPUT_RE.test(input);
+}
+
 /**
  * Parse one SGR mouse sequence into a structured MouseEvent. Returns null if
  * the input does not match the expected format.

@@ -214,6 +214,27 @@ function handleAt(
 }
 
 /**
+ * The topmost `button` entry that *exactly* (no fuzz) contains the point. Used
+ * to let a real button override a handle's ±1 grab tolerance (B3a).
+ */
+function exactButtonAt(
+  snapshot: RegistrySnapshot,
+  x: number,
+  y: number,
+): Entry | null {
+  let best: Entry | null = null;
+  for (const entry of snapshot) {
+    if (entry.kind !== 'button' || !contains(entry.rect, x, y)) {
+      continue;
+    }
+    if (best === null || entry.layer >= best.layer) {
+      best = entry;
+    }
+  }
+  return best;
+}
+
+/**
  * Resolve the press target at `(x, y)` honoring the **nested-Button winner**
  * rule (B04b): a discrete `button` entry that contains the point wins over the
  * `region`/`list` it visually nests inside, even when both register on the same
@@ -312,14 +333,22 @@ export function dispatch(
 ): DispatchResult {
   switch (event.type) {
     case 'down': {
-      // A press on (or within ±1 of) a handle begins a latched drag.
-      const handle = handleAt(snapshot, event.x, event.y);
-      if (handle !== null) {
-        const id = handle.handle ?? 'sidebar';
-        return {
-          action: { kind: 'beginDrag', handle: id },
-          latch: { handle: id },
-        };
+      // A measured Button that *exactly* contains the point wins over a
+      // handle's fuzzy ±1 grab (B3a): the detail tab bar sits one row below the
+      // list│detail divider, so the divider's grab tolerance would otherwise
+      // swallow every tab click as a drag. The fuzz is only meant to make the
+      // thin line easy to grab in empty space, never to steal a real button.
+      const exactButton = exactButtonAt(snapshot, event.x, event.y);
+      if (exactButton === null) {
+        // A press on (or within ±1 of) a handle begins a latched drag.
+        const handle = handleAt(snapshot, event.x, event.y);
+        if (handle !== null) {
+          const id = handle.handle ?? 'sidebar';
+          return {
+            action: { kind: 'beginDrag', handle: id },
+            latch: { handle: id },
+          };
+        }
       }
       // Honor the nested-Button winner rule: a measured Button over a region
       // wins the click even at the same layer.
