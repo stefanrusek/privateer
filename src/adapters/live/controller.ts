@@ -730,6 +730,14 @@ export class LiveController {
     this.streams?.stop();
     this.healthDebounce?.();
     this.healthDebounce = null;
+    // Tear down the metrics port-forward child, or its lingering kubectl
+    // keeps the Node event loop alive and quit hangs (Spec 05 §5.6).
+    this.promTunnel?.close();
+    this.promTunnel = null;
+    // Terminate any user port-forwards for the same reason.
+    for (const fwd of this.pf.getState().forwards) {
+      this.pf.stop(fwd.id);
+    }
     for (const cancel of this.cancels) {
       cancel();
     }
