@@ -1,42 +1,50 @@
-ns: [ ▾]  search: [w
-[1m  Overview[0m        eb        [1m Name                             Namespace      Ready   Phase      RestartNode            Age      CPU        Memory
-▼ Workloads[0m       ]          [1m  [0m                                                                        [1m [0m
-  Deployments[37m 8[39m             [32m●[39mweb-6b4dff767b-6jqtx             demo           1/1     Running    2      desktop-control-        6~▁▁▁▁▁▁▁▁▁▁~▁▁▁▁▁▁▁▇▇▇
-  StatefulSets[37m 0[39m                                                                                       …
-  DaemonSets[37m 2[39m              [1m[32m●[39mweb-6b4dff767b-grgld             demo           1/1     Running    2      desktop-control-        6~▁▁▁▁▁▁▁▁▁▁~▁▁▁▁▁▁▁▇▇▇
-[0m  ReplicaSets[90m 9[39m              [1m  [0m                                                                        [1m…[0m
-  Jobs[90m 0[39m                    [32m●[39mweb-6b4dff767b-zhldl             demo           1/1     Running    2      desktop-control-        6~▁▁▁▁▁▁▁▁▁▁~▁▁▁▁▁▁▁▇▇▇
-  CronJobs[90m 0[39m                                                                                           …
-[32m> Pods[37m 18[39m
-[1m▶ Networking[0m
-[1m▶ Configuration[0m
-[1m▶ Storage[0m
-[1m▶ Access Control[0m
-[1m▶ Nodes[0m
-[1m▶ Namespaces[0m
-[1m▶ Custom Resources[0m
-                             [2m   4 [0m  [34mname[39m: web-6b4dff767b-grgld[1m[33mpe to cancel[0mts] [Logs] [Metrics] [2m · [0m [Agent]   ✕
-                             [2m  11 [0m  [34mlabels[39m:[34mnTimestamp[39m: [32m'2026-06-11T21:14:10Z'[39m
-                             [2m  18 [0m      [34muid[39m: a866da21-2fbf-4749-a887-98d4fa90a8c8
-                             [2m  25 [0m        [34msources[39m:-api-access-hjftn
-                             [2m  31 [0m              [34mitems[39m:kube-root-ca.crt[33m7[39m
-                             [2m  38 [0m                    [34mapiVersion[39m: v1
-                             [2m  45 [0m        - [34mcontainerPort[39m: [33m80[34mth[39m: metadata.namespace
-                             [2m  52 [0m          [34mcpu[39m: 10m64MiP
-                             [2m  59 [0m      [34mterminationMessagePolicy[39m: Fileermination-logo/serviceaccount
-                             [2m  66 [0m  [34mnodeName[39m: desktop-control-plane[33m30[39m
-                             [2m  73 [0m      [34mtolerationSeconds[39m: [33m300[39mo/not-ready
-                             [2m  79 [0m  [34menableServiceLinks[39m: [36mtrue[33m00[39mo/unreachable
-                             [2m  86 [0m      [34mobservedGeneration[39m: [33m1[39mContainersity
-                             [2m  93 [0m      [34mlastProbeTime[39m: [2mnull[0m [33m1[32m2026-06-12T03:57:23Z'[39m
-                             [2m 100 [0m    - [34mtype[39m: ContainersReady[32m2026-06-12T03:57:23Z'[39m
-                             [2m 107 [0m      [34mstatus[39m: [32m'True'[34mtion[39m: [33m1[32m2026-06-12T03:57:23Z'[39m
-                             [2m 114 [0m  [34mpodIPs[39m:10.244.0.92[34mTime[39m: [32m'2026-06-11T21:14:10Z'[39m
-                             [2m 121 [0m          [34mstartedAt[39m: [32m'2026-06-12T03:57:09Z'[39m
-                             [2m 128 [0m          [34mcontainerID[39m: containerd://7d888c310ce04f70ddab98d19efa779d5f85f1d6bfcd5099952b5038a3873e59
-                             [2m 134 [0m      [34mstarted[39m: [36mtrue[39mcontainerd://20628a01af91c5d083421a5892fa30299cdfa8cc3f00dc9b0172009c805b03f2ae33d3c1c05f7d
-                             [2m 141 [0m          [34mmemory[39m: 64Mi[34mes[39m:
-                             [2m 148 [0m          [34mreadOnly[39m: [36mtrue[39mr/run/secrets/kubernetes.io/serviceaccount
-                             [2m 155 [0m            - [33m0[34mementalGroups[39m:Disabled
-ctx: docker-desktop  ns:   Pods  [33m[EDIT][39m  [2m⌖ detail[0m  [2mSpace agent[0m  [2m/ search[0m  [2m? help[0m  [2mq quit[0m
-
+[2m┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│[0mdo[4mc[0mker-desktop ns: [all ▾]  /web                                                                                                                                        [2m│
+├────────────────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│[1m  Overview[0m                                  [1m[36m│[39m  Name                                Namespace         Ready   Phase       Restart…Node              Age       CPU       ›[36m│
+[0;2m│[1m▼ Workloads[0m                                 [1m[36m│[0m[32m● [39mweb-6b4dff767b-6jqtx                demo              1/1     Running     2       desktop-control-p…        5d~▁▁▁▁▁▁▁▁▁▁[1m[36m│
+[0;2m│[0m  Deployments[37m 8[39m                             [1m[36m│[0m[32m● [39mweb-6b4dff767b-grgld                demo              1/1     Running     2       desktop-control-p…        5d~▁▁▁▁▁▁▁▁▁▁[1m[36m│
+[0;2m│[0m  StatefulSets[37m 0[39m                            [1m[36m│[32m● [39mweb-6b4dff767b-zhldl                demo              1/1     Running     2       desktop-control-p…        5d~▁▁▁▁▁▁▁▁▁▁[36m│
+[0;2m│[0m  DaemonSets[37m 2[39m                              [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  ReplicaSets[90m 9[39m                             [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  Jobs[90m 0[39m                                    [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  CronJobs[90m 0[39m                                [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m[32m> Pods[37m 18[39m                                   [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[1m▼ Networking[0m                                [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  Services[90m 6[39m                                [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  Ingresses[90m 0[39m                               [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  NetworkPolicies[90m 0[39m                         [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  Endpoints[90m 6[39m                               [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[1m▼ Configuration[0m                             [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  ConfigMaps[90m 18[39m                             [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  Secrets[90m 1[39m                                 [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  ResourceQuotas[90m 0[39m                          [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  LimitRanges[90m 0[39m                             [1m[36m│[0m                                                                                                                           [1m[36m│
+[0;2m│[0m  HorizontalPodAutoscalers[90m 0[39m                [1m[36m├═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════┤
+[0;2m│[1m▶ Storage[0m                                   [1m[36m║[0m[Overview] [1;4m[YAML][0m [Events] [Logs] [Metrics] ✕                                                                              [1m[36m║
+[0;2m│[1m▶ Access Control[0m                            [1m[36m║[33m╔══ EDITING — Ctrl+S to save, Ctrl+E to open in $EDITOR, Escape to cancel[0m                                                  [1m[36m║
+[0;2m│[1m▶ Nodes[0m                                     [1m[36m║[0m [2m   1 [0;7mk[0mind: Pod                                                                                                            [1m[36m║
+[0;2m│[1m▼ Namespaces[0m                                [1m[36m║[0m [2m   2 [0m[34mapiVersion[39m: v1                                                                                                       [1m[36m║
+[0;2m│[0m  Namespaces[37m 9[39m                              [1m[36m║[0m [2m   3 [0m[34mmetadata[39m:                                                                                                            [1m[36m║
+[0;2m│[1m▶ Custom Resources[0m                          [1m[36m║[0m [2m   4 [0m  [34mname[39m: web-6b4dff767b-zhldl                                                                                         [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m   5 [0m  [34mgenerateName[39m: web-6b4dff767b-                                                                                      [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m   6 [0m  [34mnamespace[39m: demo                                                                                                    [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m   7 [0m  [34muid[39m: 00406d2d-4176-422b-861a-4831be78b10b                                                                          [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m   8 [0m  [34mresourceVersion[39m: [32m'215548'[39m                                                                                          [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m   9 [0m  [34mgeneration[39m: [33m1[39m                                                                                                      [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  10 [0m  [34mcreationTimestamp[39m: [32m'2026-06-11T21:14:10Z'[39m                                                                          [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  11 [0m  [34mlabels[39m:                                                                                                            [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  12 [0m    [34mapp[39m: web                                                                                                         [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  13 [0m    [34mpod-template-hash[39m: 6b4dff767b                                                                                    [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  14 [0m  [34mownerReferences[39m:                                                                                                   [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  15 [0m    - [34mapiVersion[39m: apps/v1                                                                                            [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  16 [0m      [34mkind[39m: ReplicaSet                                                                                               [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  17 [0m      [34mname[39m: web-6b4dff767b                                                                                           [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  18 [0m      [34muid[39m: a866da21-2fbf-4749-a887-98d4fa90a8c8                                                                      [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  19 [0m      [34mcontroller[39m: [36mtrue[39m                                                                                               [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  20 [0m      [34mblockOwnerDeletion[39m: [36mtrue[39m                                                                                       [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  21 [0m[34mspec[39m:                                                                                                                [1m[36m║
+[0;2m│[0m                                            [1m[36m║[0m [2m  22 [0m  [34mvolumes[39m:                                                                                                           [1m[36m║
+[0;2m├────────────────────────────────────────────[1m[36m┴═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════┤
+[0;2m│[0mctx: docker-desktop  ns:   Pods  [33m[EDIT][39m  [2m⌖ detail[0m  [2mSpace agent[0m  [2m/ search[0m  [2m? help[0m  [2mq quit[0m                                                                                [2m│
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

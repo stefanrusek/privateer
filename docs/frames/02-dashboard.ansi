@@ -1,42 +1,50 @@
-ns: [ ▾]  search: []
-[7m  Overview[0m                    [1m══ Cluster Health — [36mdocker-desktop[39m ══[0m
-[1m▼ Workloads[0m
-  Deployments[37m 8[39m               [1mSUMMARY
-[0m  StatefulSets[37m 0[39m              [32m● 8 pods running[39m  [33m● 9 warnings[39m  [31m✕ 1 errors[39m  ○ 0 pending
-  DaemonSets[37m 2[39m                Nodes: 1/1 ready   Namespaces: 9
-  ReplicaSets[90m 9[39m
-  Jobs[90m 0[39m                      [1mBEST PRACTICES[0m  [33m18 issues[39m
-  CronJobs[90m 0[39m                  [2m─────────────────────────────────────────────────────────────────[0m
-  Pods[37m 18[39m                     [31m✕ ERROR [39m14 pods have no CPU limit set [4m[36m[show][0m
-[1m▶ Networking[0m                  [31m✕ ERROR [39m10 pods have no memory limit set [4m[36m[show][0m
-[1m▶ Configuration[0m               [31m✕ ERROR [39m17 pods run as root [4m[36m[show][0m
-[1m▶ Storage[0m                     [31m✕ ERROR [39m1 topic has replication factor of 1 (no fault tolerance) [4m[36m[show][0m
-[1m▶ Access Control[0m              [31m✕ ERROR [39mStrimzi operator pod not running (CRDs present but operator absent) [4m[36m[show][0m
-[1m▶ Nodes[0m                       [33m⚠ [39m [33mWARN  [39m3 pods have no CPU request set [4m[36m[show][0m
-[1m▶ Namespaces[0m                  [33m⚠ [39m [33mWARN  [39m6 pods have no memory request set [4m[36m[show][0m
-[1m▶ Custom Resources[0m            [33m⚠ [39m [33mWARN  [39m3 pods have CPU limit more than 4x CPU request [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m5 deployments have only 1 replica [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m8 deployments have no PodDisruptionBudget [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m11 pods have no liveness probe [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m12 pods have no readiness probe [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m14 pods have no startup probe [4m[36m[show]
-[0m                              [33m⚠ [39m [33mWARN  [39mNo ServiceMonitors defined (Prometheus present but nothing monitored) [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m18 pods have no Prometheus scrape annotation [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m9 namespaces have no NetworkPolicy [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39mKafka cluster has only 1 broker (single point of failure) [4m[36m[show][0m
-                              [33m⚠ [39m [33mWARN  [39m1 topic has no consumer groups (possibly orphaned) [4m[36m[show][0m
-                              [90m○ SUPR  [39mUnmanaged Opaque Secrets check suppressed (no secrets operator detected)
-                              [2m21 passing rules [0;4m[36m[show passing][0m
-
-                              [1mMETRICS OVERVIEW[0m             [2m(Prometheus ● connected)[0m
-                              [2m─────────────────────────────────────────────────────────────────[0m
-                              CPU [32m~▁▁▁▁▁▁▁▁▂▆[39m 66% avg    Memory [32m~▁▁▁▁▁▁▁▁▃▃[39m 26% avg
-
-                              [1mKAFKA[0m
-                              [2m─────────────────────────────────────────────────────────────────[0m
-                              [32m●[39m  orders  [32mAll consumer groups healthy[39m
-
-
-
-ctx: docker-desktop  ns:   Overview  [90m[·][39m  [2m⌖ sidebar[0m  [2mSpace agent[0m  [2m/ search[0m  [2m? help[0m  [2mq quit[0m
-
+[2m┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│[0mdo[4mc[0mker-desktop ns: [all ▾]  /                                                                                                                                           [2m│
+[0;1m[36m├════════════════════════════════════════════┬[2m[39m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+[0;1m[36m║[0;7m  Overview[0m                                  [1m[36m║[39m══ Cluster Health — [36mdocker-desktop[39m ══[0m                                                                                      [2m│
+[0;1m[36m║[39m▼ Workloads[0m                                 [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m║[0m  Deployments[37m 8[39m                             [1m[36m║[39mSUMMARY[0m                                                                                                                    [2m│
+[0;1m[36m║[0m  StatefulSets[37m 0[39m                            [1m[36m║[0m[32m● 8 pods running[39m  [33m● 9 warnings[39m  [31m✕ 1 errors[39m  ○ 0 pending                                                                    [2m│
+[0;1m[36m║[0m  DaemonSets[37m 2[39m                              [1m[36m║[0mNodes: 1/1 ready   Namespaces: 9                                                                                           [2m│
+[0;1m[36m║[0m  ReplicaSets[90m 9[39m                             [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m║[0m  Jobs[90m 0[39m                                    [1m[36m║[39mBEST PRACTICES[0m  [33m17 issues[39m                                                                                                  [2m│
+[0;1m[36m║[0m  CronJobs[90m 0[39m                                [1m[36m║[2m[39m─────────────────────────────────────────────────────────────────[0m                                                          [2m│
+[0;1m[36m║[0m  Pods[37m 18[39m                                   [1m[36m║[0m[31m✕ ERROR [39m14 pods have no CPU limit set [4m[36m[show][0m                                                                               [2m│
+[0;1m[36m║[39m▼ Networking[0m                                [1m[36m║[0m[31m✕ ERROR [39m10 pods have no memory limit set [4m[36m[show][0m                                                                            [2m│
+[0;1m[36m║[0m  Services[90m 6[39m                                [1m[36m║[0m[31m✕ ERROR [39m17 pods run as root [4m[36m[show][0m                                                                                         [2m│
+[0;1m[36m║[0m  Ingresses[90m 0[39m                               [1m[36m║[0m[31m✕ ERROR [39mStrimzi operator pod not running (CRDs present but operator absent) [4m[36m[show][0m                                         [2m│
+[0;1m[36m║[0m  NetworkPolicies[90m 0[39m                         [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m3 pods have no CPU request set [4m[36m[show][0m                                                                             [2m│
+[0;1m[36m║[0m  Endpoints[90m 6[39m                               [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m6 pods have no memory request set [4m[36m[show][0m                                                                          [2m│
+[0;1m[36m║[39m▼ Configuration[0m                             [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m3 pods have CPU limit more than 4x CPU request [4m[36m[show][0m                                                             [2m│
+[0;1m[36m║[0m  ConfigMaps[90m 18[39m                             [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m5 deployments have only 1 replica [4m[36m[show][0m                                                                          [2m│
+[0;1m[36m║[0m  Secrets[90m 1[39m                                 [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m8 deployments have no PodDisruptionBudget [4m[36m[show][0m                                                                  [2m│
+[0;1m[36m║[0m  ResourceQuotas[90m 0[39m                          [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m11 pods have no liveness probe [4m[36m[show][0m                                                                             [2m│
+[0;1m[36m║[0m  LimitRanges[90m 0[39m                             [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m12 pods have no readiness probe [4m[36m[show][0m                                                                            [2m│
+[0;1m[36m║[0m  HorizontalPodAutoscalers[90m 0[39m                [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m14 pods have no startup probe [4m[36m[show][0m                                                                              [2m│
+[0;1m[36m║[39m▶ Storage[0m                                   [1m[36m║[0m[33m⚠ [39m [33mWARN  [39mNo Prometheus found in cluster [4m[36m[show][0m                                                                             [2m│
+[0;1m[36m║[39m▶ Access Control[0m                            [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m18 pods have no Prometheus scrape annotation [4m[36m[show][0m                                                               [2m│
+[0;1m[36m║[39m▶ Nodes[0m                                     [1m[36m║[0m[33m⚠ [39m [33mWARN  [39m9 namespaces have no NetworkPolicy [4m[36m[show][0m                                                                         [2m│
+[0;1m[36m║[39m▼ Namespaces[0m                                [1m[36m║[0m[33m⚠ [39m [33mWARN  [39mKafka cluster has only 1 broker (single point of failure) [4m[36m[show][0m                                                  [2m│
+[0;1m[36m║[0m  Namespaces[37m 9[39m                              [1m[36m║[0m[33m⚠ [39m [33mWARN  [39mKafka detected but no lag metrics exported — consumer lag monitoring unavailable [4m[36m[show][0m                           [2m│
+[0;1m[36m║[39m▶ Custom Resources[0m                          [1m[36m║[0m[90m○ SUPR  [39mUnmanaged Opaque Secrets check suppressed (no secrets operator detected)                                           [2m│
+[0;1m[36m║[0m                                            [1m[36m║[2m[39m17 passing rules [0;4m[36m[show passing][0m                                                                                            [2m│
+[0;1m[36m║[0m                                            [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m║[0m                                            [1m[36m║[39mMETRICS OVERVIEW[0m             [2m(Prometheus ● connected)[0m                                                                      [2m│
+[0;1m[36m║[0m                                            [1m[36m║[2m[39m─────────────────────────────────────────────────────────────────[0m                                                          [2m│
+[0;1m[36m║[0m                                            [1m[36m║[0mCPU [32m~▁▁▁▁▁▁▁▁▁▁[39m 4% avg    Memory [32m~▁▁▁▁▁▁▁▃▃▃[39m 36% avg                                                                       [2m│
+[0;1m[36m║[0m                                            [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m║[0m                                            [1m[36m║[39mKAFKA[0m                                                                                                                      [2m│
+[0;1m[36m║[0m                                            [1m[36m║[2m[39m─────────────────────────────────────────────────────────────────[0m                                                          [2m│
+[0;1m[36m║[0m                                            [1m[36m║[2m[39mConsumer lag metrics unavailable — Kafka Exporter is not deployed.[0m                                                         [2m│
+[0;1m[36m║[0m                                            [1m[36m║[2m[39mStrimzi: add to your Kafka resource:[0m                                                                                       [2m│
+[0;1m[36m║[0m                                            [1m[36m║[2m[39m  spec:[0m                                                                                                                    [2m│
+[0;1m[36m║[0m                                            [1m[36m║[2m[39m    kafkaExporter: {}[0m                                                                                                      [2m│
+[0;1m[36m║[0m                                            [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m║[0m                                            [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m║[0m                                            [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m║[0m                                            [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m║[0m                                            [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m║[0m                                            [1m[36m║[0m                                                                                                                           [2m│
+[0;1m[36m├════════════════════════════════════════════┴[2m[39m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+[0;2m│[0mctx: docker-desktop  ns:   Overview  [90m[·][39m  [2m⌖ sidebar[0m  [2mSpace agent[0m  [2m/ search[0m  [2m? help[0m  [2mq quit[0m                                                                              [2m│
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
