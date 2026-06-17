@@ -87,6 +87,7 @@ import { projectLogsView, offsetForMatch } from '../../ui/logs-view.js';
 import { helpLines, scopeForFocus } from '../../ui/keymap.js';
 import {
   computeFrame,
+  resourceListBand,
   type Frame,
   type Segment,
 } from '../../ui/layout-geometry.js';
@@ -3854,11 +3855,13 @@ export class LiveController {
     });
 
     // Resource list: rowOffset = the table's scroll offset; selectedIndex
-    // drives the second-click-opens-detail rule.
+    // drives the second-click-opens-detail rule. The hit rect is the
+    // *selectable-row band* (`resourceListBand`) — `frame.list` minus its
+    // column-header row — so the first data row maps to index 0 (no off-by-one).
     const listEntry: HitEntry = {
       kind: 'list',
       region: 'list',
-      rect: frame.list,
+      rect: resourceListBand(frame),
       layer: 0,
       rowOffset: this.table?.scrollOffset ?? 0,
       ...(this.app.focus === 'list'

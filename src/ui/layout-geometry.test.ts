@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeFrame,
+  resourceListBand,
   MIN_SIDEBAR_INNER,
   MIN_SIDEBAR_RATIO,
   MAX_SIDEBAR_RATIO,
@@ -295,5 +296,34 @@ describe('computeFrame — drag handle segments', () => {
   it('vertical handle is null when detail is closed', () => {
     const f = computeFrame(input({ showDetail: false }));
     expect(f.handles.vertical).toBeNull();
+  });
+});
+
+describe('resourceListBand — selectable-row hit band', () => {
+  it('drops the column-header row: y is one below the list, height one less', () => {
+    const f = computeFrame(input({ columns: 120, rows: 40, showDetail: true }));
+    const band = resourceListBand(f);
+    expect(band.x).toBe(f.list.x);
+    expect(band.width).toBe(f.list.width);
+    expect(band.y).toBe(f.list.y + 1);
+    expect(band.height).toBe(f.list.height - 1);
+  });
+
+  it('maps the first rendered data row to index 0 (header at list.y is not a row)', () => {
+    const f = computeFrame(
+      input({ columns: 120, rows: 40, showDetail: false }),
+    );
+    const band = resourceListBand(f);
+    // The dispatcher computes index = clickY - band.y + rowOffset. A click on
+    // the first data row (the row directly under the column header) must be 0.
+    const firstDataRow = f.list.y + 1; // header at list.y, data begins below it
+    const rowOffset = 0;
+    expect(firstDataRow - band.y + rowOffset).toBe(0);
+  });
+
+  it('clamps the band height at 0 for a collapsed list', () => {
+    const f = computeFrame(input({ columns: 120, rows: 6, showDetail: false }));
+    const band = resourceListBand(f);
+    expect(band.height).toBeGreaterThanOrEqual(0);
   });
 });

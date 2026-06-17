@@ -286,3 +286,28 @@ export function computeFrame(input: ComputeFrameInput): Frame {
     },
   };
 }
+
+/**
+ * The resource list's **selectable-row band** — `frame.list` minus its top row.
+ *
+ * `frame.list` is the list region's inner content rect, and `ResourceTable`
+ * renders a non-selectable **column-header row** as that region's first line
+ * (at `frame.list.y`); the actual data rows start one row below. Mouse
+ * hit-testing must map the first *data* row (not the header) to index 0, so the
+ * registry registers this band — `y + 1`, `height - 1` — rather than the raw
+ * region rect. The dispatcher's `index = localY + rowOffset` then lands on the
+ * row the user clicked, with no off-by-one.
+ *
+ * The sidebar has no column header, so it keeps using `frame.sidebar` directly;
+ * this helper is specific to the resource list. The height clamps at 0 so a
+ * fully-collapsed list yields an empty (non-negative) band.
+ */
+export function resourceListBand(frame: Frame): Rect {
+  const { list } = frame;
+  return {
+    x: list.x,
+    y: list.y + 1,
+    width: list.width,
+    height: nonNeg(list.height - 1),
+  };
+}
