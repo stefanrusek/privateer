@@ -275,15 +275,33 @@ describe('isLeakedMouseInput', () => {
     expect(isLeakedMouseInput('[<35;1;1M')).toBe(true);
   });
 
-  it('drops the lone introducer fragments Ink can split a read into', () => {
-    expect(isLeakedMouseInput('[')).toBe(true);
+  it('drops the `[<…` introducer fragments Ink can split a read into', () => {
     expect(isLeakedMouseInput('[<')).toBe(true);
     expect(isLeakedMouseInput('[<0')).toBe(true);
     expect(isLeakedMouseInput('[<0;60')).toBe(true);
   });
 
+  it('keeps a lone `[` — it is the metrics "previous range" key, not a leak', () => {
+    // The SGR-mouse introducer is `[<`; a bare `[` carries no `<`, so it is a
+    // real keypress. Dropping it made the metrics `[` (decrease range) a no-op.
+    expect(isLeakedMouseInput('[')).toBe(false);
+  });
+
   it('keeps ordinary keyboard input', () => {
-    for (const key of ['j', 'k', '1', '6', 'q', '/', 'G', 'g', '', 'jj']) {
+    for (const key of [
+      'j',
+      'k',
+      '1',
+      '6',
+      'q',
+      '/',
+      'G',
+      'g',
+      '',
+      'jj',
+      '[',
+      ']',
+    ]) {
       expect(isLeakedMouseInput(key)).toBe(false);
     }
   });

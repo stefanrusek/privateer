@@ -106,9 +106,18 @@ export function parseSgrMouseChunk(chunk: string): MouseEvent[] {
 }
 
 // Ink's own input parser strips the leading ESC, so a mouse report reaches
-// `useInput` as the bare CSI body `[<button;x;yM|m` (or a fragment of it).
-// Matching the introducer is enough to recognise and drop it before the
-// keyboard handler can misread the digits as `1`–`6` tab jumps (B3a).
+// `useInput` as the bare CSI body `[<button;x;yM|m` (or a fragment of it). The
+// SGR-mouse introducer is specifically `[<` (CSI `<`); matching that is enough
+// to recognise and drop the leak before the keyboard handler can misread the
+// digits as `1`–`6` tab jumps (B3a).
+//
+// A *lone* `[` is deliberately NOT treated as a leak: it is a real key binding
+// (the metrics tab's "previous time range" accelerator), and dropping it made
+// `[` a no-op there. A genuine mouse report always carries the `<`, so requiring
+// `[<` keeps the leak filter intact while letting the bare `[` key through. (In
+// the rare case Ink splits a read exactly after `[`, that stray `[` falls
+// through as a keypress — harmless, since the real click is handled off raw
+// stdin by parseSgrMouseChunk.)
 const INK_MOUSE_INPUT_RE = /^\[<\d*;?\d*;?\d*[Mm]?$/;
 
 /**
@@ -118,9 +127,10 @@ const INK_MOUSE_INPUT_RE = /^\[<\d*;?\d*;?\d*[Mm]?$/;
  * (`parseSgrMouseChunk` off raw stdin) handles the real click.
  */
 export function isLeakedMouseInput(input: string): boolean {
-  // The full bare sequence (`[<0;60;24M`) and the introducer fragments Ink can
-  // deliver when it splits the read (`[`, `[<`, `[<0`, …) are all dropped.
-  return input === '[' || INK_MOUSE_INPUT_RE.test(input);
+  // The full bare sequence (`[<0;60;24M`) and the `[<…` introducer fragments
+  // Ink can deliver when it splits the read are dropped; a lone `[` is a real
+  // keypress (see note above) and is allowed through.
+  return INK_MOUSE_INPUT_RE.test(input);
 }
 
 /**

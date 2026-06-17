@@ -194,6 +194,7 @@ import { SystemTunnel } from '../../metrics/system-tunnel.js';
 import {
   createRangeSelector,
   selectRange,
+  stepRange,
   rangeStartMs,
   rangeDurationMs,
   type RangeLabel,
@@ -4861,14 +4862,14 @@ export class LiveController {
       return;
     }
     if (this.detail.tab === 'metrics' && (input === '[' || input === ']')) {
-      const options = this.metricsRange.options;
-      const idx = options.indexOf(this.metricsRange.selected);
-      const next =
-        options[
-          (idx + (input === ']' ? 1 : options.length - 1)) % options.length
-        ];
-      if (next !== undefined) {
-        this.setMetricsRange(next);
+      // `]` steps to the next (longer) range, `[` to the previous (shorter)
+      // one; both clamp at the ends (stepRange does not wrap).
+      const stepped = stepRange(
+        this.metricsRange,
+        input === ']' ? 'next' : 'prev',
+      );
+      if (stepped.selected !== this.metricsRange.selected) {
+        this.setMetricsRange(stepped.selected);
       }
     }
   }
