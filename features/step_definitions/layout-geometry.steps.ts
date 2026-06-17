@@ -146,7 +146,9 @@ Then(
     const frame = this.geoFrame;
     assert.ok(frame !== null);
     assert.ok(frame.detail !== null);
-    const body = this.geoRows - 4;
+    // Six fixed non-body rows: top edge, header inner, header│body line,
+    // body│commandbar line, command bar inner, bottom edge.
+    const body = this.geoRows - 6;
     assert.equal(frame.list.height + frame.detail.height + 1, body);
   },
 );

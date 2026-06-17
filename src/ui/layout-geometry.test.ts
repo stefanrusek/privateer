@@ -84,9 +84,10 @@ describe('computeFrame — vertical split & detail', () => {
     const f = computeFrame(input({ rows: 40, showDetail: false }));
     expect(f.detail).toBeNull();
     expect(f.handles.vertical).toBeNull();
-    // body = rows - 4 frame rows (top, header│body, body│cmd, bottom)
-    expect(f.list.height).toBe(40 - 4);
-    expect(f.sidebar.height).toBe(40 - 4);
+    // body = rows - 6 non-body rows (top edge, header inner, header│body line,
+    // body│cmd line, command bar inner, bottom edge)
+    expect(f.list.height).toBe(40 - 6);
+    expect(f.sidebar.height).toBe(40 - 6);
   });
 
   it('splits list/detail with one shared line consumed when detail is open', () => {
@@ -95,7 +96,7 @@ describe('computeFrame — vertical split & detail', () => {
     );
     expect(f.detail).not.toBeNull();
     const detail = f.detail!;
-    const body = 40 - 4;
+    const body = 40 - 6;
     // list + detail + 1 shared line == body
     expect(f.list.height + detail.height + 1).toBe(body);
     // detail sits below the list with the shared line between
@@ -108,9 +109,9 @@ describe('computeFrame — vertical split & detail', () => {
       input({ rows: 44, showDetail: true, verticalRatio: 0.5 }),
     );
     const detail = f.detail!;
-    const body = 44 - 4; // 40
-    const splittable = body - 1; // 39
-    // 50% of 39 ≈ 20 (rounded), list gets the rest
+    const body = 44 - 6; // 38
+    const splittable = body - 1; // 37
+    // 50% of 37 ≈ 19 (rounded), list gets the rest
     expect(detail.height).toBe(Math.round(splittable * 0.5));
     expect(f.list.height).toBe(splittable - detail.height);
   });
@@ -130,7 +131,7 @@ describe('computeFrame — vertical split & detail', () => {
   it('sidebar spans the full body height regardless of the list/detail split', () => {
     const f = computeFrame(input({ rows: 40, showDetail: true }));
     expect(f.sidebar.y).toBe(f.list.y);
-    expect(f.sidebar.height).toBe(40 - 4);
+    expect(f.sidebar.height).toBe(40 - 6);
   });
 });
 
@@ -190,15 +191,18 @@ describe('computeFrame — minimum sizes', () => {
   });
 
   it('does not open a detail pane when the body is too short to split', () => {
-    // rows - 4 = 2 body rows → cannot fit list + line + detail
-    const f = computeFrame(input({ rows: 6, showDetail: true }));
+    // rows - 6 = 2 body rows → cannot fit list + line + detail
+    const f = computeFrame(input({ rows: 8, showDetail: true }));
+    expect(f.list.height).toBe(2);
     expect(f.detail).toBeNull();
     expect(f.handles.vertical).toBeNull();
   });
 
   it('reserves at least one row each for list and detail when it does split', () => {
+    // rows - 6 = 3 body rows → exactly the minimum that can split (list + line
+    // + detail), with each pane floored at one inner row.
     const f = computeFrame(
-      input({ rows: 7, showDetail: true, verticalRatio: 0.8 }),
+      input({ rows: 9, showDetail: true, verticalRatio: 0.8 }),
     );
     const detail = f.detail!;
     expect(f.list.height).toBeGreaterThanOrEqual(1);
@@ -222,8 +226,8 @@ describe('computeFrame — degrades gracefully at extreme sizes', () => {
   }
 
   it('collapses header/command-bar height to 0 when there is no body', () => {
-    const f = computeFrame(input({ columns: 10, rows: 4, showDetail: false }));
-    // rows - 4 = 0 body → header/cmdbar inner collapse
+    const f = computeFrame(input({ columns: 10, rows: 6, showDetail: false }));
+    // rows - 6 = 0 body → header/cmdbar inner collapse
     expect(f.header.height).toBe(0);
     expect(f.commandBar.height).toBe(0);
     expect(f.list.height).toBe(0);

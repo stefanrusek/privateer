@@ -179,11 +179,18 @@ export function computeFrame(input: ComputeFrameInput): Frame {
   const rightX = sidebarLineX + 1;
 
   // ---- Vertical split ------------------------------------------------------
-  // Four horizontal frame lines consume 4 rows: top edge, header│body,
-  // body│commandbar, bottom edge. (The header is one inner row; the command
-  // bar is one inner row.) Whatever is left is the body, shared by sidebar +
-  // list (+ detail).
-  const bodyInner = nonNeg(rows - 4);
+  // Six fixed non-body rows surround the body when the command bar is present:
+  //   top edge · header inner · header│body line · body│commandbar line ·
+  //   command bar inner · bottom edge.
+  // The four *frame lines* (top, header│body, body│commandbar, bottom) plus the
+  // two *inner content rows* (header, command bar) are all outside the body, so
+  // the body content height is `rows - 6`, not `rows - 4`. (B02a originally
+  // subtracted only the four lines, which over-reported every body region's
+  // height by exactly the two inner rows — the chrome derives its strip heights
+  // from line positions and silently clipped the phantom rows, but the
+  // viewport helpers that trust `Rect.height` saw two rows that don't exist.)
+  const NON_BODY_ROWS = 6;
+  const bodyInner = nonNeg(rows - NON_BODY_ROWS);
 
   const headerY = 1; // after the top frame edge at row 0
   const headerHeight = bodyInner === 0 ? 0 : MIN_HEADER_INNER_HEIGHT;
