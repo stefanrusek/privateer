@@ -3,8 +3,8 @@
 **Status:** DRAFT
 **Depends on:** 01 (detail focus + arrow routing seam), 02 (detail inner
 height/width from `computeFrame`)
-**Implements / amends:** `spec/spec-04-core-views.md` (detail pane),
-`spec/spec-05-actions.md` (logs). Update where this changes behavior.
+**Implements / amends:** `specs/001-initial-features/spec-04-core-views.md` (detail pane),
+`specs/001-initial-features/spec-05-actions.md` (logs). Update where this changes behavior.
 
 ## User story
 

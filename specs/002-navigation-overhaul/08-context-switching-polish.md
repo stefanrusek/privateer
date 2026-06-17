@@ -4,8 +4,8 @@
 **Depends on:** 01 (global-key routing + focus model), 04 (the header **context**
 chip is a `<Button>` that opens the switcher; switcher items are clickable
 `<Button>`s on the overlay layer)
-**Implements / amends:** `spec/spec-01-architecture.md` §6 (context switching)
-and `spec/spec-02-navigation-layout.md` §10 (Context Switcher). Update where this
+**Implements / amends:** `specs/001-initial-features/spec-01-architecture.md` §6 (context switching)
+and `specs/001-initial-features/spec-02-navigation-layout.md` §10 (Context Switcher). Update where this
 changes behavior.
 
 ## User stories

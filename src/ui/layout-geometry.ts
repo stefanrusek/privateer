@@ -2,7 +2,7 @@
  * layout-geometry.ts — the single source of truth for p9r's region geometry.
  *
  * Spec: `specs/002-navigation-overhaul/02-region-chrome-layout-math.md`
- * (canonical `spec/spec-02-navigation-layout.md`).
+ * (canonical `specs/001-initial-features/spec-02-navigation-layout.md`).
  *
  * `computeFrame(...)` takes the terminal size plus the two pane ratios and
  * returns the *inner* content `Rect` of every region (header, sidebar, list,

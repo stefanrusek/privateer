@@ -2,7 +2,7 @@
  * frame.ts — the pure collapsed-grid frame model for p9r's Option-A chrome.
  *
  * Spec: `specs/002-navigation-overhaul/02-region-chrome-layout-math.md`
- * (canonical `spec/spec-02-navigation-layout.md`, "The frame (Option A)").
+ * (canonical `specs/001-initial-features/spec-02-navigation-layout.md`, "The frame (Option A)").
  *
  * `layout-geometry.ts` (chunk 02a) decides *where* the regions and their
  * collapsed border lines sit. This module decides *what glyph* each border

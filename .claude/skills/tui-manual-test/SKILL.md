@@ -58,7 +58,7 @@ The plan lives at `docs/manual-test-plan.md` and is **derived, not invented**:
 - **Keyboard:** `src/ui/keymap.ts` is the authoritative registry. Every binding
   in it must have a test. (`renderKeymapMarkdown()` gives the grouped list.)
 - **Features & acceptance criteria:** the `specs/NNN-*/` chunk files and the
-  canonical `spec/spec-0*.md`. Each acceptance criterion and each "Bugs fixed"
+  canonical `specs/001-initial-features/spec-0*.md`. Each acceptance criterion and each "Bugs fixed"
   item becomes a checkable test — bug-fixes especially need regression tests.
 - **Mouse:** the mouse spec (`specs/*/04-mouse-interaction.md`) — region-focus
   click, row select, second-click-opens, wheel-by-cursor, drag-resize handles,

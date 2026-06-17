@@ -3,7 +3,7 @@
  * (navigation-overhaul chunk 09 / B09).
  *
  * Spec: `specs/002-navigation-overhaul/09-help-overlay-revamp.md` and the canonical
- * `spec/spec-02-navigation-layout.md` §8/§11.
+ * `specs/001-initial-features/spec-02-navigation-layout.md` §8/§11.
  *
  * Every surface that *documents* keys reads from {@link KEYMAP}:
  *  - the `?` help overlay (this chunk) renders it grouped, current-region-first,

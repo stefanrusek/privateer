@@ -3741,7 +3741,7 @@ describe('AgentToolDispatcher nullability and null-namespace branches', () => {
     expect(result[0]?.ownerDeployment).toBeUndefined();
   });
 
-  it('get_deployment_detail with no spec/status covers raw.spec ?? {} and raw.status ?? {}', () => {
+  it('get_deployment_detail with no specs/001-initial-features/status covers raw.spec ?? {} and raw.status ?? {}', () => {
     // Exercises lines 933-934: raw.spec ?? {} and raw.status ?? {} in get_deployment_detail
     // Also covers spec.replicas ?? status.replicas (line 937 ?? branch)
     const store = makeStore([
@@ -4109,7 +4109,7 @@ describe('AgentToolDispatcher nullability and null-namespace branches', () => {
     expect(result?.namespace).toBe('');
   });
 
-  it('get_rollout_status with no spec/status covers raw.spec ?? {} and raw.status ?? {}', () => {
+  it('get_rollout_status with no specs/001-initial-features/status covers raw.spec ?? {} and raw.status ?? {}', () => {
     // Exercises lines 1123-1124: raw.spec ?? {} and raw.status ?? {} in get_rollout_status
     // Also covers spec.replicas ?? 1 (line 1126 ?? branch)
     const store = makeStore([
@@ -4126,7 +4126,7 @@ describe('AgentToolDispatcher nullability and null-namespace branches', () => {
       namespace: 'default',
     }) as { status: string } | null;
     expect(result).not.toBeNull();
-    // With no spec/status, all counts are 0, desired defaults to 1 (spec.replicas ?? 1)
+    // With no specs/001-initial-features/status, all counts are 0, desired defaults to 1 (spec.replicas ?? 1)
     // 0 !== 1 for updatedReplicas, so not complete, not progressDeadlineExceeded
     // availableCond is undefined → status is 'progressing'
     expect(result?.status).toBe('progressing');
