@@ -531,6 +531,8 @@ export function LiveApp({
           cursorKind={snapshot.cursorKind}
           inputText={snapshot.inputText}
           headerSlot={headerSlot}
+          detailTab={snapshot.detail?.tab ?? null}
+          helpScroll={controller.getHelpScroll()}
           renderList={() => (
             <Box height={listRows} overflow="hidden" flexDirection="column">
               {renderList()}

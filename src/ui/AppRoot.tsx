@@ -53,6 +53,13 @@ export interface AppRootProps {
    */
   commandBarContent?: React.ReactNode;
   /**
+   * The active detail tab (when the detail pane is focused). Plumbed into the
+   * help overlay so it can lead with the current tab's key group (B09).
+   */
+  detailTab?: string | null;
+  /** The help overlay's scroll offset (controller-owned, B09). */
+  helpScroll?: number;
+  /**
    * Optional measured header slot (navigation-overhaul chunk 04 / B04b). When
    * provided (by the live adapter), it replaces the default presentational
    * `<Header>` with measured widgets — context/search `<Button>`s and the
@@ -73,6 +80,8 @@ export function AppRoot({
   terminalSize,
   commandBarContent,
   headerSlot,
+  detailTab = null,
+  helpScroll = 0,
 }: AppRootProps): React.ReactElement {
   // Sidebar width comes from the single geometry source (Spec 02 §"Single
   // source of truth"); no ad-hoc formula lives here. When the real terminal
@@ -100,7 +109,19 @@ export function AppRoot({
   // Full-screen overlays replace the main layout entirely so the frame never
   // grows taller than the terminal (Ink cannot reclaim overflowed rows).
   if (state.helpOpen) {
-    return <HelpOverlay open onClose={callbacks.onHelpClose} />;
+    // Leave room for the overlay's title, spacer, and close hint (5 chrome rows
+    // + the double border) so the body scrolls within the terminal.
+    const helpViewport = Math.max(1, (terminalSize?.rows ?? 24) - 7);
+    return (
+      <HelpOverlay
+        open
+        onClose={callbacks.onHelpClose}
+        focus={state.focus}
+        tab={detailTab}
+        scrollOffset={helpScroll}
+        viewportHeight={helpViewport}
+      />
+    );
   }
   if (state.contextSwitcherOpen) {
     return (

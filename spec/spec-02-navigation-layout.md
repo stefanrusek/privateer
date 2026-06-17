@@ -359,7 +359,7 @@ mouse click and opening the detail pane (which focuses it). In particular:
 |---|---|
 | **Normal** | Default. Arrow keys navigate lists and tree. Shortcut keys active. |
 | **Search** | Entered via `/`. Typing filters the list. |
-| **Command** | Entered via `:`. Typing enters a command. |
+| **Command** | Entered via `Space` (agent) or `!` (command). Typing enters a command. |
 | **Edit** | Entered via `e` in YAML tab. Full text editing. |
 
 Mode is shown in the command bar (detail deferred to Spec 04).
@@ -466,7 +466,21 @@ old schema).
 
 ## 11. Help Overlay
 
-Triggered by `?`. Full-screen overlay showing all keybindings organized by mode and context. Dismiss with `?` or `Escape`.
+Triggered by `?`. A full-screen overlay showing all keybindings **grouped by
+scope** (Global, Sidebar, List, Detail and its tabs, Command bar, Overlays).
+
+- The bindings come from a single source of truth — the `KEYMAP` registry in
+  `src/ui/keymap.ts` — so the help text can never drift from the real bindings.
+  The same registry's `accelerator` entries are the underlined letters on the
+  measured `<Button>`/`<DropdownButton>` chips, so a button and its help line
+  always agree. A drift test asserts every button accelerator appears in
+  `KEYMAP`, and the README keymap is generated from / checked against it.
+- **Context-aware ordering:** the group for the user's **current region/tab** is
+  shown **first**, then Global, then the rest — so the help leads with where you
+  are. Accelerator letters are underlined to match the buttons.
+- The overlay is **scrollable** (`↑`/`↓`, `PageUp`/`PageDown`) when it exceeds
+  the screen, with a scrollbar. Dismiss with `?` or `Escape`; focus returns
+  where it was.
 
 ---
 

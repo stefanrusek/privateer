@@ -104,6 +104,22 @@ describe('AppRoot', () => {
     expect(lastFrame()).toContain('Keyboard Reference');
   });
 
+  it('plumbs focus / detail tab / scroll into the help overlay', () => {
+    const state = { ...defaultState, helpOpen: true, focus: 'detail' as const };
+    const { lastFrame } = render(
+      React.createElement(AppRoot, {
+        state,
+        callbacks: defaultCallbacks,
+        contextFilter: '',
+        terminalSize: { columns: 120, rows: 40 },
+        detailTab: 'logs',
+        helpScroll: 0,
+      }),
+    );
+    // The Logs detail group leads when the Logs tab is the focused context.
+    expect(lastFrame()).toContain('Detail · Logs');
+  });
+
   it('does not render help overlay when helpOpen is false', () => {
     const { lastFrame } = render(
       React.createElement(AppRoot, {

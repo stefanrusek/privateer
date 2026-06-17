@@ -70,6 +70,7 @@ import {
   type ScrollState,
 } from '../../ui/scroll-viewport.js';
 import { projectLogsView, offsetForMatch } from '../../ui/logs-view.js';
+import { helpLines, scopeForFocus } from '../../ui/keymap.js';
 import {
   computeFrame,
   type Frame,
@@ -508,6 +509,9 @@ export class LiveController {
   private terminalRows = 24;
 
   private pendingG: number | null = null;
+  // Help overlay scroll offset (B09). The overlay windows the flattened keymap;
+  // ↑/↓ walk it. Reset to the top each time the overlay opens.
+  private helpScroll = 0;
   private listeners = new Set<() => void>();
   private snapshot: LiveSnapshot | null = null;
   private cancels: (() => void)[] = [];
@@ -2124,6 +2128,32 @@ export class LiveController {
     this.app = { ...this.app, helpOpen: false };
     this.bump();
   };
+
+  /** The help overlay's current scroll offset (consumed by AppRoot). */
+  getHelpScroll(): number {
+    return this.helpScroll;
+  }
+
+  /** Body rows the help overlay shows before scrolling (matches AppRoot math). */
+  private helpViewportHeight(): number {
+    return Math.max(1, this.terminalRows - 7);
+  }
+
+  /**
+   * Scroll the help overlay by `delta` lines, clamped via the pure scroll seam
+   * against the flattened keymap for the current focus/tab. The detail tab is
+   * read from the open detail state so the leading group matches the overlay.
+   */
+  private scrollHelp(delta: number): void {
+    const scope = scopeForFocus(this.app.focus, this.detail?.tab ?? null);
+    const total = helpLines(scope).length;
+    const vh = this.helpViewportHeight();
+    const next = scrollBy({ offset: this.helpScroll }, delta, total, vh);
+    if (next.offset !== this.helpScroll) {
+      this.helpScroll = next.offset;
+      this.bump();
+    }
+  }
 
   clearAgentHistory = (): void => {
     this.agentExchanges = [];
@@ -4015,6 +4045,18 @@ export class LiveController {
     if (this.app.helpOpen) {
       if (input === '?' || key.escape) {
         this.closeHelp();
+        return;
+      }
+      // ↑/↓ scroll the overlay (B09). The clamp lives in the pure scroll seam;
+      // the controller only holds the offset. PageUp/PageDown page by a screen.
+      if (key.upArrow) {
+        this.scrollHelp(-1);
+      } else if (key.downArrow) {
+        this.scrollHelp(1);
+      } else if (key.pageUp) {
+        this.scrollHelp(-this.helpViewportHeight());
+      } else if (key.pageDown) {
+        this.scrollHelp(this.helpViewportHeight());
       }
       return;
     }
@@ -4087,6 +4129,7 @@ export class LiveController {
       return;
     }
     if (input === '?') {
+      this.helpScroll = 0;
       this.app = { ...this.app, helpOpen: true };
       this.bump();
       return;
