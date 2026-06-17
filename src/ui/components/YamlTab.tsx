@@ -1,40 +1,94 @@
 /**
- * YamlTab — syntax-highlighted YAML view with edit mode.
- * Spec 04 §6: read mode (line numbers, highlighting, redaction for Secrets),
- * edit mode (ctrl+S → DiffView, Escape → discard confirm, inline validation errors).
+ * YamlTab — syntax-highlighted YAML view with an in-pane editor and a pop-out
+ * to `$EDITOR` (Spec 04 §6; navigation-overhaul chunk 07).
+ *
+ * Read mode renders highlighted, line-numbered YAML (redacted for Secrets, with
+ * a `v` reveal). Edit mode is a real multi-line editor: cursor movement, text
+ * mutation, and the cursor-following scroll all run through the pure
+ * `yaml-edit` model. `Ctrl+S` validates then opens the prop-driven `DiffView`
+ * (the "save with confirm" step); the apply / conflict / error transitions run
+ * through the pure `yaml-apply` reducer, and the **cluster effects
+ * (`replace`/`get`) are performed by the controller** via the `onReplace` /
+ * `onReload` callbacks — `kubeClient` no longer lives in this component.
+ * `Ctrl+E` pops out to `$EDITOR` via the controller's `onOpenInEditor`.
+ *
+ * **Dirty-boot test seam:** `_testInitialContent` boots straight into a *dirty*
+ * edit buffer so the discard-confirm / cursor-restore branches (unreachable via
+ * stdin under ink-testing-library) stay covered.
  */
 
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { Key as InkKey } from 'ink';
-import type { KubernetesObject } from '../../core/types.js';
-import type { KubeClient } from '../../boundaries/kube-client.js';
-import type { Clock } from '../../boundaries/clock.js';
 import { tokenizeLine } from '../../yaml/highlight.js';
 import type { Token } from '../../yaml/highlight.js';
 import { redactSecret } from '../../yaml/redact.js';
-import { createEditBuffer } from '../../yaml/edit-buffer.js';
-import type { EditBufferHandle } from '../../yaml/edit-buffer.js';
 import { validateYaml } from '../../yaml/validate.js';
 import type { YamlValidationError } from '../../yaml/validate.js';
+import {
+  editStateFromContent,
+  contentOf,
+  splitLines,
+  moveLeft,
+  moveRight,
+  moveUp,
+  moveDown,
+  insertText,
+  insertNewline,
+  backspace,
+  forwardDelete,
+  type EditState,
+} from '../yaml-edit.js';
+import {
+  initialApplyStatus,
+  pressApply,
+  applyResolved,
+  pressReload,
+  reloadResolved,
+  pressCancel,
+  type ApplyStatus,
+} from '../yaml-apply.js';
 import { DiffView } from './DiffView.js';
-import jsYaml from 'js-yaml';
 
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
+/** The outcome of a controller-performed `replace` (Spec 04 §6.3). */
+export type YamlReplaceResult =
+  | { ok: true }
+  | { ok: false; conflict: true }
+  | { ok: false; conflict: false; message: string };
+
+/** The outcome of a controller-performed reload `get`. */
+export type YamlReloadResult =
+  | { ok: true; yaml: string }
+  | { ok: false; message: string };
+
 export interface YamlTabProps {
-  resource: KubernetesObject;
-  kubeClient: KubeClient;
-  clock: Clock;
+  /** The resource YAML to show/edit (already serialized by the controller). */
+  yaml: string;
+  /** The resource kind (drives Secret redaction + the diff header). */
+  kind: string;
+  /** A header label for the diff, e.g. `ConfigMap/default/my-cfg`. */
+  title: string;
+  /** Apply the edited YAML to the cluster; resolves to the typed outcome. */
+  onReplace: (newYaml: string) => Promise<YamlReplaceResult>;
+  /** Re-fetch the resource fresh (for reload-&-re-edit after a 409). */
+  onReload: () => Promise<YamlReloadResult>;
+  /**
+   * Pop out to `$EDITOR` on the given YAML; resolves to the edited text (or the
+   * unchanged input if the external edit failed). The controller owns the
+   * suspend + temp-file + spawn glue and re-asserts the mouse-teardown invariant.
+   */
+  onOpenInEditor: (yaml: string) => Promise<string>;
   onSave?: () => void;
-  /** Called on every internal mode transition with the new mode's kind. */
+  /** Called on every mode transition with the new mode's kind. */
   onModeChange?: (mode: 'read' | 'edit' | 'discard-confirm' | 'diff') => void;
   /**
-   * For testing only: override the initial mode.
-   * When provided, starts the component in the given mode with a buffer
-   * initialized from `resource` YAML but set to the given content.
+   * Test-only: boot straight into a *dirty* edit buffer with this content.
+   * (Preserves the coverage seam the discard-confirm / cursor-restore branches
+   * depend on — stdin-driven dirtiness is unreliable under ink-testing-library.)
    */
   _testInitialContent?: string;
 }
@@ -43,81 +97,63 @@ export interface YamlTabProps {
 // Mode
 // ---------------------------------------------------------------------------
 
-/**
- * Cursor position within the edit buffer.
- * `desired` is the column the user last set explicitly (by horizontal
- * movement or typing); vertical movement clamps to the line length but
- * restores `desired` when a long-enough line is reached again.
- */
-interface CursorState {
-  row: number;
-  col: number;
-  desired: number;
-}
-
-const CURSOR_ORIGIN: CursorState = { row: 0, col: 0, desired: 0 };
-
-interface EditMode {
+interface EditModeState {
   kind: 'edit';
-  buffer: EditBufferHandle;
+  edit: EditState;
+  /** The original YAML this edit session started from (for dirty + diff). */
+  baseYaml: string;
   validationError: YamlValidationError | null;
-  cursor: CursorState;
 }
 
 type TabMode =
   | { kind: 'read'; revealed: boolean }
-  | EditMode
-  | { kind: 'discard-confirm'; buffer: EditBufferHandle; cursor: CursorState }
-  | { kind: 'diff'; buffer: EditBufferHandle; cursor: CursorState };
+  | EditModeState
+  | { kind: 'discard-confirm'; edit: EditState; baseYaml: string }
+  | { kind: 'diff'; edit: EditState; baseYaml: string; status: ApplyStatus };
 
 // ---------------------------------------------------------------------------
 // YamlTab component
 // ---------------------------------------------------------------------------
 
 export function YamlTab({
-  resource,
-  kubeClient,
-  clock: _clock,
+  yaml,
+  kind,
+  title,
+  onReplace,
+  onReload,
+  onOpenInEditor,
   onSave,
   onModeChange,
   _testInitialContent,
 }: YamlTabProps): React.ReactElement {
-  const initialMode: TabMode = ((): TabMode => {
-    if (_testInitialContent !== undefined) {
-      const buf = createEditBuffer(resourceToYaml(resource));
-      const dirtyBuf = buf.setContent(_testInitialContent);
-      return {
-        kind: 'edit',
-        buffer: dirtyBuf,
-        validationError: null,
-        cursor: CURSOR_ORIGIN,
-      };
-    }
-    return { kind: 'read', revealed: false };
-  })();
+  const initialMode: TabMode =
+    _testInitialContent !== undefined
+      ? {
+          kind: 'edit',
+          edit: editStateFromContent(_testInitialContent),
+          baseYaml: yaml,
+          validationError: null,
+        }
+      : { kind: 'read', revealed: false };
   const [mode, setMode] = useState<TabMode>(initialMode);
 
-  /** Apply a mode transition and notify the optional observer. */
   function transition(next: TabMode): void {
     setMode(next);
     onModeChange?.(next.kind);
   }
 
-  // Keyboard handling
   useInput((input, key) => {
     if (mode.kind === 'read') {
       if (input === 'e') {
         enterEditMode();
-      } else if (
-        input === 'v' &&
-        resource.kind === 'Secret' &&
-        !mode.revealed
-      ) {
+      } else if (input === 'v' && kind === 'Secret' && !mode.revealed) {
         transition({ kind: 'read', revealed: true });
       }
     } else if (mode.kind === 'edit') {
       if (key.ctrl && input === 's') {
         handleCtrlS(mode);
+      } else if (key.ctrl && input === 'e') {
+        void handleOpenInEditor(mode);
       } else if (key.escape) {
         handleEscape(mode);
       } else {
@@ -129,135 +165,159 @@ export function YamlTab({
       } else if (input === 'n' || input === 'N' || key.escape) {
         transition({
           kind: 'edit',
-          buffer: mode.buffer,
+          edit: mode.edit,
+          baseYaml: mode.baseYaml,
           validationError: null,
-          cursor: mode.cursor,
         });
       }
     }
+    // diff mode: keys are handled by DiffView's own useInput.
   });
 
   function enterEditMode(): void {
-    const yaml = resourceToYaml(resource);
-    const buffer = createEditBuffer(yaml);
+    const edit = editStateFromContent(yaml);
     transition({
       kind: 'edit',
-      buffer,
+      edit,
+      // Normalize through the editor's own splitter so a dirty check compares
+      // like-for-like (jsYaml dumps a trailing newline that `contentOf` drops).
+      baseYaml: contentOf(edit),
       validationError: null,
-      cursor: CURSOR_ORIGIN,
     });
   }
 
-  function handleCtrlS(current: EditMode): void {
-    const error = validateYaml(current.buffer.content);
+  function handleCtrlS(current: EditModeState): void {
+    const content = contentOf(current.edit);
+    const error = validateYaml(content);
     if (error !== null) {
       transition({ ...current, validationError: error });
       return;
     }
     transition({
       kind: 'diff',
-      buffer: current.buffer,
-      cursor: current.cursor,
+      edit: current.edit,
+      baseYaml: current.baseYaml,
+      status: initialApplyStatus(),
     });
   }
 
-  function handleEscape(current: EditMode): void {
-    if (current.buffer.isDirty) {
+  async function handleOpenInEditor(current: EditModeState): Promise<void> {
+    const edited = await onOpenInEditor(contentOf(current.edit));
+    setMode({
+      kind: 'edit',
+      edit: editStateFromContent(edited),
+      baseYaml: current.baseYaml,
+      validationError: validateYaml(edited),
+    });
+  }
+
+  function handleEscape(current: EditModeState): void {
+    if (contentOf(current.edit) !== current.baseYaml) {
       transition({
         kind: 'discard-confirm',
-        buffer: current.buffer,
-        cursor: current.cursor,
+        edit: current.edit,
+        baseYaml: current.baseYaml,
       });
     } else {
       transition({ kind: 'read', revealed: false });
     }
   }
 
-  /**
-   * Cursor-based editing (Spec 04 §6.2). Intra-edit updates (cursor moves,
-   * text changes) use setMode directly — the mode *kind* does not change, so
-   * onModeChange is not notified.
-   */
-  function handleEditKey(current: EditMode, input: string, key: InkKey): void {
-    const { buffer, cursor } = current;
-    const line = buffer.lineAt(cursor.row);
-
-    const update = (nextBuffer: EditBufferHandle, next: CursorState): void => {
-      setMode({ ...current, buffer: nextBuffer, cursor: next });
+  function handleEditKey(
+    current: EditModeState,
+    input: string,
+    key: InkKey,
+  ): void {
+    const apply = (next: EditState): void => {
+      setMode({ ...current, edit: next });
     };
-
     if (key.leftArrow) {
-      const col = Math.max(0, cursor.col - 1);
-      update(buffer, { row: cursor.row, col, desired: col });
+      apply(moveLeft(current.edit));
     } else if (key.rightArrow) {
-      const col = Math.min(line.length, cursor.col + 1);
-      update(buffer, { row: cursor.row, col, desired: col });
+      apply(moveRight(current.edit));
     } else if (key.upArrow) {
-      const row = Math.max(0, cursor.row - 1);
-      const col = Math.min(cursor.desired, buffer.lineAt(row).length);
-      update(buffer, { row, col, desired: cursor.desired });
+      apply(moveUp(current.edit));
     } else if (key.downArrow) {
-      const row = Math.min(buffer.lines.length - 1, cursor.row + 1);
-      const col = Math.min(cursor.desired, buffer.lineAt(row).length);
-      update(buffer, { row, col, desired: cursor.desired });
+      apply(moveDown(current.edit));
     } else if (key.return) {
-      const next = buffer
-        .setLine(cursor.row, line.slice(0, cursor.col))
-        .insertLine(cursor.row + 1, line.slice(cursor.col));
-      update(next, { row: cursor.row + 1, col: 0, desired: 0 });
+      apply(insertNewline(current.edit));
     } else if (key.backspace) {
-      if (cursor.col > 0) {
-        const next = buffer.setLine(
-          cursor.row,
-          line.slice(0, cursor.col - 1) + line.slice(cursor.col),
-        );
-        const col = cursor.col - 1;
-        update(next, { row: cursor.row, col, desired: col });
-      } else if (cursor.row > 0) {
-        const prev = buffer.lineAt(cursor.row - 1);
-        const next = buffer
-          .setLine(cursor.row - 1, prev + line)
-          .deleteLine(cursor.row);
-        update(next, {
-          row: cursor.row - 1,
-          col: prev.length,
-          desired: prev.length,
-        });
-      }
+      apply(backspace(current.edit));
     } else if (key.delete) {
-      if (cursor.col < line.length) {
-        const next = buffer.setLine(
-          cursor.row,
-          line.slice(0, cursor.col) + line.slice(cursor.col + 1),
-        );
-        update(next, cursor);
-      } else if (cursor.row < buffer.lines.length - 1) {
-        const next = buffer
-          .setLine(cursor.row, line + buffer.lineAt(cursor.row + 1))
-          .deleteLine(cursor.row + 1);
-        update(next, cursor);
-      }
+      apply(forwardDelete(current.edit));
     } else if (input.length > 0 && !key.ctrl && !key.meta && !key.tab) {
-      // Printable input — may be multi-character when pasted.
-      const next = buffer.setLine(
-        cursor.row,
-        line.slice(0, cursor.col) + input + line.slice(cursor.col),
-      );
-      const col = cursor.col + input.length;
-      update(next, { row: cursor.row, col, desired: col });
+      apply(insertText(current.edit, input));
     }
   }
 
-  // ── Read mode ──────────────────────────────────────────────────────────────
+  // ── Apply pipeline (diff mode): drive the pure reducer; the controller
+  //    performs the replace/get effects via onReplace/onReload. ──────────────
+  function diffApply(current: Extract<TabMode, { kind: 'diff' }>): void {
+    const step = pressApply(current.status);
+    // Status-only change inside diff mode: setMode (the mode *kind* is unchanged,
+    // so onModeChange must not re-fire 'diff').
+    setMode({ ...current, status: step.status });
+    if (step.effect.kind === 'replace') {
+      void onReplace(contentOf(current.edit)).then((result) => {
+        const resolved = applyResolved(
+          { kind: 'applying' },
+          toReplaceEvent(result),
+        );
+        if (resolved.outcome.kind === 'applied') {
+          transition({ kind: 'read', revealed: false });
+          onSave?.();
+        } else {
+          setMode({ ...current, status: resolved.status });
+        }
+      });
+    }
+  }
+
+  function diffReload(current: Extract<TabMode, { kind: 'diff' }>): void {
+    // Only reachable from DiffView's conflict bar, so pressReload always yields
+    // the reload effect; setMode to `reloading` and perform the fetch.
+    const step = pressReload(current.status);
+    setMode({ ...current, status: step.status });
+    void onReload().then((result) => {
+      const resolved = reloadResolved(
+        { kind: 'reloading' },
+        toReloadEvent(result),
+      );
+      if (resolved.outcome.kind === 'reloaded') {
+        const edit = editStateFromContent(resolved.outcome.yaml);
+        transition({
+          kind: 'edit',
+          edit,
+          baseYaml: contentOf(edit),
+          validationError: null,
+        });
+      } else {
+        setMode({ ...current, status: resolved.status });
+      }
+    });
+  }
+
+  function diffCancel(current: Extract<TabMode, { kind: 'diff' }>): void {
+    const step = pressCancel(current.status);
+    if (step.outcome.kind === 'cancelled') {
+      transition({
+        kind: 'edit',
+        edit: current.edit,
+        baseYaml: current.baseYaml,
+        validationError: null,
+      });
+    } else if (step.outcome.kind === 'discarded') {
+      transition({ kind: 'read', revealed: false });
+    }
+  }
+
+  // ── Read mode ────────────────────────────────────────────────────────────
   if (mode.kind === 'read') {
-    const yaml = resourceToYaml(resource);
     const displayYaml = mode.revealed ? yaml : redactSecret(yaml);
     const lines = displayYaml.split('\n');
-    const isSecret = resource.kind === 'Secret';
-
+    const isSecret = kind === 'Secret';
     return (
       <Box flexDirection="column">
-        {/* Action bar */}
         <Box flexDirection="row" gap={2}>
           <Text color="cyan" underline>
             [Edit]
@@ -268,8 +328,6 @@ export function YamlTab({
             </Text>
           )}
         </Box>
-
-        {/* YAML lines with line numbers */}
         <Box flexDirection="column">
           {lines.map((line, i) => (
             <HighlightedLine key={i} lineNum={i + 1} line={line} />
@@ -279,19 +337,18 @@ export function YamlTab({
     );
   }
 
-  // ── Edit mode ──────────────────────────────────────────────────────────────
+  // ── Edit mode ────────────────────────────────────────────────────────────
   if (mode.kind === 'edit') {
-    const lines = mode.buffer.lines;
+    const lines = mode.edit.lines;
+    const modifiedLines = computeModifiedLines(mode.baseYaml, lines);
     return (
       <Box flexDirection="column">
-        {/* Edit mode header */}
         <Box flexDirection="row">
           <Text bold color="yellow">
-            ╔══ EDITING — Ctrl+S to save, Escape to cancel
+            ╔══ EDITING — Ctrl+S to save, Ctrl+E to open in $EDITOR, Escape to
+            cancel
           </Text>
         </Box>
-
-        {/* Inline validation error */}
         {mode.validationError !== null && (
           <Box flexDirection="row" gap={1}>
             <Text color="red">✗ YAML error</Text>
@@ -301,32 +358,31 @@ export function YamlTab({
             <Text color="red">{mode.validationError.message}</Text>
           </Box>
         )}
-
-        {/* Lines with gutter */}
         <Box flexDirection="column">
-          {lines.map((line, i) => {
-            const isModified = mode.buffer.modifiedLines.has(i);
-            return (
-              <Box key={i} flexDirection="row">
-                {isModified ? <Text color="yellow">│</Text> : <Text> </Text>}
-                {i === mode.cursor.row ? (
-                  <CursorLine
-                    lineNum={i + 1}
-                    line={line}
-                    col={mode.cursor.col}
-                  />
-                ) : (
-                  <HighlightedLine lineNum={i + 1} line={line} />
-                )}
-              </Box>
-            );
-          })}
+          {lines.map((line, i) => (
+            <Box key={i} flexDirection="row">
+              {modifiedLines.has(i) ? (
+                <Text color="yellow">│</Text>
+              ) : (
+                <Text> </Text>
+              )}
+              {i === mode.edit.cursor.row ? (
+                <CursorLine
+                  lineNum={i + 1}
+                  line={line}
+                  col={mode.edit.cursor.col}
+                />
+              ) : (
+                <HighlightedLine lineNum={i + 1} line={line} />
+              )}
+            </Box>
+          ))}
         </Box>
       </Box>
     );
   }
 
-  // ── Discard confirm ────────────────────────────────────────────────────────
+  // ── Discard confirm ──────────────────────────────────────────────────────
   if (mode.kind === 'discard-confirm') {
     return (
       <Box flexDirection="column">
@@ -343,41 +399,65 @@ export function YamlTab({
     );
   }
 
-  // ── Diff mode ──────────────────────────────────────────────────────────────
-  // Validation already passed in handleCtrlS so jsYaml.load is safe here.
-  const editedYaml = mode.buffer.content;
-  const modifiedResource = jsYaml.load(editedYaml) as KubernetesObject;
-
+  // ── Diff mode ────────────────────────────────────────────────────────────
+  const diffMode = mode;
   return (
     <DiffView
-      original={resource}
-      modified={modifiedResource}
-      editedYaml={editedYaml}
-      kubeClient={kubeClient}
-      onApplied={(): void => {
-        transition({ kind: 'read', revealed: false });
-        onSave?.();
+      originalYaml={diffMode.baseYaml}
+      modifiedYaml={contentOf(diffMode.edit)}
+      title={title}
+      status={diffMode.status}
+      onApply={() => {
+        diffApply(diffMode);
       }}
-      onCancel={(): void => {
-        transition({
-          kind: 'edit',
-          buffer: mode.buffer,
-          validationError: null,
-          cursor: mode.cursor,
-        });
+      onCancel={() => {
+        diffCancel(diffMode);
       }}
-      onReloadAndRedit={(fresh): void => {
-        const freshYaml = resourceToYaml(fresh);
-        const newBuffer = createEditBuffer(freshYaml);
-        transition({
-          kind: 'edit',
-          buffer: newBuffer,
-          validationError: null,
-          cursor: CURSOR_ORIGIN,
-        });
+      onReloadAndRedit={() => {
+        diffReload(diffMode);
       }}
     />
   );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function toReplaceEvent(
+  result: YamlReplaceResult,
+): Parameters<typeof applyResolved>[1] {
+  if (result.ok) {
+    return { ok: true };
+  }
+  if (result.conflict) {
+    return { ok: false, conflict: true };
+  }
+  return { ok: false, conflict: false, message: result.message };
+}
+
+function toReloadEvent(
+  result: YamlReloadResult,
+): Parameters<typeof reloadResolved>[1] {
+  return result.ok
+    ? { ok: true, yaml: result.yaml }
+    : { ok: false, message: result.message };
+}
+
+/** Line indices whose text differs from the original YAML (gutter marker). */
+function computeModifiedLines(
+  baseYaml: string,
+  current: readonly string[],
+): Set<number> {
+  const original = splitLines(baseYaml);
+  const modified = new Set<number>();
+  const maxLen = Math.max(original.length, current.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (original[i] !== current[i]) {
+      modified.add(i);
+    }
+  }
+  return modified;
 }
 
 // ---------------------------------------------------------------------------
@@ -390,11 +470,6 @@ interface CursorLineProps {
   col: number;
 }
 
-/**
- * The line the cursor is on, rendered without syntax highlighting so the
- * cursor cell can be shown with `inverse`. At end of line the cursor is an
- * inverse space (block-style).
- */
 function CursorLine({
   lineNum,
   line,
@@ -456,13 +531,4 @@ function TokenSpan({ token }: { token: Token }): React.ReactElement {
     case 'plain':
       return <Text>{token.text}</Text>;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Convert a KubernetesObject to a YAML string. */
-function resourceToYaml(resource: KubernetesObject): string {
-  return jsYaml.dump(resource, { lineWidth: -1, indent: 2 });
 }

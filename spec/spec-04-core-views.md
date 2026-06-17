@@ -202,8 +202,10 @@ Annotations are collapsed by default (show count). `[show]` toggle expands inlin
 - Full resource YAML, syntax highlighted
 - Color scheme: keys in blue, strings in green, numbers in yellow, booleans in cyan, null in grey
 - Line numbers shown
-- Scrollable with mouse wheel or `j`/`k`
-- Secret values replaced with `[redacted]` — a `[reveal]` button at the top of the pane prompts confirmation before showing values
+- Scrollable via the detail scroll viewport (mouse wheel or `↑`/`↓`); long lines
+  clip to the detail width — they never wrap (navigation-overhaul chunk 07)
+- Secret values replaced with `[redacted]` — a `[reveal]` button (accelerator
+  **`v`**) at the top of the pane reveals the values
 - `e` or clicking `[Edit]` button enters edit mode
 
 ### 6.2 Edit mode
@@ -211,19 +213,31 @@ Annotations are collapsed by default (show count). `[show]` toggle expands inlin
 Entered via `e` or `[Edit]` button click.
 
 ```
- ╔══ EDITING — Ctrl+S to save, Escape to cancel ════════════════╗
+ ╔══ EDITING — Ctrl+S to save, Ctrl+E to open in $EDITOR, Escape to cancel ══╗
  ║ 1  apiVersion: apps/v1                                       ║
  ║ 2  kind: Deployment                                          ║
  ║ 3  metadata:                                                 ║
  ║ 4    name: order-api                                         ║
 ```
 
-- Full cursor-based text editing
+- Full cursor-based text editing, with a cursor-following scroll on both axes
+  (no wrapping — long lines clip, matching read mode)
 - Mode indicator in command bar changes to yellow `EDIT`
 - Modified lines indicated with a `│` marker in the gutter (left of line numbers)
 - YAML syntax errors shown inline as red underline + error message in status bar
 - `Ctrl+S` — validate YAML, then show DiffView before applying
+- `Ctrl+E` (or clicking `[Open in $EDITOR]`) — pop out to `$EDITOR` (fallback
+  `vi`): the TUI suspends (mouse reporting torn down), the buffer is edited
+  externally, and the result is reloaded + validated on return
+  (navigation-overhaul chunk 07)
 - `Escape` — cancel edit, confirm discard if changes were made
+
+**Architecture (navigation-overhaul chunk 07):** the editor owns only its
+transient editing state (the cursor/edit-op logic is the pure, fully-covered
+`src/ui/yaml-edit.ts`; the apply/conflict state machine is the pure
+`src/ui/yaml-apply.ts`). The **cluster boundary lives in the controller** — the
+component performs no `kubeClient` calls; it hands the controller a YAML string
+and receives typed apply/reload results. `DiffView` is prop-driven.
 
 **Discard confirmation:**
 ```
@@ -235,10 +249,17 @@ Shown inline in the command bar. Default selection: No.
 
 1. User presses `Ctrl+S`
 2. YAML is parsed and validated client-side — if invalid, show error, do not proceed
-3. DiffView modal opens (see §7)
-4. User confirms → PUT request sent to k8s API (`replace` semantics)
-5. On success: exit edit mode, show brief `✓ Applied` in command bar, resource updates via watch stream
-6. On API error: stay in edit mode, show error message in command bar (e.g. `✗ Conflict — resource was modified, reload?`)
+3. DiffView opens (see §7) — the diff review **is** the confirm step; there is no
+   second confirmation on top of it
+4. User confirms (`[Apply]`/Enter) → PUT request sent to k8s API (`replace`
+   semantics), performed by the controller
+5. On success: exit edit mode, resource updates via watch stream
+6. On `409 Conflict`: the DiffView shows a conflict bar offering
+   **`[Reload & re-edit]`** (accelerator `r` — re-fetch the fresh resource and
+   re-open the editor on it) and **`[Discard]`** (Esc — throw the pending edits
+   away, return to read mode)
+7. On any other API error: the message is shown over the diff; `[Apply]`/Enter
+   retries, `[Cancel]`/Esc returns to edit mode with changes preserved
 
 ---
 
@@ -273,9 +294,16 @@ Modal overlay shown between `Ctrl+S` and actual API call.
 
 ### 7.3 Interaction
 
-- `Enter` or clicking `[Apply]` → proceeds with save
+- `Enter` or clicking `[Apply]` → proceeds with save (`[Applying…]` while in
+  flight); on success the tab returns to read mode
 - `Escape` or clicking `[Cancel]` → returns to edit mode (changes preserved)
+- On `409 Conflict`: `[Reload & re-edit]` (`r`) re-fetches the resource and
+  re-opens the editor on the fresh body (`[Reloading…]` while in flight);
+  `[Discard]` (Esc) throws the edits away and returns to read mode
 - Scrollable if diff is long
+- **Prop-driven (navigation-overhaul chunk 07):** DiffView holds no cluster
+  client — the controller performs `replace`/`get` and feeds the status back in.
+  The apply/conflict/error transition logic lives in pure `src/ui/yaml-apply.ts`.
 
 ---
 
@@ -408,6 +436,7 @@ Full-screen modal triggered by `?`. Organized by section:
  ║                                                              ║
  ║  YAML EDIT                                                   ║
  ║  Ctrl+S     Save (shows diff)                               ║
+ ║  Ctrl+E     Open in $EDITOR                                 ║
  ║  Escape     Cancel edit                                     ║
  ║                                                              ║
  ║  COMMANDS (!prefix)                                          ║
@@ -424,7 +453,8 @@ Full-screen modal triggered by `?`. Organized by section:
 
 ## 12. ConfirmDialog
 
-Used for destructive actions (delete, reveal secret).
+Used for destructive actions (e.g. delete). (Secret reveal is a direct `v`
+toggle in the YAML tab — see §6.1 — not a confirm dialog.)
 
 ```
  Delete Pod order-api-7d9f-xk2p? [Delete] [Cancel]

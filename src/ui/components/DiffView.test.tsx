@@ -1,587 +1,179 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { DiffView } from './DiffView.js';
-import { FakeKubeClient } from '../../boundaries/kube-client.fake.js';
-import type { KubernetesObject } from '../../core/types.js';
+import type { ApplyStatus } from '../yaml-apply.js';
 import { safeWrite } from '../../../test/ink-stdin.js';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeConfigMap(
-  name: string,
-  namespace: string,
-  data: Record<string, string>,
-  resourceVersion = '1',
-): KubernetesObject {
-  return {
-    apiVersion: 'v1',
-    kind: 'ConfigMap',
-    metadata: { name, namespace, resourceVersion },
-    data,
-  };
-}
-
-/** Make a cluster-scoped resource (no namespace). */
-function makeClusterResource(
-  kind: string,
-  name: string,
-  resourceVersion = '1',
-): KubernetesObject {
-  return {
-    apiVersion: 'v1',
-    kind,
-    metadata: { name, resourceVersion },
-  };
-}
 
 function noop(): void {
   return;
 }
 
-// ---------------------------------------------------------------------------
-// Tests — Rendering
-// ---------------------------------------------------------------------------
+const CFG_OLD = 'kind: ConfigMap\ndata:\n  key: old\n';
+const CFG_NEW = 'kind: ConfigMap\ndata:\n  key: new\n';
+
+function renderDiff(
+  status: ApplyStatus,
+  handlers: Partial<{
+    onApply: () => void;
+    onCancel: () => void;
+    onReloadAndRedit: () => void;
+  }> = {},
+): ReturnType<typeof render> {
+  return render(
+    React.createElement(DiffView, {
+      originalYaml: CFG_OLD,
+      modifiedYaml: CFG_NEW,
+      title: 'ConfigMap/default/my-cfg',
+      status,
+      onApply: handlers.onApply ?? noop,
+      onCancel: handlers.onCancel ?? noop,
+      onReloadAndRedit: handlers.onReloadAndRedit ?? noop,
+    }),
+  );
+}
 
 describe('DiffView rendering', () => {
-  it('renders the resource name in the header', () => {
-    const original = makeConfigMap('my-cfg', 'default', { key: 'old' });
-    const modified = makeConfigMap('my-cfg', 'default', { key: 'new' });
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-
-    const { lastFrame } = render(
-      React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('my-cfg');
+  it('renders the title in the header', () => {
+    const { lastFrame } = renderDiff({ kind: 'diff' });
+    expect(lastFrame()).toContain('my-cfg');
   });
 
-  it('renders cluster-scoped resource (no namespace) in header', () => {
-    const original = makeClusterResource('Node', 'node-1');
-    const modified = makeClusterResource('Node', 'node-1');
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-
-    const { lastFrame } = render(
-      React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('node-1');
-  });
-
-  it('renders resource with no kind (covers ?? fallbacks)', () => {
-    // Resource with no kind and no metadata (covers the ?? '' fallbacks)
-    const original: KubernetesObject = { apiVersion: 'v1' };
-    const modified: KubernetesObject = {
-      apiVersion: 'v1',
-      data: { added: 'value' },
-    };
-    const fake = new FakeKubeClient();
-
-    const { lastFrame } = render(
-      React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
-    // Should render without crashing
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('[Apply]');
-  });
-
-  it('renders [Apply] and [Cancel] buttons in ready state', () => {
-    const original = makeConfigMap('my-cfg', 'default', { key: 'old' });
-    const modified = makeConfigMap('my-cfg', 'default', { key: 'new' });
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-
-    const { lastFrame } = render(
-      React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
+  it('renders [Apply] and [Cancel] in the diff state', () => {
+    const { lastFrame } = renderDiff({ kind: 'diff' });
     const frame = lastFrame() ?? '';
     expect(frame).toContain('[Apply]');
     expect(frame).toContain('[Cancel]');
   });
 
-  it('shows diff with added lines for new fields', () => {
-    const original = makeConfigMap('cfg', 'default', {});
-    const modified = makeConfigMap('cfg', 'default', { newKey: 'newValue' });
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-
-    const { lastFrame } = render(
-      React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
+  it('shows added/removed diff lines', () => {
+    const { lastFrame } = renderDiff({ kind: 'diff' });
     const frame = lastFrame() ?? '';
-    // Should show a '+' line for the added content
     expect(frame).toContain('+');
+    expect(frame).toContain('-');
   });
 
-  it('renders collapsed unchanged lines correctly', () => {
-    // Create a large diff with many unchanged lines
-    const baseData: Record<string, string> = {};
-    for (let i = 0; i < 20; i++) {
-      baseData[`key${String(i)}`] = `value${String(i)}`;
-    }
-    const original = makeConfigMap('big-cfg', 'default', baseData);
-    const modifiedData = { ...baseData, key10: 'CHANGED' };
-    const modified = makeConfigMap('big-cfg', 'default', modifiedData);
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-
+  it('renders collapsed unchanged lines', () => {
+    const many = Array.from(
+      { length: 20 },
+      (_, i) => `  k${String(i)}: v${String(i)}`,
+    ).join('\n');
     const { lastFrame } = render(
       React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
+        originalYaml: `data:\n${many}\n`,
+        modifiedYaml: `data:\n${many.replace('k10: v10', 'k10: CHANGED')}\n`,
+        title: 't',
+        status: { kind: 'diff' },
+        onApply: noop,
         onCancel: noop,
         onReloadAndRedit: noop,
       }),
     );
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('unchanged lines');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests — Apply flow (keyboard Enter)
-// ---------------------------------------------------------------------------
-
-describe('DiffView apply flow', () => {
-  it('calls onApplied after successful replace via Enter key', async () => {
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
-    const modified = makeConfigMap('cfg', 'default', { env: 'prod' }, '1');
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-
-    let applied = false;
-    const onApplied = (): void => {
-      applied = true;
-    };
-
-    const { stdin } = render(
-      React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
-
-    await safeWrite(stdin, '\r'); // Enter key
-    // Wait for async apply to complete
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    expect(applied).toBe(true);
+    expect(lastFrame()).toContain('unchanged lines');
   });
 
-  it('shows [Applying…] while apply is in progress', async () => {
-    // Use a client that hangs forever so we can observe the applying state
-    type ReplaceResult = Awaited<ReturnType<FakeKubeClient['replace']>>;
-    let resolveReplace: ((v: ReplaceResult) => void) | undefined;
-
-    class HangingKubeClient extends FakeKubeClient {
-      override replace(
-        _object: Parameters<FakeKubeClient['replace']>[0],
-      ): Promise<ReplaceResult> {
-        return new Promise((res) => {
-          resolveReplace = res;
-        });
-      }
-    }
-
-    const customClient = new HangingKubeClient();
-
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
-    const modified = makeConfigMap('cfg', 'default', { env: 'prod' }, '1');
-
-    const { lastFrame, stdin } = render(
-      React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: customClient,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
-
-    await safeWrite(stdin, '\r'); // Enter to apply
-    expect(lastFrame()).toContain('[Applying');
-    // Press a key while applying — should be ignored (applying guard)
-    await safeWrite(stdin, '\x1B'); // Escape while applying — should be ignored
-    // Still in applying state (key was ignored)
-    expect(lastFrame()).toContain('[Applying');
-    // Resolve to clean up
-    if (resolveReplace !== undefined) {
-      resolveReplace({
-        ok: false,
-        error: { kind: 'notFound', message: 'gone', statusCode: 404 },
-      });
-    }
+  it('shows [Applying…] in the applying state', () => {
+    expect(renderDiff({ kind: 'applying' }).lastFrame()).toContain('[Applying');
   });
 
-  it('shows conflict state after 409', async () => {
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
-    const staleModified = makeConfigMap('cfg', 'default', { env: 'prod' }, '1');
-
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-
-    // Advance the server version so a conflict occurs
-    const serverUpdated = makeConfigMap(
-      'cfg',
-      'default',
-      { env: 'updated' },
-      '1',
+  it('shows [Reloading…] in the reloading state', () => {
+    expect(renderDiff({ kind: 'reloading' }).lastFrame()).toContain(
+      '[Reloading',
     );
-    await fake.replace(serverUpdated); // bumps to version 2
+  });
 
-    const { lastFrame, stdin } = render(
-      React.createElement(DiffView, {
-        original,
-        modified: staleModified, // stale resourceVersion=1 vs server=2
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
+  it('shows the error message in the error state', () => {
+    const { lastFrame } = renderDiff({ kind: 'error', message: 'forbidden' });
+    expect(lastFrame()).toContain('forbidden');
+  });
 
-    await safeWrite(stdin, '\r'); // Enter to apply — should 409
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
+  it('shows the conflict bar with Reload and Discard', () => {
+    const { lastFrame } = renderDiff({ kind: 'conflict' });
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Conflict');
     expect(frame).toContain('[Reload');
     expect(frame).toContain('[Discard]');
   });
-
-  it('shows error state after non-conflict failure', async () => {
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
-    const modified = makeConfigMap('cfg', 'default', { env: 'prod' }, '1');
-
-    // Don't seed the resource so replace() returns notFound (a non-conflict error)
-    const fake = new FakeKubeClient();
-
-    const { lastFrame, stdin } = render(
-      React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
-
-    await safeWrite(stdin, '\r'); // Enter to apply — should return notFound error
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    // Should show error message (not found)
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('not found');
-  });
 });
 
-// ---------------------------------------------------------------------------
-// Tests — Cancel flow (keyboard Escape)
-// ---------------------------------------------------------------------------
-
-describe('DiffView cancel flow', () => {
-  it('calls onCancel when Escape is pressed in ready state', async () => {
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' });
-    const modified = makeConfigMap('cfg', 'default', { env: 'prod' });
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-
-    let cancelled = false;
-    const onCancel = (): void => {
-      cancelled = true;
-    };
-
-    const { stdin } = render(
-      React.createElement(DiffView, {
-        original,
-        modified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel,
-        onReloadAndRedit: noop,
-      }),
-    );
-
-    await safeWrite(stdin, '\x1B'); // Escape
-    expect(cancelled).toBe(true);
-  });
-
-  it('calls onCancel when Discard pressed after conflict (Escape key)', async () => {
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
-    const staleModified = makeConfigMap('cfg', 'default', { env: 'prod' }, '1');
-
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-    const serverUpdated = makeConfigMap(
-      'cfg',
-      'default',
-      { env: 'updated' },
-      '1',
-    );
-    await fake.replace(serverUpdated); // bumps to version 2
-
-    let cancelled = false;
-    const onCancel = (): void => {
-      cancelled = true;
-    };
-
-    const { stdin } = render(
-      React.createElement(DiffView, {
-        original,
-        modified: staleModified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel,
-        onReloadAndRedit: noop,
-      }),
-    );
-
-    await safeWrite(stdin, '\r'); // Enter to apply — 409
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    await safeWrite(stdin, '\x1B'); // Escape → Discard in conflict state
-    expect(cancelled).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests — Reload & re-edit flow
-// ---------------------------------------------------------------------------
-
-describe('DiffView reload and re-edit', () => {
-  it('calls onReloadAndRedit with fresh resource when r is pressed after conflict', async () => {
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
-    const staleModified = makeConfigMap('cfg', 'default', { env: 'prod' }, '1');
-    const fresh = makeConfigMap('cfg', 'default', { env: 'updated' }, '2');
-
-    const fake = new FakeKubeClient();
-    // Seed the original at version 1, then seed the fresh version directly
-    // so that get() returns version 2 but replace() with version 1 conflicts
-    fake.seed(original); // stores version 1
-    // Update the server version by seeding the fresh resource directly
-    // (bypassing the conflict check that replace() would do)
-    fake.seed(fresh); // stores version 2, making staleModified (version 1) stale
-
-    let reloadedResource: KubernetesObject | null = null;
-    const onReloadAndRedit = (res: KubernetesObject): void => {
-      reloadedResource = res;
-    };
-
-    const { stdin } = render(
-      React.createElement(DiffView, {
-        original,
-        modified: staleModified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit,
-      }),
-    );
-
-    // Enter to apply — 409 conflict (stale version 1 vs server version 2)
+describe('DiffView keyboard routing', () => {
+  it('Enter in diff fires onApply', async () => {
+    const onApply = vi.fn();
+    const { stdin } = renderDiff({ kind: 'diff' }, { onApply });
     await safeWrite(stdin, '\r');
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    await safeWrite(stdin, 'r'); // r to reload-and-redit
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    expect(reloadedResource).not.toBeNull();
-    const rr = reloadedResource as unknown as KubernetesObject;
-    expect(rr.metadata?.resourceVersion).toBe('2');
+    expect(onApply).toHaveBeenCalledOnce();
   });
 
-  it('handles reload when resource has no kind or name (covers ?? fallbacks)', async () => {
-    // Resource with no kind/metadata — covers the original.kind ?? '' and metadata?.name ?? '' branches
-    const original: KubernetesObject = {
-      apiVersion: 'v1',
-      metadata: { resourceVersion: '1' },
-    };
-    const staleModified: KubernetesObject = {
-      apiVersion: 'v1',
-      metadata: { resourceVersion: '1' },
-    };
-    const serverVersion: KubernetesObject = {
-      apiVersion: 'v1',
-      metadata: { resourceVersion: '2' },
-    };
-
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-    fake.seed(serverVersion); // bump server version
-
-    const { stdin } = render(
-      React.createElement(DiffView, {
-        original,
-        modified: staleModified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
-
-    await safeWrite(stdin, '\r'); // Enter to apply — 409 conflict
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    await safeWrite(stdin, 'r'); // r to reload — will call get('', '', null) — notFound
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    // Doesn't crash — the ?? '' fallbacks were exercised
+  it('Enter in error fires onApply (retry)', async () => {
+    const onApply = vi.fn();
+    const { stdin } = renderDiff({ kind: 'error', message: 'x' }, { onApply });
+    await safeWrite(stdin, '\r');
+    expect(onApply).toHaveBeenCalledOnce();
   });
 
-  it('shows error when reload fails', async () => {
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
-    const staleModified = makeConfigMap('cfg', 'default', { env: 'prod' }, '1');
-
-    // Force the conflict first via version mismatch, then forbid get
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-    const serverUpdated = makeConfigMap(
-      'cfg',
-      'default',
-      { env: 'updated' },
-      '1',
-    );
-    await fake.replace(serverUpdated); // bumps to v2
-
-    // Now forbid get so reload fails
-    fake.forbid('ConfigMap');
-
-    const { lastFrame, stdin } = render(
-      React.createElement(DiffView, {
-        original,
-        modified: staleModified,
-        editedYaml: '',
-        kubeClient: fake,
-        onApplied: noop,
-        onCancel: noop,
-        onReloadAndRedit: noop,
-      }),
-    );
-
-    await safeWrite(stdin, '\r'); // Enter to apply — 409 conflict
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    await safeWrite(stdin, 'r'); // r to reload — should fail with forbidden
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('forbidden');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests — FakeKubeClient behaviors (underlying logic tests)
-// ---------------------------------------------------------------------------
-
-describe('FakeKubeClient conflict behavior', () => {
-  it('returns conflict on stale resourceVersion', async () => {
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
-    const staleModified = makeConfigMap('cfg', 'default', { env: 'prod' }, '1');
-
-    const fake = new FakeKubeClient();
-    fake.seed(original);
-
-    // Advance the server version first
-    const serverUpdated = makeConfigMap(
-      'cfg',
-      'default',
-      { env: 'updated' },
-      '1',
-    );
-    await fake.replace(serverUpdated); // version bumps to 2
-
-    // Now replace with stale version 1 should 409
-    const conflictResult = await fake.replace(staleModified);
-    expect(conflictResult.ok).toBe(false);
-    if (!conflictResult.ok) {
-      expect(conflictResult.error.kind).toBe('conflict');
-    }
+  it('Escape in diff fires onCancel', async () => {
+    const onCancel = vi.fn();
+    const { stdin } = renderDiff({ kind: 'diff' }, { onCancel });
+    await safeWrite(stdin, '\x1B');
+    expect(onCancel).toHaveBeenCalledOnce();
   });
 
-  it('returns fresh resource on get', async () => {
-    const original = makeConfigMap('cfg', 'default', { env: 'staging' }, '1');
-    const fresh = makeConfigMap('cfg', 'default', { env: 'updated' }, '2');
+  it('ignores keys while applying', async () => {
+    const onApply = vi.fn();
+    const onCancel = vi.fn();
+    const { stdin } = renderDiff({ kind: 'applying' }, { onApply, onCancel });
+    await safeWrite(stdin, '\r');
+    await safeWrite(stdin, '\x1B');
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
 
-    const fake = new FakeKubeClient();
-    fake.seed(fresh); // seed with updated version
+  it('ignores keys while reloading', async () => {
+    const onReloadAndRedit = vi.fn();
+    const { stdin } = renderDiff({ kind: 'reloading' }, { onReloadAndRedit });
+    await safeWrite(stdin, 'r');
+    expect(onReloadAndRedit).not.toHaveBeenCalled();
+  });
 
-    const getResult = await fake.get('ConfigMap', 'cfg', 'default');
-    expect(getResult.ok).toBe(true);
-    if (getResult.ok) {
-      expect(getResult.value.metadata?.resourceVersion).toBe('2');
-    }
-    void original; // used in test setup
+  it('r in conflict fires onReloadAndRedit', async () => {
+    const onReloadAndRedit = vi.fn();
+    const { stdin } = renderDiff({ kind: 'conflict' }, { onReloadAndRedit });
+    await safeWrite(stdin, 'r');
+    expect(onReloadAndRedit).toHaveBeenCalledOnce();
+  });
+
+  it('R (uppercase) in conflict also fires onReloadAndRedit', async () => {
+    const onReloadAndRedit = vi.fn();
+    const { stdin } = renderDiff({ kind: 'conflict' }, { onReloadAndRedit });
+    await safeWrite(stdin, 'R');
+    expect(onReloadAndRedit).toHaveBeenCalledOnce();
+  });
+
+  it('Escape in conflict fires onCancel (discard)', async () => {
+    const onCancel = vi.fn();
+    const { stdin } = renderDiff({ kind: 'conflict' }, { onCancel });
+    await safeWrite(stdin, '\x1B');
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it('a non-Enter, non-Escape key in diff does nothing', async () => {
+    const onApply = vi.fn();
+    const onCancel = vi.fn();
+    const { stdin } = renderDiff({ kind: 'diff' }, { onApply, onCancel });
+    await safeWrite(stdin, 'x');
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('a non-r, non-Escape key in conflict does nothing', async () => {
+    const onReloadAndRedit = vi.fn();
+    const onCancel = vi.fn();
+    const { stdin } = renderDiff(
+      { kind: 'conflict' },
+      { onReloadAndRedit, onCancel },
+    );
+    await safeWrite(stdin, 'x');
+    expect(onReloadAndRedit).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });

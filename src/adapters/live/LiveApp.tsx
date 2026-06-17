@@ -162,9 +162,12 @@ export function LiveApp({
       case 'yaml':
         return (
           <YamlTab
-            resource={detail.resource.raw}
-            kubeClient={controller.kubeClient()}
-            clock={controller.systemClock()}
+            yaml={controller.yamlForDetail()}
+            kind={detail.resource.kind}
+            title={controller.yamlTitle()}
+            onReplace={controller.yamlReplace}
+            onReload={controller.yamlReload}
+            onOpenInEditor={controller.yamlOpenInEditor}
             onModeChange={controller.yamlModeChanged}
           />
         );

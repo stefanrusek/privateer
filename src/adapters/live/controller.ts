@@ -5,12 +5,28 @@
 // health registry, rollups); this class only routes events and holds state.
 
 import { spawn } from 'node:child_process';
-import { homedir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  unlinkSync,
+} from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import jsYaml from 'js-yaml';
 import { KubeConfig } from '@kubernetes/client-node';
 import type { LaunchOptions } from '../../cli/args.js';
 import type { KubeError } from '../../boundaries/kube-client.js';
-import type { ResourceEvent, ResourceObject } from '../../core/types.js';
+import type {
+  ResourceEvent,
+  ResourceObject,
+  KubernetesObject,
+} from '../../core/types.js';
+import type {
+  YamlReplaceResult,
+  YamlReloadResult,
+} from '../../ui/components/YamlTab.js';
 import type { AppState, FocusRegion } from '../../ui/types.js';
 import type { TableModel } from '../../ui/resource-table-model.js';
 import type { ColumnDef } from '../../resources/columns.js';
@@ -1836,6 +1852,114 @@ export class LiveController {
       this.app = { ...this.app, mode: mode === 'read' ? 'normal' : 'edit' };
       this.bump();
     }
+  };
+
+  // -------------------------------------------------------------------------
+  // YAML editor cluster boundary (B07). The YamlTab component owns the editor
+  // state and the pure apply/conflict reducer; these callbacks perform the only
+  // side effects the reducer asks for. The component never touches kubeClient.
+  // -------------------------------------------------------------------------
+
+  /** The resource currently shown in the YAML tab, serialized to YAML. */
+  yamlForDetail(): string {
+    const raw = this.detail?.resource.raw ?? {};
+    return jsYaml.dump(raw, { lineWidth: -1, indent: 2 });
+  }
+
+  /** A header label for the diff (`Kind/namespace/name`). */
+  yamlTitle(): string {
+    const r = this.detail?.resource;
+    if (r === undefined) {
+      return '';
+    }
+    return `${r.kind}/${r.namespace ?? ''}/${r.name}`;
+  }
+
+  /** Apply the edited YAML via kubeClient.replace; map the result for the reducer. */
+  yamlReplace = async (newYaml: string): Promise<YamlReplaceResult> => {
+    let parsed: unknown;
+    try {
+      parsed = jsYaml.load(newYaml);
+    } catch (err) {
+      return {
+        ok: false,
+        conflict: false,
+        message: err instanceof Error ? err.message : 'invalid YAML',
+      };
+    }
+    const result = await this.client.replace(parsed as KubernetesObject);
+    if (result.ok) {
+      return { ok: true };
+    }
+    if (result.error.kind === 'conflict') {
+      return { ok: false, conflict: true };
+    }
+    return { ok: false, conflict: false, message: result.error.message };
+  };
+
+  /** Re-fetch the YAML-tab resource fresh (reload-&-re-edit after a 409). */
+  yamlReload = async (): Promise<YamlReloadResult> => {
+    const r = this.detail?.resource;
+    if (r === undefined) {
+      return { ok: false, message: 'no resource' };
+    }
+    const result = await this.client.get(r.kind, r.name, r.namespace);
+    if (!result.ok) {
+      return { ok: false, message: result.error.message };
+    }
+    return {
+      ok: true,
+      yaml: jsYaml.dump(result.value, { lineWidth: -1, indent: 2 }),
+    };
+  };
+
+  /**
+   * Pop out to `$EDITOR` (fallback `vi`): write the buffer to a temp file,
+   * suspend the TUI (which tears down mouse reporting — the chunk-04 invariant,
+   * re-asserted here), spawn the editor, read the file back, and best-effort
+   * unlink it. Errors never reach stdout; on failure the input is returned
+   * unchanged. Resolves to the (possibly externally edited) YAML.
+   */
+  yamlOpenInEditor = (yaml: string): Promise<string> => {
+    const r = this.detail?.resource;
+    const tag = r === undefined ? 'resource' : `${r.kind}-${r.name}`;
+    const safeTag = tag.replace(/[^A-Za-z0-9_-]/g, '_');
+    const path = join(
+      tmpdir(),
+      `p9r-edit-${safeTag}-${randomBytes(4).toString('hex')}.yaml`,
+    );
+    return new Promise<string>((resolve) => {
+      let result = yaml;
+      try {
+        writeFileSync(path, yaml, 'utf8');
+      } catch {
+        resolve(yaml);
+        return;
+      }
+      this.suspendRunner(
+        () =>
+          new Promise<void>((done) => {
+            const editor = process.env.EDITOR ?? 'vi';
+            const child = spawn(editor, [path], { stdio: 'inherit' });
+            const finish = (): void => {
+              try {
+                result = readFileSync(path, 'utf8');
+              } catch {
+                // Read failed — keep the original buffer.
+              }
+              try {
+                unlinkSync(path);
+              } catch {
+                // Best-effort cleanup.
+              }
+              resolve(result);
+              done();
+            };
+            child.on('exit', finish);
+            child.on('error', finish);
+          }),
+      );
+    });
   };
 
   toggleShowAllEvents = (): void => {
