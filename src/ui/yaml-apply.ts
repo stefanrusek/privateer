@@ -2,7 +2,7 @@
  * yaml-apply.ts — the pure apply / confirm / conflict state machine for the
  * YAML editor's save flow (navigation-overhaul chunk 07 / B07).
  *
- * Spec: `specs/navigation-overhaul/07-yaml-editor.md` ("Save / confirm /
+ * Spec: `specs/002-navigation-overhaul/07-yaml-editor.md` ("Save / confirm /
  * conflict flow" + "Pure modules" → `src/ui/yaml-apply.ts`). **The ENTIRE
  * transition logic lives here.** The controller (coverage-excluded) only
  * performs the side effects this reducer asks for — `kubeClient.replace` and

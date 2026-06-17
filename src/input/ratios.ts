@@ -2,7 +2,7 @@
  * ratios.ts — pure pane-ratio derivation from a drag cursor position
  * (navigation-overhaul chunk 04 / B04a).
  *
- * Spec: `specs/navigation-overhaul/04-mouse-interaction.md` ("ratios.ts").
+ * Spec: `specs/002-navigation-overhaul/04-mouse-interaction.md` ("ratios.ts").
  *
  * When the user drags one of the two shared border lines, the controller needs
  * the new pane ratio implied by the cursor's absolute position. These helpers

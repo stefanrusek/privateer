@@ -1,7 +1,7 @@
 /**
  * HelpOverlay — the `?` keyboard reference (navigation-overhaul chunk 09 / B09).
  *
- * Spec: `specs/navigation-overhaul/09-help-overlay-revamp.md` +
+ * Spec: `specs/002-navigation-overhaul/09-help-overlay-revamp.md` +
  * `spec/spec-02-navigation-layout.md` §11.
  *
  * The overlay is **prop-driven glue** over the pure `keymap` registry: it renders

@@ -2,7 +2,7 @@
  * accelerator.ts — pure label/keypress helpers for discrete-widget accelerators
  * (navigation-overhaul chunk 04 / B04b).
  *
- * Spec: `specs/navigation-overhaul/04-mouse-interaction.md` ("accelerator.ts" +
+ * Spec: `specs/002-navigation-overhaul/04-mouse-interaction.md` ("accelerator.ts" +
  * "Accelerator keys").
  *
  * A `<Button>`/`<DropdownButton>` may declare an `accelerator`: a single key

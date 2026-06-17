@@ -2,7 +2,7 @@
  * logs-view.ts — the pure projection behind the Logs detail tab's scroll
  * viewport (navigation-overhaul chunk 03).
  *
- * Spec: `specs/navigation-overhaul/03-detail-scroll-viewport.md` ("Logs:
+ * Spec: `specs/002-navigation-overhaul/03-detail-scroll-viewport.md` ("Logs:
  * pause/resume on scroll").
  *
  * Replaces the old "last 200 lines, always tailing" view with a real viewport

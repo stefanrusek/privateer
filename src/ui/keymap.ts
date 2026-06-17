@@ -2,7 +2,7 @@
  * keymap.ts — the SINGLE grouped registry of every keyboard/accelerator binding
  * (navigation-overhaul chunk 09 / B09).
  *
- * Spec: `specs/navigation-overhaul/09-help-overlay-revamp.md` and the canonical
+ * Spec: `specs/002-navigation-overhaul/09-help-overlay-revamp.md` and the canonical
  * `spec/spec-02-navigation-layout.md` §8/§11.
  *
  * Every surface that *documents* keys reads from {@link KEYMAP}:

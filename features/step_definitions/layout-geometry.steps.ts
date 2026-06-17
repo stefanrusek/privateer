@@ -1,6 +1,6 @@
 /**
  * Step definitions for the layout-geometry single-source scenarios
- * (specs/navigation-overhaul/02-region-chrome-layout-math.md). Exercises the
+ * (specs/002-navigation-overhaul/02-region-chrome-layout-math.md). Exercises the
  * pure `computeFrame` module directly — no UI rendering.
  *
  * Distinct step text avoids Cucumber ambiguity with other step files.

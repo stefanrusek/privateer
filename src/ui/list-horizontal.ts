@@ -1,7 +1,7 @@
 /**
  * list-horizontal.ts — pure horizontal-scroll geometry for the resource list.
  *
- * Spec: `specs/navigation-overhaul/05-list-horizontal-scroll.md` (Option A:
+ * Spec: `specs/002-navigation-overhaul/05-list-horizontal-scroll.md` (Option A:
  * natural-width horizontal viewport with pinned leading columns). The status
  * dot + `Name` columns are **pinned** and never scroll; the remaining columns
  * form a horizontal window that the list `←/→` keys pan together. Content is

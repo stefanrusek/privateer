@@ -13,7 +13,7 @@ layout/wrapping bugs, makes the detail pane fully scrollable, makes the YAML
 tab editable, and polishes single-context switching.
 
 This spec set drives an unattended implementation pipeline. Each chunk file is
-**self-contained**: an implementer reading only `specs/navigation-overhaul/`
+**self-contained**: an implementer reading only `specs/002-navigation-overhaul/`
 (plus the codebase and the canonical `spec/`) must be able to build it without
 this conversation.
 

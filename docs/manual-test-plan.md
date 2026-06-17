@@ -2,7 +2,7 @@
 
 An exhaustive, agent-executable manual test plan for the p9r Kubernetes TUI
 (version **0.3.0**). Derived from `src/ui/keymap.ts` (the authoritative binding
-registry), `specs/navigation-overhaul/`, `spec/spec-0*.md`, and `features/`.
+registry), `specs/002-navigation-overhaul/`, `spec/spec-0*.md`, and `features/`.
 
 Each test has an **ID**, **Area**, **Preconditions**, **Steps** (exact
 keys/mouse), **Expected** (specific/checkable), and a blank **Result** for the

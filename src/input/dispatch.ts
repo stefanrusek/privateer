@@ -2,7 +2,7 @@
  * dispatch.ts — the single, pure mouse-routing decision for p9r
  * (navigation-overhaul chunk 04 / B04a).
  *
- * Spec: `specs/navigation-overhaul/04-mouse-interaction.md` ("dispatch.ts").
+ * Spec: `specs/002-navigation-overhaul/04-mouse-interaction.md` ("dispatch.ts").
  *
  * One SGR stdin stream feeds {@link parseSgrMouse}; every resulting
  * {@link MouseEvent} (0-based, after the controller normalizes the 1-based SGR

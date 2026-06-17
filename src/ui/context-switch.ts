@@ -2,7 +2,7 @@
  * context-switch.ts — pure switch-status state machine (navigation-overhaul
  * chunk 08 / B08).
  *
- * Spec: `specs/navigation-overhaul/08-context-switching-polish.md` §3
+ * Spec: `specs/002-navigation-overhaul/08-context-switching-polish.md` §3
  * ("Connecting / error feedback") and "Where the logic lives".
  *
  * Switching kube context is no longer assumed instant. While a switch is in
