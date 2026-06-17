@@ -98,7 +98,12 @@ export function HelpOverlay({
   const bar = scrollbar(scrollOffset, lines.length, viewportHeight);
 
   return (
-    <Box flexDirection="column" borderStyle="double" padding={1}>
+    <Box flexDirection="column" borderStyle="double" paddingX={1}>
+      {/* Ink clips the first interior text cell of a bordered box, which dropped
+          the title's leading "K". A sacrificial blank first row (its clipped
+          leading space is invisible) keeps the title intact and doubles as the
+          top padding (navigation-overhaul chunk 09). */}
+      <Text> </Text>
       <Text bold>Keyboard Reference</Text>
       <Text> </Text>
       <Box flexDirection="row">
