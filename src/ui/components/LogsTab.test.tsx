@@ -179,4 +179,35 @@ describe('LogsTab', () => {
     });
     expect(frame).toContain('beta target');
   });
+
+  it('highlights every match, not just the current one', () => {
+    // All three lines contain "target"; only the first is "current" but every
+    // matching line must still be present (bold+underline) in the frame.
+    const lines = ['target one', 'no match here', 'target two', 'target three'];
+    const frame = frameOf({
+      lines,
+      search: runSearch(lines, 'target'),
+      searchFocused: false,
+    });
+    expect(frame).toContain('target one');
+    expect(frame).toContain('target two');
+    expect(frame).toContain('target three');
+    expect(frame).toContain('no match here');
+  });
+
+  it('shows "0/0 — no matches" when a focused search has no matches', () => {
+    const frame = frameOf({
+      search: runSearch(['a', 'b'], 'zzz'),
+      searchFocused: true,
+    });
+    expect(frame).toContain('0/0 — no matches');
+  });
+
+  it('shows "0/0 — no matches" in the unfocused summary too', () => {
+    const frame = frameOf({
+      search: runSearch(['a'], 'zzz'),
+      searchFocused: false,
+    });
+    expect(frame).toContain('0/0 — no matches');
+  });
 });

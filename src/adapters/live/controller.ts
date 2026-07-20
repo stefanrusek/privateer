@@ -178,6 +178,7 @@ import {
   prevMatch,
   type SearchState,
 } from '../../logs/search.js';
+import { routeLogsSearchKey } from '../../logs/search-input.js';
 import {
   LINE_OPTIONS,
   DEFAULT_LINE_OPTION,
@@ -3296,6 +3297,12 @@ export class LiveController {
     // A restarted stream tails the newest lines again.
     l.live = true;
     l.offset = 0;
+    // Search state resets on container switch (and any other stream restart,
+    // since the ring buffer it searched is gone) but survives wrap/timestamps
+    // toggles, which never call this.
+    l.searchQuery = '';
+    l.searchCurrent = 0;
+    l.searchFocused = false;
     const adapter = new LogStreamAdapter(this.kc);
     const params = streamParamsFor(l.limit);
     l.stop = adapter.tail(
@@ -3368,31 +3375,47 @@ export class LiveController {
       return false;
     }
 
-    if (l.searchFocused) {
-      if (key.escape) {
+    // Exclusive-capture routing for the inline search bar (P9R-0004): while
+    // focused every keystroke is decided by the pure router below, which
+    // never returns `pass-through` — this is what stops typed characters
+    // (e.g. the `P` in "PASS") from being reinterpreted as Logs hotkeys.
+    const searchRoute = routeLogsSearchKey(input, key, {
+      focused: l.searchFocused,
+      query: l.searchQuery,
+    });
+    switch (searchRoute.kind) {
+      case 'close':
         l.searchQuery = '';
+        l.searchCurrent = 0;
         l.searchFocused = false;
         this.bump();
         return true;
-      }
-      if (key.return) {
-        l.searchFocused = false;
-        this.bump();
+      case 'commit':
+        this.commitLogsSearch();
         return true;
-      }
-      if (key.backspace || key.delete) {
-        l.searchQuery = l.searchQuery.slice(0, -1);
+      case 'append':
+        l.searchQuery = searchRoute.query;
         l.searchCurrent = 0;
         this.bump();
         return true;
-      }
-      if (input.length >= 1 && !key.ctrl && !key.meta) {
-        l.searchQuery += input;
+      case 'backspace':
+        l.searchQuery = searchRoute.query;
         l.searchCurrent = 0;
         this.bump();
         return true;
-      }
-      return true;
+      case 'ignored':
+        return true;
+      case 'clear-active':
+        l.searchQuery = '';
+        l.searchCurrent = 0;
+        this.bump();
+        return true;
+      case 'open':
+        l.searchFocused = true;
+        this.bump();
+        return true;
+      case 'pass-through':
+        break;
     }
 
     // An open inline dropdown (B06) captures navigation keys before scrolling:
@@ -3410,11 +3433,6 @@ export class LiveController {
       return true;
     }
 
-    if (input === '/') {
-      l.searchFocused = true;
-      this.bump();
-      return true;
-    }
     if (input === 'n' && l.searchQuery !== '') {
       this.jumpLogsSearch('next');
       return true;
@@ -3761,6 +3779,18 @@ export class LiveController {
     if (view === null) {
       return;
     }
+    // A wrap happens stepping past either end of the match list; flag it with
+    // a transient confirmation (cleared on the next keypress like any other).
+    const wrapped =
+      view.search.matches.length > 1 &&
+      ((dir === 'next' &&
+        view.search.current === view.search.matches.length - 1) ||
+        (dir === 'prev' && view.search.current === 0));
+    if (wrapped) {
+      this.showLogsConfirmation(
+        dir === 'next' ? '↻ wrapped to first match' : '↻ wrapped to last match',
+      );
+    }
     const stepped =
       dir === 'next' ? nextMatch(view.search) : prevMatch(view.search);
     l.searchCurrent = stepped.current;
@@ -3782,6 +3812,59 @@ export class LiveController {
       this.logsViewportHeight(),
     );
     this.applyLogsOffset({ offset: next });
+  }
+
+  /**
+   * Commit the in-progress search (Enter): drop focus but keep the query
+   * active for highlighting and `n`/`N`, jump to the match nearest the
+   * current viewport, and pause live tail while the search stays active
+   * (Spec: "live tail pauses while a search is active").
+   */
+  private commitLogsSearch(): void {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.searchFocused = false;
+    if (l.searchQuery === '') {
+      this.bump();
+      return;
+    }
+    const display = projectLogsView({
+      raw: l.ring.toArray(),
+      offset: l.offset,
+      viewportHeight: this.logsViewportHeight(),
+      timestamps: l.timestamps,
+      live: false,
+    }).display;
+    const matches = runSearch(display, l.searchQuery).matches;
+    if (matches.length === 0) {
+      l.searchCurrent = 0;
+      this.bump();
+      return;
+    }
+    // "jumps to the nearest match" — nearest to the currently visible offset,
+    // not necessarily the first match in the buffer.
+    let nearestIdx = 0;
+    let bestDistance = Infinity;
+    matches.forEach((line, idx) => {
+      const distance = Math.abs(line - l.offset);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        nearestIdx = idx;
+      }
+    });
+    l.searchCurrent = nearestIdx;
+    const matchLine = matches[nearestIdx] ?? -1;
+    const next = offsetForMatch(
+      l.offset,
+      matchLine,
+      display.length,
+      this.logsViewportHeight(),
+    );
+    l.offset = clampOffset(next, display.length, this.logsViewportHeight());
+    l.live = false;
+    this.bump();
   }
 
   private async downloadCurrentLogs(): Promise<void> {

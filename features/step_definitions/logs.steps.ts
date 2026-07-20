@@ -15,8 +15,11 @@ import { RingBuffer } from '../../src/logs/ring-buffer.js';
 import {
   runSearch,
   emptySearch,
+  nextMatch,
+  prevMatch,
   type SearchState,
 } from '../../src/logs/search.js';
+import { routeLogsSearchKey } from '../../src/logs/search-input.js';
 import {
   streamParamsFor,
   type LineOptionId,
@@ -54,6 +57,7 @@ declare module '../support/world.js' {
     logsLive: boolean;
     logsNewLinesAvailable: boolean;
     logsSearch: SearchState;
+    logsSearchFocused: boolean;
     logsConfirmation: string | undefined;
     logsFrame: string;
     logsContainerItems: LogsContainerItem[];
@@ -79,6 +83,7 @@ Before(function (this: PrivateerWorld) {
   this.logsLive = true;
   this.logsNewLinesAvailable = false;
   this.logsSearch = emptySearch();
+  this.logsSearchFocused = false;
   this.logsConfirmation = undefined;
   this.logsFrame = '';
   this.logsContainerItems = [];
@@ -122,7 +127,7 @@ function renderLogs(world: PrivateerWorld): void {
       lineLimitLabel: '100 lines',
       previous: false,
       search: world.logsSearch,
-      searchFocused: false,
+      searchFocused: world.logsSearchFocused,
       newLinesAvailable: world.logsNewLinesAvailable,
       ...(world.logsConfirmation !== undefined
         ? { confirmation: world.logsConfirmation }
@@ -301,6 +306,94 @@ When(
   'I search the logs for {string}',
   function (this: PrivateerWorld, query: string) {
     this.logsSearch = runSearch(this.logsBuffer.toArray(), query);
+    renderLogs(this);
+  },
+);
+
+When('I open the log search bar', function (this: PrivateerWorld) {
+  const route = routeLogsSearchKey(
+    '/',
+    {
+      escape: false,
+      return: false,
+      backspace: false,
+      delete: false,
+      ctrl: false,
+      meta: false,
+    },
+    { focused: this.logsSearchFocused, query: this.logsSearch.query },
+  );
+  assert.equal(route.kind, 'open');
+  this.logsSearchFocused = true;
+  renderLogs(this);
+});
+
+When(
+  'I type {string} into the log search bar',
+  function (this: PrivateerWorld, text: string) {
+    for (const ch of text) {
+      const route = routeLogsSearchKey(
+        ch,
+        {
+          escape: false,
+          return: false,
+          backspace: false,
+          delete: false,
+          ctrl: false,
+          meta: false,
+        },
+        { focused: this.logsSearchFocused, query: this.logsSearch.query },
+      );
+      // Exclusive capture (P9R-0004): every keystroke while focused must be
+      // absorbed into the query — never fall through to a Logs hotkey.
+      if (route.kind !== 'append') {
+        throw new Error(
+          `expected "${ch}" to be captured by the search bar, got ${route.kind}`,
+        );
+      }
+      this.logsSearch = { ...this.logsSearch, query: route.query };
+    }
+    renderLogs(this);
+  },
+);
+
+When('I press Enter in the log search bar', function (this: PrivateerWorld) {
+  this.logsSearchFocused = false;
+  this.logsSearch = runSearch(this.logsBuffer.toArray(), this.logsSearch.query);
+  renderLogs(this);
+});
+
+When('I press Esc in the log search bar', function (this: PrivateerWorld) {
+  const route = routeLogsSearchKey(
+    '',
+    {
+      escape: true,
+      return: false,
+      backspace: false,
+      delete: false,
+      ctrl: false,
+      meta: false,
+    },
+    { focused: this.logsSearchFocused, query: this.logsSearch.query },
+  );
+  assert.ok(
+    route.kind === 'close' || route.kind === 'clear-active',
+    `expected Esc to close or clear the search, got ${route.kind}`,
+  );
+  this.logsSearchFocused = false;
+  this.logsSearch = emptySearch();
+  renderLogs(this);
+});
+
+When('I jump to the next log search match', function (this: PrivateerWorld) {
+  this.logsSearch = nextMatch(this.logsSearch);
+  renderLogs(this);
+});
+
+When(
+  'I jump to the previous log search match',
+  function (this: PrivateerWorld) {
+    this.logsSearch = prevMatch(this.logsSearch);
     renderLogs(this);
   },
 );

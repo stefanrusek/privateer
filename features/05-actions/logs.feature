@@ -88,6 +88,44 @@ Feature: LogsTab — pod log streaming, container selection, and download
     And I search the logs for "retry"
     Then the logs frame contains "1/2"
 
+  Scenario: A search with no matches shows the exact no-matches format
+    Given an open LogsTab for pod "order-api-7d9f" container "order-api"
+    When the stream delivers the log lines "first retry,second retry,done"
+    And I search the logs for "nope"
+    Then the logs frame contains "0/0 — no matches"
+
+  Scenario: Typing Logs-tab hotkey letters into an open search bar captures them all (P9R-0004)
+    Given an open LogsTab for pod "order-api-7d9f" container "order-api"
+    When the stream delivers the log lines "PASS the test,other line"
+    And I open the log search bar
+    And I type "PASS" into the log search bar
+    And I press Enter in the log search bar
+    Then the logs frame contains "1/1"
+
+  Scenario: Esc closes an active search and clears its highlights
+    Given an open LogsTab for pod "order-api-7d9f" container "order-api"
+    When the stream delivers the log lines "first retry,second retry,done"
+    And I search the logs for "retry"
+    And I press Esc in the log search bar
+    Then the logs frame does not contain "1/2"
+    And the logs frame does not contain "Search logs"
+
+  Scenario: n wraps from the last match back to the first
+    Given an open LogsTab for pod "order-api-7d9f" container "order-api"
+    When the stream delivers the log lines "retry one,retry two,done"
+    And I search the logs for "retry"
+    And I jump to the next log search match
+    Then the logs frame contains "2/2"
+    When I jump to the next log search match
+    Then the logs frame contains "1/2"
+
+  Scenario: N wraps from the first match back to the last
+    Given an open LogsTab for pod "order-api-7d9f" container "order-api"
+    When the stream delivers the log lines "retry one,retry two,done"
+    And I search the logs for "retry"
+    And I jump to the previous log search match
+    Then the logs frame contains "2/2"
+
   Scenario: Changing the line limit restarts the stream from the new offset
     Given an open LogsTab for pod "order-api-7d9f" container "order-api"
     When I choose the line-limit option "since-1h"
