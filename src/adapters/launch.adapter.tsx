@@ -21,6 +21,7 @@ import type { RawConfig } from '../boundaries/config-store.js';
 import { LiveController } from './live/controller.js';
 import { LiveApp } from './live/LiveApp.js';
 import { installMouseExitGuards } from './live/mouse-lifecycle.js';
+import { installStdinSequenceSplitter } from './live/stdin-splitter-bridge.js';
 import {
   TransformersModelDownloader,
   isModelCached,
@@ -268,6 +269,12 @@ function downloadThenLaunch(
 }
 
 export function productionLaunch(options: LaunchOptions): void {
+  // Rapid keypresses (arrow-key auto-repeat, a terminal flushing queued
+  // input) can arrive as one raw stdin read carrying several complete
+  // escape sequences; Ink's own parser only recognizes the first and drops
+  // the rest (P9R-0014). Patch stdin.read() before any `render()` call so
+  // every screen (chooser, first-run, live app) sees every keypress.
+  installStdinSequenceSplitter(process.stdin);
   try {
     const raw = readRawConfig();
     const config = parseConfig(raw);
