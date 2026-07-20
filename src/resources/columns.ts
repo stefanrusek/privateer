@@ -8,6 +8,7 @@
 
 import type { KubernetesObject } from '../core/types.js';
 import { formatAge } from './age.js';
+import { formatCpuQuantity, formatMemoryQuantity } from './quantity.js';
 
 export type ColumnAlign = 'left' | 'right' | 'center';
 
@@ -668,8 +669,30 @@ const NODE_COLS: ColumnDef[] = [
       return typeof v === 'string' ? v : '';
     },
   },
-  { header: 'CPU', width: 10, accessor: () => '' },
-  { header: 'Memory', width: 10, accessor: () => '' },
+  {
+    header: 'CPU',
+    width: 10,
+    accessor: (raw) => {
+      const capacity = raw.status?.capacity;
+      if (capacity === null || typeof capacity !== 'object') {
+        return '';
+      }
+      const cpu = (capacity as Record<string, unknown>).cpu;
+      return typeof cpu === 'string' ? formatCpuQuantity(cpu) : '';
+    },
+  },
+  {
+    header: 'Memory',
+    width: 10,
+    accessor: (raw) => {
+      const capacity = raw.status?.capacity;
+      if (capacity === null || typeof capacity !== 'object') {
+        return '';
+      }
+      const memory = (capacity as Record<string, unknown>).memory;
+      return typeof memory === 'string' ? formatMemoryQuantity(memory) : '';
+    },
+  },
   AGE_COL,
 ];
 

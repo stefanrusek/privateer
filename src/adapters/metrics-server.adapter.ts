@@ -17,6 +17,12 @@ import type {
 } from '../boundaries/metrics-source.js';
 import { ok, err, type Result } from '../core/result.js';
 import { buildKubeRequestOptions } from './kube-client.adapter.js';
+import { parseCpuMillicores, parseMemoryBytes } from '../resources/quantity.js';
+
+// Parsing logic for CPU/memory quantities lives in the pure, covered
+// src/resources/quantity.ts module; re-exported here so existing callers
+// (e.g. the composition root) keep importing it from the adapter.
+export { parseCpuMillicores, parseMemoryBytes };
 
 /** Parsed current usage for one pod or node. */
 export interface UsageSample {
@@ -24,40 +30,6 @@ export interface UsageSample {
   namespace: string | null;
   cpuMillicores: number;
   memoryBytes: number;
-}
-
-/** Parse a Kubernetes CPU quantity ("123m", "1", "12345678n") to millicores. */
-export function parseCpuMillicores(quantity: string): number {
-  if (quantity.endsWith('n')) {
-    return Number(quantity.slice(0, -1)) / 1_000_000;
-  }
-  if (quantity.endsWith('u')) {
-    return Number(quantity.slice(0, -1)) / 1_000;
-  }
-  if (quantity.endsWith('m')) {
-    return Number(quantity.slice(0, -1));
-  }
-  return Number(quantity) * 1000;
-}
-
-/** Parse a Kubernetes memory quantity ("123Mi", "1Gi", "12345") to bytes. */
-export function parseMemoryBytes(quantity: string): number {
-  const suffixes: Record<string, number> = {
-    Ki: 1024,
-    Mi: 1024 ** 2,
-    Gi: 1024 ** 3,
-    Ti: 1024 ** 4,
-    k: 1000,
-    M: 1000 ** 2,
-    G: 1000 ** 3,
-    T: 1000 ** 4,
-  };
-  for (const [suffix, mult] of Object.entries(suffixes)) {
-    if (quantity.endsWith(suffix)) {
-      return Number(quantity.slice(0, -suffix.length)) * mult;
-    }
-  }
-  return Number(quantity);
 }
 
 interface MetricsItem {

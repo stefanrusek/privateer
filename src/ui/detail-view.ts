@@ -22,6 +22,7 @@ import type { MetricsTier } from '../metrics/discovery.js';
 import type { ViewLine } from './scroll-viewport.js';
 import type { EventRow } from './components/EventsTab.js';
 import { formatAge } from '../resources/age.js';
+import { formatMemoryQuantity } from '../resources/quantity.js';
 import { tokenizeLine } from '../yaml/highlight.js';
 import { redactSecret } from '../yaml/redact.js';
 import { renderTimeseriesChart } from '../charts/timeseries.js';
@@ -272,10 +273,15 @@ function buildNodeSections(
   const readyCond = conditions.find(
     (c) => (c as Record<string, unknown>).type === 'Ready',
   ) as Record<string, unknown> | undefined;
-  const condRows: KvRow[] = conditions.map((c) => {
-    const co = c as Record<string, unknown>;
-    return { key: str(co.type ?? ''), value: str(co.status ?? '') };
-  });
+  // Ready is rendered first, explicitly, then every other (pressure)
+  // condition once each — the raw conditions array already includes Ready,
+  // so it must be excluded here to avoid a duplicate "Ready" row.
+  const condRows: KvRow[] = conditions
+    .filter((c) => (c as Record<string, unknown>).type !== 'Ready')
+    .map((c) => {
+      const co = c as Record<string, unknown>;
+      return { key: str(co.type ?? ''), value: str(co.status ?? '') };
+    });
   const statusSec: OverviewSection = {
     title: 'STATUS',
     rows: [
@@ -299,7 +305,7 @@ function buildNodeSections(
       },
       {
         key: 'Memory',
-        value: `${str(allocatable.memory ?? '')} allocatable / ${str(capacity.memory ?? '')} capacity`,
+        value: `${formatMemoryQuantity(str(allocatable.memory ?? ''))} allocatable / ${formatMemoryQuantity(str(capacity.memory ?? ''))} capacity`,
       },
       {
         key: 'Pods',

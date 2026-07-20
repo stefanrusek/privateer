@@ -773,11 +773,37 @@ describe('getColumns', () => {
       expect(col?.accessor(r, NOW)).toBe('');
     });
 
-    it('CPU and Memory accessors return empty (no metrics integration)', () => {
+    it('CPU and Memory accessors render humanized capacity', () => {
+      const cpuCol = getColumns('Node')[4];
+      const memCol = getColumns('Node')[5];
+      const r = raw({
+        status: { capacity: { cpu: '72', memory: '264006104Ki' } },
+      });
+      expect(cpuCol?.accessor(r, NOW)).toBe('72');
+      expect(memCol?.accessor(r, NOW)).toBe('251.8Gi');
+    });
+
+    it('CPU and Memory accessors — no status.capacity return empty', () => {
       const cpuCol = getColumns('Node')[4];
       const memCol = getColumns('Node')[5];
       expect(cpuCol?.accessor(raw(), NOW)).toBe('');
       expect(memCol?.accessor(raw(), NOW)).toBe('');
+    });
+
+    it('CPU and Memory accessors — null capacity returns empty', () => {
+      const cpuCol = getColumns('Node')[4];
+      const memCol = getColumns('Node')[5];
+      const r = raw({ status: { capacity: null } });
+      expect(cpuCol?.accessor(r, NOW)).toBe('');
+      expect(memCol?.accessor(r, NOW)).toBe('');
+    });
+
+    it('CPU and Memory accessors — non-string values return empty', () => {
+      const cpuCol = getColumns('Node')[4];
+      const memCol = getColumns('Node')[5];
+      const r = raw({ status: { capacity: { cpu: 72, memory: 1234 } } });
+      expect(cpuCol?.accessor(r, NOW)).toBe('');
+      expect(memCol?.accessor(r, NOW)).toBe('');
     });
   });
 
