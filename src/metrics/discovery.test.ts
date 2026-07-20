@@ -38,6 +38,28 @@ function makeServiceMonitor(name: string, targetUrl: string): KubernetesObject {
   };
 }
 
+function makeService(
+  name: string,
+  namespace: string,
+  options: {
+    ports?: (Record<string, unknown> | null)[];
+    labels?: Record<string, string>;
+  } = {},
+): KubernetesObject {
+  return {
+    kind: 'Service',
+    apiVersion: 'v1',
+    metadata: {
+      name,
+      namespace,
+      ...(options.labels !== undefined ? { labels: options.labels } : {}),
+    },
+    spec: {
+      ports: options.ports ?? [{ port: 9090 }],
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
@@ -75,6 +97,11 @@ describe('discoverMetricsSource', () => {
     metricsServer.setReachable(true);
     envVars = new Map();
   });
+
+  /** Mark a candidate URL as reachable (probeSeries().ok === true). */
+  function markReachable(url: string): void {
+    probeResults.set(url, new FakeMetricsSource());
+  }
 
   // -------------------------------------------------------------------------
   // Tier 1: config override
@@ -252,10 +279,342 @@ describe('discoverMetricsSource', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Tier 4: standard namespace probe
+  // Tier 4: Service scan (P9R-0008)
   // -------------------------------------------------------------------------
 
-  describe('tier 4: standard namespace probe', () => {
+  describe('tier 4: Service scan', () => {
+    it('resolves a plain Service named "prometheus" with port 9090 (P9R-0008 repro)', async () => {
+      kubeClient.seed(makeService('prometheus', 'default'));
+      markReachable('http://prometheus.default:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.tier).toBe('prometheus');
+      expect(result.url).toBe('http://prometheus.default:9090');
+      expect(result.sourceLabel).toBe('service-scan');
+    });
+
+    it('matches prometheus-server and prometheus-operated by name', async () => {
+      kubeClient.seed(makeService('prometheus-server', 'ns1'));
+      markReachable('http://prometheus-server.ns1:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus-server.ns1:9090');
+    });
+
+    it('matches any Service exposing port 9090 regardless of name', async () => {
+      kubeClient.seed(makeService('metrics-thing', 'apps'));
+      markReachable('http://metrics-thing.apps:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://metrics-thing.apps:9090');
+      expect(result.sourceLabel).toBe('service-scan');
+    });
+
+    it('matches a prometheus-named Service with a port named "http"', async () => {
+      kubeClient.seed(
+        makeService('my-prometheus', 'apps', {
+          ports: [{ port: 8080, name: 'http' }],
+        }),
+      );
+      markReachable('http://my-prometheus.apps:8080');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://my-prometheus.apps:8080');
+    });
+
+    it('matches a prometheus-named Service with a port named "web"', async () => {
+      kubeClient.seed(
+        makeService('my-prometheus', 'apps', {
+          ports: [{ port: 8081, name: 'web' }],
+        }),
+      );
+      markReachable('http://my-prometheus.apps:8081');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://my-prometheus.apps:8081');
+    });
+
+    it('matches a prometheus-named Service with a port named "http-web"', async () => {
+      kubeClient.seed(
+        makeService('my-prometheus', 'apps', {
+          ports: [{ port: 8082, name: 'http-web' }],
+        }),
+      );
+      markReachable('http://my-prometheus.apps:8082');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://my-prometheus.apps:8082');
+    });
+
+    it('does not match a non-prometheus-named Service with a named http port but no 9090', async () => {
+      kubeClient.seed(
+        makeService('web-app', 'apps', {
+          ports: [{ port: 8080, name: 'http' }],
+        }),
+      );
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.sourceLabel).toBe('metrics-server');
+    });
+
+    it('prefers known operator/helm labels over name and port matches', async () => {
+      kubeClient.seed(makeService('port-only', 'zzz'));
+      kubeClient.seed(makeService('prometheus', 'zzz'));
+      kubeClient.seed(
+        makeService('labeled-prom', 'zzz', {
+          labels: { 'app.kubernetes.io/name': 'prometheus' },
+        }),
+      );
+      markReachable('http://labeled-prom.zzz:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://labeled-prom.zzz:9090');
+    });
+
+    it('recognizes app.kubernetes.io/managed-by: prometheus-operator', async () => {
+      kubeClient.seed(
+        makeService('prometheus-operated', 'apps', {
+          labels: { 'app.kubernetes.io/managed-by': 'prometheus-operator' },
+        }),
+      );
+      markReachable('http://prometheus-operated.apps:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus-operated.apps:9090');
+    });
+
+    it('recognizes operated-prometheus: "true"', async () => {
+      kubeClient.seed(
+        makeService('op-prom', 'apps', {
+          labels: { 'operated-prometheus': 'true' },
+        }),
+      );
+      markReachable('http://op-prom.apps:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.sourceLabel).toBe('service-scan');
+    });
+
+    it('recognizes app: prometheus label', async () => {
+      kubeClient.seed(
+        makeService('op-prom2', 'apps', {
+          labels: { app: 'prometheus' },
+        }),
+      );
+      markReachable('http://op-prom2.apps:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.sourceLabel).toBe('service-scan');
+    });
+
+    it('prefers name match over bare port-9090 match', async () => {
+      kubeClient.seed(makeService('random-svc', 'zzz'));
+      kubeClient.seed(
+        makeService('prometheus', 'zzz', {
+          ports: [{ port: 1234 }],
+        }),
+      );
+      markReachable('http://prometheus.zzz:1234');
+      markReachable('http://random-svc.zzz:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus.zzz:1234');
+    });
+
+    it('breaks ties by namespace order: monitoring before default before rest', async () => {
+      kubeClient.seed(makeService('prometheus', 'zzz-ns'));
+      kubeClient.seed(makeService('prometheus', 'default'));
+      kubeClient.seed(makeService('prometheus', 'monitoring'));
+      markReachable('http://prometheus.zzz-ns:9090');
+      markReachable('http://prometheus.default:9090');
+      markReachable('http://prometheus.monitoring:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus.monitoring:9090');
+    });
+
+    it('breaks ties within "rest" namespaces alphabetically', async () => {
+      kubeClient.seed(makeService('prometheus', 'zzz-ns'));
+      kubeClient.seed(makeService('prometheus', 'aaa-ns'));
+      markReachable('http://prometheus.zzz-ns:9090');
+      markReachable('http://prometheus.aaa-ns:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus.aaa-ns:9090');
+    });
+
+    it('breaks ties within "rest" namespaces alphabetically (reverse seed order)', async () => {
+      kubeClient.seed(makeService('prometheus', 'aaa-ns'));
+      kubeClient.seed(makeService('prometheus', 'zzz-ns'));
+      markReachable('http://prometheus.aaa-ns:9090');
+      markReachable('http://prometheus.zzz-ns:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus.aaa-ns:9090');
+    });
+
+    it('uses the named http-ish port for a labeled Service with no port 9090', async () => {
+      kubeClient.seed(
+        makeService('labeled-named-port', 'default', {
+          ports: [{ port: 7777, name: 'web' }],
+          labels: { app: 'prometheus' },
+        }),
+      );
+      markReachable('http://labeled-named-port.default:7777');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://labeled-named-port.default:7777');
+    });
+
+    it('uses the first port for a labeled Service with no 9090 or named http port', async () => {
+      kubeClient.seed(
+        makeService('labeled-other-port', 'default', {
+          ports: [{ port: 5555, name: 'grpc' }],
+          labels: { app: 'prometheus' },
+        }),
+      );
+      markReachable('http://labeled-other-port.default:5555');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://labeled-other-port.default:5555');
+    });
+
+    it('uses the named http-ish port for a name-matched Service with no port 9090', async () => {
+      kubeClient.seed(
+        makeService('prometheus-server', 'default', {
+          ports: [{ port: 7778, name: 'http' }],
+        }),
+      );
+      markReachable('http://prometheus-server.default:7778');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus-server.default:7778');
+    });
+
+    it('uses the first port for a name-matched Service with no 9090 or named http port', async () => {
+      kubeClient.seed(
+        makeService('prometheus-server', 'default', {
+          ports: [{ port: 5556, name: 'grpc' }],
+        }),
+      );
+      markReachable('http://prometheus-server.default:5556');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus-server.default:5556');
+    });
+
+    it('falls back to port 9090 for a labeled Service with no ports at all', async () => {
+      kubeClient.seed(
+        makeService('labeled-no-ports', 'default', {
+          ports: [],
+          labels: { app: 'prometheus' },
+        }),
+      );
+      markReachable('http://labeled-no-ports.default:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://labeled-no-ports.default:9090');
+    });
+
+    it('breaks ties by name when rank and namespace are equal', async () => {
+      kubeClient.seed(makeService('prometheus-server', 'apps'));
+      kubeClient.seed(makeService('prometheus-operated', 'apps'));
+      kubeClient.seed(makeService('prometheus', 'apps'));
+      markReachable('http://prometheus-server.apps:9090');
+      markReachable('http://prometheus-operated.apps:9090');
+      markReachable('http://prometheus.apps:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      // all three name-match at rank 2, same namespace: alphabetically first wins
+      expect(result.url).toBe('http://prometheus.apps:9090');
+    });
+
+    it('breaks ties by name when rank and namespace are equal (reverse seed order)', async () => {
+      kubeClient.seed(makeService('prometheus', 'apps'));
+      kubeClient.seed(makeService('prometheus-operated', 'apps'));
+      kubeClient.seed(makeService('prometheus-server', 'apps'));
+      markReachable('http://prometheus.apps:9090');
+      markReachable('http://prometheus-operated.apps:9090');
+      markReachable('http://prometheus-server.apps:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus.apps:9090');
+    });
+
+    it('falls through to the next candidate when the first is unreachable', async () => {
+      const badUrl = 'http://prometheus.monitoring:9090';
+      const bad = new FakeMetricsSource();
+      bad.setReachable(false);
+      probeResults.set(badUrl, bad);
+      kubeClient.seed(makeService('prometheus', 'monitoring'));
+      kubeClient.seed(makeService('prometheus-server', 'default'));
+      markReachable('http://prometheus-server.default:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus-server.default:9090');
+      expect(result.sourceLabel).toBe('service-scan');
+    });
+
+    it('falls through to later tiers when no Service candidate is reachable', async () => {
+      const badUrl = 'http://prometheus.default:9090';
+      const bad = new FakeMetricsSource();
+      bad.setReachable(false);
+      probeResults.set(badUrl, bad);
+      kubeClient.seed(makeService('prometheus', 'default'));
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.sourceLabel).toBe('metrics-server');
+    });
+
+    it('ignores Services with no matching name, label, or port', async () => {
+      kubeClient.seed(
+        makeService('unrelated', 'default', { ports: [{ port: 80 }] }),
+      );
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.sourceLabel).toBe('metrics-server');
+    });
+
+    it('ignores Services with no ports', async () => {
+      kubeClient.seed(makeService('unrelated', 'default', { ports: [] }));
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.sourceLabel).toBe('metrics-server');
+    });
+
+    it('ignores malformed port entries (non-object, non-numeric port)', async () => {
+      kubeClient.seed(
+        makeService('prometheus', 'default', {
+          ports: [null, { port: 'not-a-number' }, { name: 'http' }],
+        }),
+      );
+      markReachable('http://prometheus.default:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      // name match still applies even with unusable ports; falls back to 9090
+      expect(result.url).toBe('http://prometheus.default:9090');
+    });
+
+    it('ignores Services with non-array ports', async () => {
+      kubeClient.seed({
+        kind: 'Service',
+        apiVersion: 'v1',
+        metadata: { name: 'prometheus', namespace: 'default' },
+        spec: { ports: 'not-an-array' },
+      });
+      markReachable('http://prometheus.default:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      // name match still applies with no usable ports; falls back to 9090
+      expect(result.url).toBe('http://prometheus.default:9090');
+    });
+
+    it('ignores Services with no spec', async () => {
+      kubeClient.seed({
+        kind: 'Service',
+        apiVersion: 'v1',
+        metadata: { name: 'prometheus', namespace: 'default' },
+      });
+      markReachable('http://prometheus.default:9090');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.url).toBe('http://prometheus.default:9090');
+    });
+
+    it('ignores Services with no name or namespace metadata', async () => {
+      kubeClient.seed({
+        kind: 'Service',
+        apiVersion: 'v1',
+        metadata: {},
+        spec: { ports: [{ port: 9090 }] },
+      });
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.sourceLabel).toBe('metrics-server');
+    });
+
+    it('skips when Service list returns forbidden', async () => {
+      kubeClient.forbid('Service');
+      const result = await discoverMetricsSource(buildDeps());
+      expect(result.sourceLabel).toBe('metrics-server');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Tier 5: standard namespace probe
+  // -------------------------------------------------------------------------
+
+  describe('tier 5: standard namespace probe', () => {
     it('resolves prometheus-operated.monitoring:9090', async () => {
       const url = 'http://prometheus-operated.monitoring:9090';
       probeResults.set(url, new FakeMetricsSource()); // reachable by default

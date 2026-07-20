@@ -18,6 +18,7 @@ import type {
 import type { StateStore } from '../../store/state-store.js';
 import type { ResourceObject } from '../../core/types.js';
 import { isRuleSuppressed } from '../suppression.js';
+import { DISCOVERY_SEARCH_DESCRIPTION } from '../../metrics/discovery.js';
 
 function toAffected(pod: ResourceObject): AffectedResource {
   return {
@@ -157,7 +158,8 @@ export const OBS_010: HealthRule = {
   id: 'OBS-010',
   category: 'observability',
   severity: 'info',
-  title: () => `No Prometheus found in cluster`,
+  title: () =>
+    `No Prometheus found in cluster (searched: ${DISCOVERY_SEARCH_DESCRIPTION})`,
   evaluate(_store: StateStore, _context: string, caps: RuleCaps): RuleResult {
     // This rule fires when no metrics exporter capabilities are present,
     // indicating Prometheus is not available.
@@ -168,7 +170,7 @@ export const OBS_010: HealthRule = {
       return {
         status: 'warn',
         affectedResources: [],
-        detail: 'No Prometheus metrics source detected',
+        detail: `No Prometheus metrics source detected. Searched: ${DISCOVERY_SEARCH_DESCRIPTION}.`,
       };
     }
     return { status: 'ok', affectedResources: [] };
