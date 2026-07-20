@@ -124,6 +124,7 @@ export type KubeErrorKind =
   | 'forbidden' // 401/403
   | 'notFound' // 404
   | 'conflict' // 409 (stale resourceVersion)
+  | 'expired' // 410 / "too old resource version" — watch must re-list
   | 'streamDropped'
   | 'network'
   | 'unknown';

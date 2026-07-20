@@ -22,11 +22,14 @@ function makeStreamManager(
     listIntervalSeconds?: number;
     backoffBaseMs?: number;
     backoffMaxMs?: number;
+    relistBackoffMaxMs?: number;
   },
 ) {
   const events: ResourceEvent[] = [];
   const errors: { kind: string; error: KubeError }[] = [];
   const badges: { kind: string; count: number }[] = [];
+  const degraded: { kind: string; degraded: boolean }[] = [];
+  const relists: { kind: string; present: ReadonlySet<string> }[] = [];
 
   const onEvent = vi.fn((e: ResourceEvent) => {
     events.push(e);
@@ -37,6 +40,12 @@ function makeStreamManager(
   const onBadgeCount = vi.fn((kind: string, count: number) => {
     badges.push({ kind, count });
   });
+  const onDegraded = vi.fn((kind: string, isDegraded: boolean) => {
+    degraded.push({ kind, degraded: isDegraded });
+  });
+  const onRelist = vi.fn((kind: string, present: ReadonlySet<string>) => {
+    relists.push({ kind, present });
+  });
 
   const manager = new StreamManager(
     client,
@@ -44,14 +53,36 @@ function makeStreamManager(
     onEvent,
     onError,
     onBadgeCount,
+    onDegraded,
+    onRelist,
     options,
   );
 
-  return { manager, events, errors, badges, onEvent, onError, onBadgeCount };
+  return {
+    manager,
+    events,
+    errors,
+    badges,
+    degraded,
+    relists,
+    onEvent,
+    onError,
+    onBadgeCount,
+    onDegraded,
+    onRelist,
+  };
 }
 
 function makeNetworkError(): KubeError {
   return { kind: 'network', message: 'connection reset' };
+}
+
+function makeExpiredError(): KubeError {
+  return {
+    kind: 'expired',
+    message: 'too old resource version: 6 (57736)',
+    statusCode: 410,
+  };
 }
 
 describe('StreamManager', () => {
@@ -387,6 +418,137 @@ describe('StreamManager', () => {
       // Stop before reconnect fires
       manager.stop();
       expect(clock.pendingCount()).toBe(0);
+    });
+  });
+
+  describe('relist recovery on 410/expired (P9R-0009)', () => {
+    it('re-lists, replays items as ADDED, reconciles, and resumes the watch', async () => {
+      client.seed({
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: 'kept', resourceVersion: '99' },
+      });
+      const { manager, events, relists, degraded } = makeStreamManager(
+        client,
+        clock,
+      );
+      manager.start();
+      const countBefore = client.openWatchCount();
+
+      client.emitError('Namespace', makeExpiredError());
+      // Watch closed immediately; relist is in flight.
+      expect(client.openWatchCount()).toBe(countBefore - 1);
+      await vi.waitFor(() => {
+        expect(client.openWatchCount()).toBe(countBefore);
+      });
+
+      expect(
+        events.some((e) => e.kind === 'Namespace' && e.name === 'kept'),
+      ).toBe(true);
+      expect(relists).toHaveLength(1);
+      expect(relists[0]?.kind).toBe('Namespace');
+      expect(relists[0]?.present.has('~/kept')).toBe(true);
+      // Relist succeeded without ever failing — no degraded transition.
+      expect(degraded).toHaveLength(0);
+    });
+
+    it('defaults apiVersion/name when a relisted item omits them', async () => {
+      // Real LIST responses often omit apiVersion/kind per-item; only
+      // metadata.name is missing here to exercise the name fallback too.
+      client.seed({ kind: 'Namespace', metadata: { resourceVersion: '1' } });
+      const { manager, events, relists } = makeStreamManager(client, clock);
+      manager.start();
+
+      client.emitError('Namespace', makeExpiredError());
+      await vi.waitFor(() => {
+        expect(relists).toHaveLength(1);
+      });
+
+      expect(relists[0]?.present.has('~/')).toBe(true);
+      const relisted = events.find(
+        (e) => e.kind === 'Namespace' && e.type === 'ADDED' && e.name === '',
+      );
+      expect(relisted?.apiVersion).toBe('');
+    });
+
+    it('calls onError exactly once entering recovery, not per relist retry', async () => {
+      client.forbid('Namespace');
+      const { manager, errors } = makeStreamManager(client, clock, {
+        backoffBaseMs: 100,
+      });
+      manager.start();
+
+      client.emitError('Namespace', makeExpiredError());
+      await vi.waitFor(() => {
+        expect(errors.filter((e) => e.kind === 'Namespace')).toHaveLength(1);
+      });
+
+      // Advance past several relist retries — still only one recovery line.
+      clock.advance(100);
+      await Promise.resolve();
+      clock.advance(200);
+      await Promise.resolve();
+      expect(errors.filter((e) => e.kind === 'Namespace')).toHaveLength(1);
+    });
+
+    it('surfaces a degraded indicator when relist fails, clears it once it succeeds', async () => {
+      client.forbid('Namespace');
+      const { manager, degraded } = makeStreamManager(client, clock, {
+        backoffBaseMs: 100,
+      });
+      manager.start();
+
+      client.emitError('Namespace', makeExpiredError());
+      await vi.waitFor(() => {
+        expect(degraded).toContainEqual({ kind: 'Namespace', degraded: true });
+      });
+      // Only one degraded(true) transition even if the flag is already set.
+      expect(degraded.filter((d) => d.degraded)).toHaveLength(1);
+
+      client.unforbid('Namespace');
+      clock.advance(100);
+      await vi.waitFor(() => {
+        expect(degraded).toContainEqual({ kind: 'Namespace', degraded: false });
+      });
+    });
+
+    it('caps relist retry backoff at relistBackoffMaxMs', async () => {
+      client.forbid('Namespace');
+      const { manager } = makeStreamManager(client, clock, {
+        backoffBaseMs: 1000,
+        relistBackoffMaxMs: 2000,
+      });
+      manager.start();
+
+      client.emitError('Namespace', makeExpiredError());
+      for (let i = 0; i < 5; i++) {
+        clock.advance(2000);
+        await Promise.resolve();
+      }
+      // Still tracked and still retrying — capped backoff never stalls out.
+      expect(manager.trackedKinds()).toContain('Namespace');
+    });
+
+    it('does not resume with the stale resourceVersion after expiry', async () => {
+      const { manager } = makeStreamManager(client, clock);
+      manager.start();
+
+      client.emit({
+        type: 'ADDED',
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        namespace: null,
+        name: 'ns-a',
+        object: {
+          apiVersion: 'v1',
+          kind: 'Namespace',
+          metadata: { name: 'ns-a', resourceVersion: '6' },
+        },
+      });
+      client.emitError('Namespace', makeExpiredError());
+      await vi.waitFor(() => {
+        expect(client.lastWatchOptions('Namespace')?.resourceVersion).toBe('1');
+      });
     });
   });
 

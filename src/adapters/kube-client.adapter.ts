@@ -42,6 +42,12 @@ function mapError(e: unknown): KubeError {
     if (status === 409) {
       return { kind: 'conflict', message, statusCode: status };
     }
+    if (
+      status === 410 ||
+      message.toLowerCase().includes('too old resource version')
+    ) {
+      return { kind: 'expired', message, statusCode: status };
+    }
     return { kind: 'unknown', message, statusCode: status };
   }
   const message = e instanceof Error ? e.message : String(e);

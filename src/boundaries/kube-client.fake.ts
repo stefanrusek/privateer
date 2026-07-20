@@ -215,6 +215,22 @@ export class FakeKubeClient implements KubeClient {
     this.forbiddenKinds.add(kind);
   }
 
+  /** Reverse {@link forbid}. */
+  unforbid(kind: string): void {
+    this.forbiddenKinds.delete(kind);
+  }
+
+  /** The WatchOptions of the most recent watch() call for `kind`, if any. */
+  lastWatchOptions(kind: string): WatchOptions | undefined {
+    let latest: WatchOptions | undefined;
+    for (const watch of this.watches) {
+      if (watch.kind === kind) {
+        latest = watch.options;
+      }
+    }
+    return latest;
+  }
+
   /** Emit a scripted watch event to all matching open watches. */
   emit(event: Omit<ResourceEvent, 'receivedAt'>): void {
     const full: ResourceEvent = { ...event, receivedAt: this.now() };

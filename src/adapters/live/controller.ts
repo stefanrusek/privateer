@@ -1205,8 +1205,57 @@ export class LiveController {
       (kind, count) => {
         this.setBadge(kindToLabel(kind), count, true);
       },
+      (kind, degraded) => {
+        this.onStreamDegraded(kind, degraded);
+      },
+      (kind, present) => {
+        this.onStreamRelist(kind, present);
+      },
     );
     this.streams.start(kafkaKinds);
+  }
+
+  /** Toggle the degraded-stream indicator for `kind` (P9R-0009 relist recovery). */
+  private onStreamDegraded(kind: string, degraded: boolean): void {
+    const label = kindToLabel(kind === 'WarningEvents' ? 'Event' : kind);
+    const dimmed = new Set(this.app.dimmedKinds);
+    if (degraded) {
+      dimmed.add(label);
+    } else {
+      dimmed.delete(label);
+    }
+    this.app = { ...this.app, dimmedKinds: dimmed };
+    this.bump();
+  }
+
+  /**
+   * Reconcile the store against a fresh relist after 410/expired recovery
+   * (P9R-0009): drop resources of `kind` absent from `present` — DELETED
+   * events missed while the watch was down — and prune the active table.
+   */
+  private onStreamRelist(kind: string, present: ReadonlySet<string>): void {
+    const removed = this.store.reconcileList(this.app.context, kind, present);
+    if (removed.length === 0) {
+      return;
+    }
+    const activeKind =
+      this.app.activeKind === 'Overview'
+        ? null
+        : labelToKind(this.app.activeKind);
+    if (this.table !== null && kind === activeKind) {
+      const now = this.clock.now();
+      for (const resource of removed) {
+        if (this.matchesNamespaceFilter(resource.namespace, kind)) {
+          this.table = applyResourceEvent(
+            this.table,
+            { type: 'DELETED', resource },
+            now,
+          );
+        }
+      }
+      this.clampSelection();
+    }
+    this.bump();
   }
 
   private onResourceEvent(event: ResourceEvent): void {
