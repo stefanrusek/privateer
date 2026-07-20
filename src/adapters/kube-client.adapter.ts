@@ -447,7 +447,11 @@ export class KubeClientAdapter implements KubeClient {
         const served = crd.spec.versions.filter((v) => v.served);
         served.sort((a, b) => Number(b.storage) - Number(a.storage));
         const versions = served.map((v) => v.name);
-        return { group, kind, plural, namespaced, versions };
+        const established =
+          crd.status?.conditions?.some(
+            (c) => c.type === 'Established' && c.status === 'True',
+          ) ?? false;
+        return { group, kind, plural, namespaced, versions, established };
       });
       return ok(crds);
     } catch (e) {

@@ -3,7 +3,15 @@
  * Pure constants — no IO, no side effects.
  */
 
-import type { SidebarCategory } from './types.js';
+import type { SidebarCategory, SidebarSubgroup } from './types.js';
+import type { CrdGroup } from '../k8s/crd-grouping.js';
+
+/** Collapse-key prefix for a Custom Resources API-group subgroup. */
+export const CR_GROUP_ID_PREFIX = 'cr-group:';
+
+export function crGroupId(group: string): string {
+  return `${CR_GROUP_ID_PREFIX}${group}`;
+}
 
 /**
  * The 8 canonical sidebar category groups with their leaf resource kinds.
@@ -129,16 +137,60 @@ export function buildSidebarTree(): readonly SidebarCategory[] {
   return SIDEBAR_CATEGORIES;
 }
 
+/**
+ * Build the Custom Resources subgroups (one per established CRD API group)
+ * from the discovered/grouped CRD data. Each kind's sidebar label follows
+ * the existing built-in convention of a naive plural (kind + "s", matching
+ * the precedent set by the Kafka/KafkaTopic sidebar labels) so it can share
+ * the badgeCounts/dimmedKinds/forbiddenKinds machinery used by every other
+ * kind (Spec 03 §7).
+ */
+export function buildCrSubgroups(
+  crdGroups: readonly CrdGroup[],
+): readonly SidebarSubgroup[] {
+  return crdGroups.map((g) => ({
+    kind: 'subgroup' as const,
+    id: crGroupId(g.group),
+    label: g.group,
+    children: g.kinds.map((k) => {
+      const label = `${k.kind}s`;
+      return { kind: 'leaf' as const, label, resourceKind: label };
+    }),
+  }));
+}
+
+/**
+ * Returns SIDEBAR_CATEGORIES with the Custom Resources category's children
+ * extended by one collapsible subgroup per established CRD API group,
+ * beneath the existing CustomResourceDefinitions leaf (Spec 03 §7). Pure —
+ * `crdGroups` is caller-owned state (populated by the live controller).
+ */
+export function sidebarCategoriesWithCr(
+  crdGroups: readonly CrdGroup[],
+): readonly SidebarCategory[] {
+  if (crdGroups.length === 0) {
+    return SIDEBAR_CATEGORIES;
+  }
+  const subgroups = buildCrSubgroups(crdGroups);
+  return SIDEBAR_CATEGORIES.map((cat) =>
+    cat.id === 'custom-resources'
+      ? { ...cat, children: [...cat.children, ...subgroups] }
+      : cat,
+  );
+}
+
 /** A single keyboard-navigable sidebar row. */
 export type SidebarNavEntry =
   | { readonly type: 'overview' }
   | { readonly type: 'category'; readonly id: string }
+  | { readonly type: 'subgroup'; readonly id: string }
   | { readonly type: 'leaf'; readonly resourceKind: string };
 
 /**
  * Flatten the sidebar tree into the ordered list of keyboard-navigable rows:
- * Overview first, then each category header followed by its leaves
- * (leaves are omitted when the category id is in `collapsed`).
+ * Overview first, then each category header followed by its children
+ * (children are omitted when the category id is in `collapsed`; a nested
+ * subgroup's own leaves are likewise omitted when its id is collapsed).
  */
 export function flattenSidebarNav(
   items: readonly SidebarCategory[],
@@ -147,9 +199,19 @@ export function flattenSidebarNav(
   const entries: SidebarNavEntry[] = [{ type: 'overview' }];
   for (const cat of items) {
     entries.push({ type: 'category', id: cat.id });
-    if (!collapsed.has(cat.id)) {
-      for (const leaf of cat.children) {
-        entries.push({ type: 'leaf', resourceKind: leaf.resourceKind });
+    if (collapsed.has(cat.id)) {
+      continue;
+    }
+    for (const child of cat.children) {
+      if (child.kind === 'subgroup') {
+        entries.push({ type: 'subgroup', id: child.id });
+        if (!collapsed.has(child.id)) {
+          for (const leaf of child.children) {
+            entries.push({ type: 'leaf', resourceKind: leaf.resourceKind });
+          }
+        }
+      } else {
+        entries.push({ type: 'leaf', resourceKind: child.resourceKind });
       }
     }
   }

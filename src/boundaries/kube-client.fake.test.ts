@@ -124,6 +124,7 @@ describe('FakeKubeClient', () => {
       plural: 'kafkas',
       namespaced: true,
       versions: ['v1beta2'],
+      established: true,
     };
     const res = await new FakeKubeClient({ crds: [crd] }).discoverCrds();
     expect(res.ok && res.value).toEqual([crd]);

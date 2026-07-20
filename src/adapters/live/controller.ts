@@ -18,7 +18,12 @@ import jsYaml from 'js-yaml';
 import { canonicalKeyOrder } from '../../yaml/canonical-order.js';
 import { KubeConfig } from '@kubernetes/client-node';
 import type { LaunchOptions } from '../../cli/args.js';
-import type { KubeError } from '../../boundaries/kube-client.js';
+import type {
+  KubeError,
+  WatchSubscription,
+  CrdDefinition,
+} from '../../boundaries/kube-client.js';
+import { groupCrds, crdFromObject } from '../../k8s/crd-grouping.js';
 import type {
   ResourceEvent,
   ResourceObject,
@@ -154,6 +159,9 @@ import { detectKafka } from '../../health/kafka-detection.js';
 import {
   SIDEBAR_CATEGORIES,
   flattenSidebarNav,
+  sidebarCategoriesWithCr,
+  crGroupId,
+  CR_GROUP_ID_PREFIX,
 } from '../../ui/sidebar-data.js';
 import { useEventsFetcher } from '../../ui/components/EventsTab.js';
 import { parseBangCommand } from '../../command/commands.js';
@@ -471,6 +479,14 @@ export class LiveController {
   private readonly clock = new SystemClock();
   private store: StateStore;
   private streams: StreamManager | null = null;
+  /** Live watch on CustomResourceDefinition, keeping the CR sidebar groups
+   * current as CRDs are added/removed (Spec 03 §7). */
+  private crdWatch: WatchSubscription | null = null;
+  /** All discovered CRDs (established or not), keyed by `plural.group`. */
+  private knownCrds = new Map<string, CrdDefinition>();
+  /** CR-group subgroup ids already given their default (collapsed) state,
+   * so a later re-discovery doesn't re-collapse a group the user expanded. */
+  private crdGroupIdsDefaulted = new Set<string>();
 
   private app: AppState;
   private cursorKind = 'Overview';
@@ -837,6 +853,7 @@ export class LiveController {
     });
     this.flushLayout();
     this.streams?.stop();
+    this.crdWatch?.close();
     this.healthDebounce?.();
     this.healthDebounce = null;
     // Tear down the metrics port-forward child, or its lingering kubectl
@@ -1225,6 +1242,10 @@ export class LiveController {
    */
   private async startStreamsWithCrds(): Promise<void> {
     let kafkaKinds = new Set<string>();
+    this.crdWatch?.close();
+    this.crdWatch = null;
+    this.knownCrds = new Map();
+    this.crdGroupIdsDefaulted = new Set();
     const crds = await this.client.discoverCrds();
     if (crds.ok) {
       this.client.registerCrds(crds.value);
@@ -1232,6 +1253,7 @@ export class LiveController {
       // table work without a separate watch.
       const now = this.clock.now();
       for (const crd of crds.value) {
+        this.knownCrds.set(`${crd.plural}.${crd.group}`, crd);
         this.store.applyEvent(this.app.context, {
           type: 'ADDED',
           apiVersion: 'apiextensions.k8s.io/v1',
@@ -1253,8 +1275,90 @@ export class LiveController {
       if (crds.value.some((crd) => crd.group === 'kafka.strimzi.io')) {
         kafkaKinds = new Set(['Kafka', 'KafkaTopic']);
       }
+      this.updateCrdGroups();
+      // Keep the Custom Resources sidebar groups live as CRDs are
+      // added/removed on the cluster (Spec 03 §7), independent of the
+      // per-kind watches StreamManager opens only for opened kinds.
+      this.crdWatch = this.client.watch(
+        'CustomResourceDefinition',
+        {},
+        (event) => {
+          this.onCrdWatchEvent(event);
+        },
+      );
     }
     this.openStreams(kafkaKinds);
+  }
+
+  /** Apply an ADDED/MODIFIED/DELETED event for a CustomResourceDefinition
+   * to the known-CRD map, then recompute the sidebar's established groups. */
+  private onCrdWatchEvent(event: ResourceEvent): void {
+    const key = event.name;
+    if (event.type === 'DELETED') {
+      this.knownCrds.delete(key);
+    } else {
+      const crd = crdFromObject(event.object);
+      if (crd === undefined) {
+        return;
+      }
+      this.knownCrds.set(key, crd);
+      this.client.registerCrds([...this.knownCrds.values()]);
+    }
+    this.updateCrdGroups();
+    this.bump();
+  }
+
+  /** Recompute `app.crdGroups` from `knownCrds`, defaulting any newly seen
+   * CR-group subgroup to collapsed without disturbing groups the user has
+   * already toggled. */
+  private updateCrdGroups(): void {
+    const groups = groupCrds([...this.knownCrds.values()]);
+    const collapsed = new Set(this.app.collapsedCategories);
+    for (const group of groups) {
+      const id = crGroupId(group.group);
+      if (!this.crdGroupIdsDefaulted.has(id)) {
+        collapsed.add(id);
+        this.crdGroupIdsDefaulted.add(id);
+      }
+    }
+    this.app = {
+      ...this.app,
+      crdGroups: groups,
+      collapsedCategories: collapsed,
+    };
+  }
+
+  /**
+   * Lazily fetch instance counts for one CR API group's kinds (Spec 03 §7):
+   * fired on subtree expand, and again on every re-expand so counts stay
+   * fresh without a standing watch on unopened kinds.
+   */
+  private async fetchCrGroupCounts(group: string): Promise<void> {
+    const g = this.app.crdGroups.find((x) => x.group === group);
+    if (g === undefined) {
+      return;
+    }
+    for (const entry of g.kinds) {
+      const label = `${entry.kind}s`;
+      const scoped = this.app.namespace !== '' && entry.namespaced;
+      const result = await this.client.list(
+        entry.kind,
+        scoped ? { limit: 1, namespace: this.app.namespace } : { limit: 1 },
+      );
+      if (result.ok) {
+        const count =
+          result.value.items.length + (result.value.remainingItemCount ?? 0);
+        const forbidden = new Set(this.app.forbiddenKinds);
+        forbidden.delete(label);
+        this.app = { ...this.app, forbiddenKinds: forbidden };
+        this.setBadge(label, count, true);
+      } else if (result.error.kind === 'forbidden') {
+        const forbidden = new Set(this.app.forbiddenKinds);
+        forbidden.add(label);
+        this.app = { ...this.app, forbiddenKinds: forbidden };
+        this.bump();
+      }
+    }
   }
 
   private openStreams(kafkaKinds: ReadonlySet<string>): void {
@@ -2220,13 +2324,19 @@ export class LiveController {
 
   toggleCategory = (cat: string): void => {
     const collapsed = new Set(this.app.collapsedCategories);
-    if (collapsed.has(cat)) {
+    const wasCollapsed = collapsed.has(cat);
+    if (wasCollapsed) {
       collapsed.delete(cat);
     } else {
       collapsed.add(cat);
     }
     this.app = { ...this.app, collapsedCategories: collapsed };
     this.saveLayout();
+    if (wasCollapsed && cat.startsWith(CR_GROUP_ID_PREFIX)) {
+      // Counts are fetched lazily per group on expand, and refreshed on
+      // every re-expand (Spec 03 §7) — never eagerly for all groups.
+      void this.fetchCrGroupCounts(cat.slice(CR_GROUP_ID_PREFIX.length));
+    }
     this.bump();
   };
 
@@ -2717,6 +2827,7 @@ export class LiveController {
       return;
     }
     this.streams?.stop();
+    this.crdWatch?.close();
     this.switchStatus = beginSwitch(target);
     this.app = {
       ...this.app,
@@ -2801,6 +2912,11 @@ export class LiveController {
         labels.push(leaf.label);
       }
     }
+    for (const group of this.app.crdGroups) {
+      for (const entry of group.kinds) {
+        labels.push(`${entry.kind}s`);
+      }
+    }
     if (this.kafkaDetected.deploymentType !== 'none') {
       labels.push('Kafka', 'KafkaTopic');
     }
@@ -2812,6 +2928,7 @@ export class LiveController {
     this.persistContextMemory(this.app.context);
 
     this.streams?.stop();
+    this.crdWatch?.close();
     this.kc.setCurrentContext(ctx);
     this.client = new KubeClientAdapter(this.kc);
     this.store = new StateStore((event) => normalize(event.object));
@@ -4454,13 +4571,13 @@ export class LiveController {
     clippedTop: boolean;
   } {
     const entries = flattenSidebarNav(
-      SIDEBAR_CATEGORIES,
+      sidebarCategoriesWithCr(this.app.crdGroups),
       this.app.collapsedCategories,
     );
     const keys = entries.map((e) =>
       e.type === 'overview'
         ? 'Overview'
-        : e.type === 'category'
+        : e.type === 'category' || e.type === 'subgroup'
           ? e.id
           : e.resourceKind,
     );
@@ -4763,7 +4880,10 @@ export class LiveController {
     this.setFocus('sidebar');
     if (key === 'Overview') {
       this.selectKind('Overview');
-    } else if (SIDEBAR_CATEGORIES.some((cat) => cat.id === key)) {
+    } else if (
+      SIDEBAR_CATEGORIES.some((cat) => cat.id === key) ||
+      key.startsWith(CR_GROUP_ID_PREFIX)
+    ) {
       this.toggleCategory(key);
     } else {
       this.selectKind(key);
@@ -5344,14 +5464,12 @@ export class LiveController {
   }
 
   private handleSidebarInput(input: string, key: InkKey): void {
-    const entries = flattenSidebarNav(
-      SIDEBAR_CATEGORIES,
-      this.app.collapsedCategories,
-    );
+    const categories = sidebarCategoriesWithCr(this.app.crdGroups);
+    const entries = flattenSidebarNav(categories, this.app.collapsedCategories);
     const keys = entries.map((e) =>
       e.type === 'overview'
         ? 'Overview'
-        : e.type === 'category'
+        : e.type === 'category' || e.type === 'subgroup'
           ? e.id
           : e.resourceKind,
     );
@@ -5377,7 +5495,7 @@ export class LiveController {
       return;
     }
     if (key.return || key.rightArrow) {
-      if (entry.type === 'category') {
+      if (entry.type === 'category' || entry.type === 'subgroup') {
         if (key.return) {
           this.toggleCategory(entry.id);
         } else if (this.app.collapsedCategories.has(entry.id)) {
@@ -5394,29 +5512,61 @@ export class LiveController {
     }
     if (key.leftArrow) {
       if (
-        entry.type === 'category' &&
+        (entry.type === 'category' || entry.type === 'subgroup') &&
         !this.app.collapsedCategories.has(entry.id)
       ) {
         this.toggleCategory(entry.id);
       } else if (entry.type === 'leaf') {
-        const parent = SIDEBAR_CATEGORIES.find((cat) =>
-          cat.children.some((leaf) => leaf.resourceKind === entry.resourceKind),
-        );
-        if (parent !== undefined) {
-          this.cursorKind = parent.id;
+        let parentId: string | undefined;
+        for (const cat of categories) {
+          for (const child of cat.children) {
+            if (
+              child.kind === 'leaf' &&
+              child.resourceKind === entry.resourceKind
+            ) {
+              parentId = cat.id;
+            } else if (
+              child.kind === 'subgroup' &&
+              child.children.some(
+                (leaf) => leaf.resourceKind === entry.resourceKind,
+              )
+            ) {
+              parentId = child.id;
+            }
+          }
+        }
+        if (parentId !== undefined) {
+          this.cursorKind = parentId;
           this.bump();
         }
       }
       return;
     }
     if (input === 'h') {
-      const all = new Set(SIDEBAR_CATEGORIES.map((c) => c.id));
+      const all = new Set<string>();
+      for (const cat of categories) {
+        all.add(cat.id);
+        for (const child of cat.children) {
+          if (child.kind === 'subgroup') {
+            all.add(child.id);
+          }
+        }
+      }
       this.app = { ...this.app, collapsedCategories: all };
       this.bump();
       return;
     }
     if (input === 'l') {
-      this.app = { ...this.app, collapsedCategories: new Set() };
+      // Expand-all clears the static categories but leaves CR subgroups as
+      // they were — expanding one is a lazy-fetch trigger, and "l" must not
+      // become a way to eagerly fetch counts for every CR group at once
+      // (Spec 03 §7).
+      const preserved = new Set(
+        [...this.app.collapsedCategories].filter((id) =>
+          id.startsWith(CR_GROUP_ID_PREFIX),
+        ),
+      );
+      this.app = { ...this.app, collapsedCategories: preserved };
       this.bump();
     }
   }

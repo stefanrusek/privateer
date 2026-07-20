@@ -101,6 +101,8 @@ export interface CrdDefinition {
   /** true if namespaced, false if cluster-scoped. */
   namespaced: boolean;
   versions: string[];
+  /** True when the CRD's `Established` condition is `status: "True"`. */
+  established: boolean;
 }
 
 export type WatchHandler = (event: ResourceEvent) => void;

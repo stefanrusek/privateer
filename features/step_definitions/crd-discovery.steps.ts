@@ -26,6 +26,7 @@ Given(
       plural: row.plural.trim(),
       namespaced: row.namespaced.trim() === 'true',
       versions: ['v1'],
+      established: true,
     }));
     this.crdGroups = groupCrds(crds);
   },
