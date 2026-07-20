@@ -41,6 +41,13 @@ export interface TableModel {
    * 0 on kind change (the controller rebuilds the model via `createTableModel`).
    */
   horizontalOffset: number;
+  /**
+   * Overrides the generic "Permission denied" text shown when
+   * `loadState === 'forbidden'` (ticket P9R-0018 story 2: CR instance lists
+   * render "forbidden — check RBAC for <group>/<kind>"). `undefined` for
+   * built-in kinds, which keep the generic message.
+   */
+  forbiddenMessage?: string;
 }
 
 // ---------------------------------------------------------------------------

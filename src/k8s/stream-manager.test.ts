@@ -23,6 +23,7 @@ function makeStreamManager(
     backoffBaseMs?: number;
     backoffMaxMs?: number;
     relistBackoffMaxMs?: number;
+    maxOnDemandStreams?: number;
   },
 ) {
   const events: ResourceEvent[] = [];
@@ -247,6 +248,77 @@ describe('StreamManager', () => {
       const countAfterFirst = client.openWatchCount();
       manager.activate('ConfigMap');
       expect(client.openWatchCount()).toBe(countAfterFirst);
+    });
+
+    it('evicts the least-recently-activated on-demand stream once the cap is exceeded', () => {
+      const { manager } = makeStreamManager(client, clock, {
+        idleTimeoutSeconds: 300,
+        listIntervalSeconds: 600,
+        maxOnDemandStreams: 2,
+      });
+      manager.start();
+      manager.activate('Widget');
+      clock.advance(1_000);
+      manager.activate('Gadget');
+      clock.advance(1_000);
+      // Third distinct on-demand kind exceeds the cap of 2 — evicts Widget
+      // (the least-recently activated), keeps Gadget.
+      manager.activate('Gizmo');
+      expect(manager.trackedKinds()).not.toContain('Widget');
+      expect(manager.trackedKinds()).toContain('Gadget');
+      expect(manager.trackedKinds()).toContain('Gizmo');
+    });
+
+    it('picks the truly least-recently-activated stream, not just the first-opened one', () => {
+      const { manager } = makeStreamManager(client, clock, {
+        idleTimeoutSeconds: 300,
+        listIntervalSeconds: 600,
+        maxOnDemandStreams: 2,
+      });
+      manager.start();
+      manager.activate('Widget');
+      clock.advance(1_000);
+      manager.activate('Gadget');
+      clock.advance(1_000);
+      // Re-activating Widget refreshes its last-accessed time past Gadget's,
+      // without changing its (earlier) insertion position.
+      manager.activate('Widget');
+      clock.advance(1_000);
+      // Third distinct kind exceeds the cap — Gadget is now the truly
+      // least-recently-activated stream, even though Widget was opened first.
+      manager.activate('Gizmo');
+      expect(manager.trackedKinds()).not.toContain('Gadget');
+      expect(manager.trackedKinds()).toContain('Widget');
+      expect(manager.trackedKinds()).toContain('Gizmo');
+    });
+
+    it('never evicts core streams to satisfy the on-demand cap', () => {
+      const { manager } = makeStreamManager(client, clock, {
+        idleTimeoutSeconds: 300,
+        listIntervalSeconds: 600,
+        maxOnDemandStreams: 1,
+      });
+      manager.start();
+      manager.activate('Widget');
+      clock.advance(1_000);
+      manager.activate('Gadget');
+      for (const kind of CORE_KINDS) {
+        expect(manager.trackedKinds()).toContain(kind);
+      }
+    });
+
+    it('does not evict when re-activating an already-tracked kind', () => {
+      const { manager } = makeStreamManager(client, clock, {
+        idleTimeoutSeconds: 300,
+        listIntervalSeconds: 600,
+        maxOnDemandStreams: 8,
+      });
+      manager.start();
+      manager.activate('Widget');
+      const countAfterFirst = client.openWatchCount();
+      manager.activate('Widget');
+      expect(client.openWatchCount()).toBe(countAfterFirst);
+      expect(manager.trackedKinds()).toContain('Widget');
     });
 
     it('is a no-op after stop()', () => {

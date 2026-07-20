@@ -300,6 +300,7 @@ describe('Sidebar viewport windowing', () => {
             plural: 'dopplersecrets',
             namespaced: true,
             versions: ['v1'],
+            printerColumns: [],
           },
         ],
       },

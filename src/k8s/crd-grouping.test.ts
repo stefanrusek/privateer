@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   groupCrds,
   descriptorsForGroups,
+  descriptorsByLabel,
   crdFromObject,
+  crKindLabel,
 } from './crd-grouping.js';
 import type { CrdDefinition } from '../boundaries/kube-client.js';
 import type { KubernetesObject } from '../core/types.js';
@@ -21,6 +23,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1beta2'],
         established: true,
+        printerColumns: [],
       },
       {
         group: 'kafka.strimzi.io',
@@ -29,6 +32,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1beta2'],
         established: true,
+        printerColumns: [],
       },
       {
         group: 'doppler.com',
@@ -37,6 +41,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1alpha1'],
         established: true,
+        printerColumns: [],
       },
     ];
     const groups = groupCrds(crds);
@@ -56,6 +61,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1beta2'],
         established: true,
+        printerColumns: [],
       },
       {
         group: 'kafka.strimzi.io',
@@ -64,6 +70,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1beta2'],
         established: true,
+        printerColumns: [],
       },
     ];
     const groups = groupCrds(crds);
@@ -80,6 +87,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1'],
         established: true,
+        printerColumns: [],
       },
       {
         group: 'doppler.com',
@@ -88,6 +96,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1alpha1'],
         established: true,
+        printerColumns: [],
       },
       {
         group: 'kafka.strimzi.io',
@@ -96,6 +105,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1beta2'],
         established: true,
+        printerColumns: [],
       },
     ];
     const groups = groupCrds(crds);
@@ -115,6 +125,7 @@ describe('groupCrds', () => {
         namespaced: false,
         versions: ['v1', 'v2'],
         established: true,
+        printerColumns: [],
       },
     ];
     const groups = groupCrds(crds);
@@ -130,6 +141,7 @@ describe('groupCrds', () => {
         namespaced: false,
         versions: ['v1'],
         established: true,
+        printerColumns: [],
       },
     ];
     const groups = groupCrds(crds);
@@ -145,6 +157,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1'],
         established: true,
+        printerColumns: [],
       },
       {
         group: 'example.com',
@@ -153,6 +166,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1'],
         established: false,
+        printerColumns: [],
       },
     ];
     const groups = groupCrds(crds);
@@ -169,6 +183,7 @@ describe('groupCrds', () => {
         namespaced: true,
         versions: ['v1'],
         established: false,
+        printerColumns: [],
       },
     ];
     expect(groupCrds(crds)).toEqual([]);
@@ -185,6 +200,7 @@ describe('descriptorsForGroups', () => {
         namespaced: true,
         versions: ['v1alpha1', 'v1'],
         established: true,
+        printerColumns: [],
       },
     ]);
     const descriptors = descriptorsForGroups(groups);
@@ -194,6 +210,7 @@ describe('descriptorsForGroups', () => {
       version: 'v1alpha1',
       plural: 'dopplersecrets',
       namespaced: true,
+      printerColumns: [],
     });
   });
 
@@ -201,7 +218,15 @@ describe('descriptorsForGroups', () => {
     const groups = [
       {
         group: 'g',
-        kinds: [{ kind: 'K', plural: 'ks', namespaced: true, versions: [] }],
+        kinds: [
+          {
+            kind: 'K',
+            plural: 'ks',
+            namespaced: true,
+            versions: [],
+            printerColumns: [],
+          },
+        ],
       },
     ];
     const descriptors = descriptorsForGroups(groups);
@@ -210,6 +235,42 @@ describe('descriptorsForGroups', () => {
 
   it('returns an empty map for no groups', () => {
     expect(descriptorsForGroups([])).toEqual(new Map());
+  });
+});
+
+describe('crKindLabel', () => {
+  it('appends a naive plural "s"', () => {
+    expect(crKindLabel('DopplerSecret')).toBe('DopplerSecrets');
+  });
+});
+
+describe('descriptorsByLabel', () => {
+  it('keys descriptors by the naive-plural sidebar label', () => {
+    const groups = groupCrds([
+      {
+        group: 'doppler.com',
+        kind: 'DopplerSecret',
+        plural: 'dopplersecrets',
+        namespaced: true,
+        versions: ['v1'],
+        established: true,
+        printerColumns: [],
+      },
+    ]);
+    const byLabel = descriptorsByLabel(groups);
+    expect(byLabel.get('DopplerSecrets')).toEqual({
+      kind: 'DopplerSecret',
+      group: 'doppler.com',
+      version: 'v1',
+      plural: 'dopplersecrets',
+      namespaced: true,
+      printerColumns: [],
+    });
+    expect(byLabel.get('DopplerSecret')).toBeUndefined();
+  });
+
+  it('returns an empty map for no groups', () => {
+    expect(descriptorsByLabel([])).toEqual(new Map());
   });
 });
 
@@ -241,7 +302,85 @@ describe('crdFromObject', () => {
       namespaced: true,
       versions: ['v1alpha1', 'v1beta1'],
       established: true,
+      printerColumns: [],
     });
+  });
+
+  it('parses additionalPrinterColumns from the storage version, sorted priority 0 first', () => {
+    const obj: KubernetesObject = {
+      ...base,
+      spec: {
+        ...base.spec,
+        versions: [
+          {
+            name: 'v1alpha1',
+            served: true,
+            storage: true,
+            additionalPrinterColumns: [
+              {
+                name: 'Config',
+                type: 'string',
+                jsonPath: '.spec.config',
+                priority: 1,
+              },
+              { name: 'Project', type: 'string', jsonPath: '.spec.project' },
+            ],
+          },
+        ],
+      },
+    };
+    expect(crdFromObject(obj)?.printerColumns).toEqual([
+      { name: 'Project', jsonPath: '.spec.project', priority: 0 },
+      { name: 'Config', jsonPath: '.spec.config', priority: 1 },
+    ]);
+  });
+
+  it('skips malformed printer-column entries', () => {
+    const obj: KubernetesObject = {
+      ...base,
+      spec: {
+        ...base.spec,
+        versions: [
+          {
+            name: 'v1alpha1',
+            served: true,
+            storage: true,
+            additionalPrinterColumns: [
+              { name: 'Good', jsonPath: '.spec.x' },
+              { name: 'NoPath' },
+              { jsonPath: '.spec.y' },
+              'not-an-object',
+              null,
+            ],
+          },
+        ],
+      },
+    };
+    expect(crdFromObject(obj)?.printerColumns).toEqual([
+      { name: 'Good', jsonPath: '.spec.x', priority: 0 },
+    ]);
+  });
+
+  it('defaults printerColumns to an empty array when additionalPrinterColumns is absent', () => {
+    expect(crdFromObject(base)?.printerColumns).toEqual([]);
+  });
+
+  it('defaults printerColumns to an empty array when additionalPrinterColumns is not an array', () => {
+    const obj: KubernetesObject = {
+      ...base,
+      spec: {
+        ...base.spec,
+        versions: [
+          {
+            name: 'v1alpha1',
+            served: true,
+            storage: true,
+            additionalPrinterColumns: 'oops',
+          },
+        ],
+      },
+    };
+    expect(crdFromObject(obj)?.printerColumns).toEqual([]);
   });
 
   it('marks cluster-scoped CRDs as not namespaced', () => {

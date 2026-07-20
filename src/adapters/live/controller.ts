@@ -23,7 +23,13 @@ import type {
   WatchSubscription,
   CrdDefinition,
 } from '../../boundaries/kube-client.js';
-import { groupCrds, crdFromObject } from '../../k8s/crd-grouping.js';
+import {
+  groupCrds,
+  crdFromObject,
+  descriptorsByLabel,
+  descriptorsForGroups,
+} from '../../k8s/crd-grouping.js';
+import type { CrKindDescriptor } from '../../k8s/crd-grouping.js';
 import type {
   ResourceEvent,
   ResourceObject,
@@ -143,7 +149,7 @@ import {
   scrollUp,
   setHorizontalOffset,
 } from '../../ui/resource-table-model.js';
-import { getColumns } from '../../resources/columns.js';
+import { getColumns, getCrColumns } from '../../resources/columns.js';
 import {
   naturalWidths,
   pinnedCount,
@@ -1619,11 +1625,25 @@ export class LiveController {
     }
   }
 
+  /**
+   * Whether `kind` is cluster-scoped and therefore exempt from namespace
+   * filtering. Built-ins consult the static set; CR kinds consult their
+   * CRD's `spec.scope` (ticket P9R-0018 story 2: a cluster-scoped CR kind
+   * stays visible/listable under a namespace filter, like Nodes).
+   */
+  private isClusterScopedKind(kind: string): boolean {
+    if (CLUSTER_SCOPED_KINDS.has(kind)) {
+      return true;
+    }
+    const descriptor = descriptorsForGroups(this.app.crdGroups).get(kind);
+    return descriptor !== undefined && !descriptor.namespaced;
+  }
+
   private matchesNamespaceFilter(
     namespace: string | null,
     kind: string,
   ): boolean {
-    if (this.app.namespace === '' || CLUSTER_SCOPED_KINDS.has(kind)) {
+    if (this.app.namespace === '' || this.isClusterScopedKind(kind)) {
       return true;
     }
     return namespace === this.app.namespace;
@@ -1726,10 +1746,12 @@ export class LiveController {
   }
 
   private refreshMetricsColumns(): void {
-    if (this.app.activeKind !== 'Overview') {
-      this.columns = this.columnsForKind(
-        labelToKind(this.app.activeKind) ?? '',
-      );
+    // Sparkline columns only ever apply to the built-in Pod/Node kinds
+    // (columnsForKind's metrics branch); CR kinds never resolve here, so
+    // skip rather than clobber their printer-column layout with GENERIC_COLS.
+    const kind = labelToKind(this.app.activeKind);
+    if (this.app.activeKind !== 'Overview' && kind !== undefined) {
+      this.columns = this.columnsForKind(kind);
     }
   }
 
@@ -1957,7 +1979,13 @@ export class LiveController {
   }
 
   /** Columns for a kind, with CPU/Memory sparklines when metrics flow. */
-  private columnsForKind(kind: string): ColumnDef[] {
+  private columnsForKind(
+    kind: string,
+    crDescriptor?: CrKindDescriptor,
+  ): ColumnDef[] {
+    if (crDescriptor !== undefined) {
+      return getCrColumns(crDescriptor.namespaced, crDescriptor.printerColumns);
+    }
     const base = getColumns(kind);
     if (
       this.metricsTier === 'none' ||
@@ -2179,14 +2207,27 @@ export class LiveController {
   // -------------------------------------------------------------------------
 
   private seedTable(kindLabel: string): void {
-    const kind = labelToKind(kindLabel);
+    let kind = labelToKind(kindLabel);
+    let crDescriptor: CrKindDescriptor | undefined;
     if (kind === undefined) {
-      this.table = null;
-      this.columns = [];
-      return;
+      // Not a built-in — resolve via the CRD-discovery seam (Spec 03 §7,
+      // ticket P9R-0018 story 2) before giving up on the placeholder.
+      crDescriptor = descriptorsByLabel(this.app.crdGroups).get(kindLabel);
+      if (crDescriptor === undefined) {
+        this.table = null;
+        this.columns = [];
+        return;
+      }
+      kind = crDescriptor.kind;
     }
-    this.columns = this.columnsForKind(kind);
+    this.columns = this.columnsForKind(kind, crDescriptor);
     let model = createTableModel(kind);
+    if (crDescriptor !== undefined) {
+      model = {
+        ...model,
+        forbiddenMessage: `forbidden — check RBAC for ${crDescriptor.group}/${crDescriptor.kind}`,
+      };
+    }
     model = applySearch(model, this.app.search);
     const now = this.clock.now();
     const resources = this.store

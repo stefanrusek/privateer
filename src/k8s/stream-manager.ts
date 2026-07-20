@@ -51,6 +51,14 @@ export interface StreamManagerOptions {
    * error (Spec/ticket P9R-0009). Default: 120000 (2 min).
    */
   relistBackoffMaxMs?: number;
+  /**
+   * Max number of on-demand streams kept open at once, beyond the fixed
+   * core set (ticket P9R-0018 story 2 risk: watch fan-out from opening many
+   * CR kinds in one session). When activating a new on-demand stream would
+   * exceed the cap, the least-recently-activated on-demand stream is
+   * evicted. Default: 8.
+   */
+  maxOnDemandStreams?: number;
 }
 
 /** The fixed core set of kinds always watched at startup. */
@@ -104,6 +112,7 @@ export class StreamManager {
   private readonly backoffBaseMs: number;
   private readonly backoffMaxMs: number;
   private readonly relistBackoffMaxMs: number;
+  private readonly maxOnDemandStreams: number;
 
   private streams = new Map<string, ManagedStream>();
   private started = false;
@@ -131,6 +140,7 @@ export class StreamManager {
     this.backoffBaseMs = options.backoffBaseMs ?? 1000;
     this.backoffMaxMs = options.backoffMaxMs ?? 30_000;
     this.relistBackoffMaxMs = options.relistBackoffMaxMs ?? 120_000;
+    this.maxOnDemandStreams = options.maxOnDemandStreams ?? 8;
   }
 
   /**
@@ -200,6 +210,36 @@ export class StreamManager {
     };
     this.streams.set(kind, stream);
     this.openOnDemandStream(stream);
+    this.evictOverCap(kind);
+  }
+
+  /**
+   * Enforce `maxOnDemandStreams`: when the on-demand set exceeds the cap,
+   * tear down and forget the least-recently-activated on-demand stream
+   * other than the one just opened. Core streams (lastAccessedAt === null)
+   * are never eligible.
+   */
+  private evictOverCap(justActivatedKey: string): void {
+    const onDemand = [...this.streams.values()].filter(
+      (s): s is ManagedStream & { lastAccessedAt: number } =>
+        s.lastAccessedAt !== null,
+    );
+    if (onDemand.length <= this.maxOnDemandStreams) {
+      return;
+    }
+    let oldest: (ManagedStream & { lastAccessedAt: number }) | undefined;
+    for (const s of onDemand) {
+      if (s.key === justActivatedKey) {
+        continue;
+      }
+      if (oldest === undefined || s.lastAccessedAt < oldest.lastAccessedAt) {
+        oldest = s;
+      }
+    }
+    if (oldest !== undefined) {
+      this.teardownStream(oldest);
+      this.streams.delete(oldest.key);
+    }
   }
 
   /** Stop all streams and release all resources. */

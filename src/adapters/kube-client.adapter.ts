@@ -20,6 +20,7 @@ import type {
   ListPage,
   EventSelector,
   CrdDefinition,
+  CrdPrinterColumn,
   KubeError,
 } from '../boundaries/kube-client.js';
 import type { KubernetesObject } from '../core/types.js';
@@ -451,7 +452,29 @@ export class KubeClientAdapter implements KubeClient {
           crd.status?.conditions?.some(
             (c) => c.type === 'Established' && c.status === 'True',
           ) ?? false;
-        return { group, kind, plural, namespaced, versions, established };
+        // additionalPrinterColumns from the storage/served version, priority
+        // 0 first (Spec 03 §7, ticket P9R-0018 story 2).
+        const printerColumns: CrdPrinterColumn[] = (
+          served[0]?.additionalPrinterColumns ?? []
+        )
+          .filter(
+            (c) => typeof c.name === 'string' && typeof c.jsonPath === 'string',
+          )
+          .map((c) => ({
+            name: c.name,
+            jsonPath: c.jsonPath,
+            priority: c.priority ?? 0,
+          }))
+          .sort((a, b) => a.priority - b.priority);
+        return {
+          group,
+          kind,
+          plural,
+          namespaced,
+          versions,
+          established,
+          printerColumns,
+        };
       });
       return ok(crds);
     } catch (e) {

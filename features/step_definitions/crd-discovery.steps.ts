@@ -27,6 +27,7 @@ Given(
       namespaced: row.namespaced.trim() === 'true',
       versions: ['v1'],
       established: true,
+      printerColumns: [],
     }));
     this.crdGroups = groupCrds(crds);
   },

@@ -125,6 +125,7 @@ describe('FakeKubeClient', () => {
       namespaced: true,
       versions: ['v1beta2'],
       established: true,
+      printerColumns: [],
     };
     const res = await new FakeKubeClient({ crds: [crd] }).discoverCrds();
     expect(res.ok && res.value).toEqual([crd]);

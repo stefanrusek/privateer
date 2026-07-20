@@ -4,7 +4,7 @@
  */
 
 import type { SidebarCategory, SidebarSubgroup } from './types.js';
-import type { CrdGroup } from '../k8s/crd-grouping.js';
+import { crKindLabel, type CrdGroup } from '../k8s/crd-grouping.js';
 
 /** Collapse-key prefix for a Custom Resources API-group subgroup. */
 export const CR_GROUP_ID_PREFIX = 'cr-group:';
@@ -153,7 +153,7 @@ export function buildCrSubgroups(
     id: crGroupId(g.group),
     label: g.group,
     children: g.kinds.map((k) => {
-      const label = `${k.kind}s`;
+      const label = crKindLabel(k.kind);
       return { kind: 'leaf' as const, label, resourceKind: label };
     }),
   }));

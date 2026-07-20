@@ -3,8 +3,13 @@
  * CrdDefinition[] — no I/O, no side effects. Tested 100% with unit tests.
  */
 
-import type { CrdDefinition } from '../boundaries/kube-client.js';
+import type {
+  CrdDefinition,
+  CrdPrinterColumn,
+} from '../boundaries/kube-client.js';
 import type { KubernetesObject } from '../core/types.js';
+
+export type { CrdPrinterColumn } from '../boundaries/kube-client.js';
 
 export interface CrdGroup {
   group: string;
@@ -16,10 +21,11 @@ export interface CrdKindEntry {
   plural: string;
   namespaced: boolean;
   versions: string[];
+  printerColumns: CrdPrinterColumn[];
 }
 
-/** Sidebar-facing descriptor for a CR kind — the seam the next story hooks its
- * instance list into (group/version/plural/namespaced). */
+/** Sidebar-facing descriptor for a CR kind — the seam the instance list
+ * (story 2) resolves group/version/plural/namespaced/printerColumns from. */
 export interface CrKindDescriptor {
   kind: string;
   group: string;
@@ -27,6 +33,18 @@ export interface CrKindDescriptor {
   version: string;
   plural: string;
   namespaced: boolean;
+  printerColumns: CrdPrinterColumn[];
+}
+
+/**
+ * The sidebar leaf label for a CR kind — a naive plural (kind + "s"),
+ * matching the precedent set by the Kafka/KafkaTopic sidebar labels
+ * (Spec 03 §7). Shared between the sidebar tree builder and the label→kind
+ * resolution the instance list (story 2) uses, so both sides derive the
+ * same string without duplicating the pluralization convention.
+ */
+export function crKindLabel(kind: string): string {
+  return `${kind}s`;
 }
 
 /**
@@ -51,6 +69,7 @@ export function groupCrds(crds: CrdDefinition[]): CrdGroup[] {
       plural: crd.plural,
       namespaced: crd.namespaced,
       versions: [...crd.versions],
+      printerColumns: [...crd.printerColumns],
     });
   }
 
@@ -81,10 +100,28 @@ export function descriptorsForGroups(
         version: entry.versions[0] ?? '',
         plural: entry.plural,
         namespaced: entry.namespaced,
+        printerColumns: entry.printerColumns,
       });
     }
   }
   return byKind;
+}
+
+/**
+ * Flatten grouped CRDs into a map keyed by the sidebar leaf *label*
+ * (`crKindLabel(kind)`) instead of the bare kind — the seam story 2 uses to
+ * resolve a selected sidebar leaf back to its descriptor when the kind isn't
+ * one of the static built-ins in `LABEL_TO_KIND`.
+ */
+export function descriptorsByLabel(
+  groups: readonly CrdGroup[],
+): Map<string, CrKindDescriptor> {
+  const byKind = descriptorsForGroups(groups);
+  const byLabel = new Map<string, CrKindDescriptor>();
+  for (const descriptor of byKind.values()) {
+    byLabel.set(crKindLabel(descriptor.kind), descriptor);
+  }
+  return byLabel;
 }
 
 /**
@@ -115,9 +152,16 @@ export function crdFromObject(
 
   const rawVersions = spec?.versions;
   const versions: string[] = [];
+  let printerColumns: CrdPrinterColumn[] = [];
   if (Array.isArray(rawVersions)) {
+    interface RawVersion {
+      name: string;
+      served?: boolean;
+      storage?: boolean;
+      additionalPrinterColumns?: unknown;
+    }
     const served = rawVersions.filter(
-      (v): v is { name: string; served?: boolean; storage?: boolean } =>
+      (v): v is RawVersion =>
         typeof v === 'object' &&
         v !== null &&
         typeof (v as { name?: unknown }).name === 'string' &&
@@ -125,6 +169,7 @@ export function crdFromObject(
     );
     served.sort((a, b) => Number(b.storage) - Number(a.storage));
     versions.push(...served.map((v) => v.name));
+    printerColumns = parsePrinterColumns(served[0]?.additionalPrinterColumns);
   }
 
   const status = object.status as
@@ -135,5 +180,43 @@ export function crdFromObject(
       (c) => c.type === 'Established' && c.status === 'True',
     ) ?? false;
 
-  return { group, kind, plural, namespaced, versions, established };
+  return {
+    group,
+    kind,
+    plural,
+    namespaced,
+    versions,
+    established,
+    printerColumns,
+  };
+}
+
+/**
+ * Parse a version's raw `additionalPrinterColumns` array into
+ * `CrdPrinterColumn[]`, sorted priority 0 first (Spec 03 §7). Malformed
+ * entries are skipped rather than failing the whole CRD parse.
+ */
+function parsePrinterColumns(raw: unknown): CrdPrinterColumn[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const columns: CrdPrinterColumn[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) {
+      continue;
+    }
+    const name = (entry as { name?: unknown }).name;
+    const jsonPath = (entry as { jsonPath?: unknown }).jsonPath;
+    const priority = (entry as { priority?: unknown }).priority;
+    if (typeof name !== 'string' || typeof jsonPath !== 'string') {
+      continue;
+    }
+    columns.push({
+      name,
+      jsonPath,
+      priority: typeof priority === 'number' ? priority : 0,
+    });
+  }
+  columns.sort((a, b) => a.priority - b.priority);
+  return columns;
 }

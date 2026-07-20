@@ -205,7 +205,10 @@ export function ResourceTable(props: ResourceTableProps): React.ReactElement {
   if (model.loadState === 'forbidden') {
     return (
       <Box flexDirection="column">
-        <Text>Permission denied — cannot list {model.kind}</Text>
+        <Text>
+          {model.forbiddenMessage ??
+            `Permission denied — cannot list ${model.kind}`}
+        </Text>
       </Box>
     );
   }
