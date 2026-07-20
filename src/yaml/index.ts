@@ -6,7 +6,7 @@
 export type { TokenType, Token } from './highlight.js';
 export { tokenizeLine } from './highlight.js';
 
-export { redactSecret } from './redact.js';
+export { maskSecret, revealSecret, SECRET_MASK } from './redact.js';
 
 export type { DiffLine, DiffLineKind } from './diff.js';
 export { computeDiff } from './diff.js';

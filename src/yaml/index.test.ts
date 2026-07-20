@@ -6,7 +6,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   tokenizeLine,
-  redactSecret,
+  maskSecret,
+  revealSecret,
   computeDiff,
   createEditBuffer,
   EditBufferHandle,
@@ -19,9 +20,14 @@ describe('src/yaml/index re-exports', () => {
     expect(tokens.length).toBeGreaterThan(0);
   });
 
-  it('exports redactSecret', () => {
+  it('exports maskSecret', () => {
     const yaml = 'kind: ConfigMap\ndata:\n  key: val\n';
-    expect(redactSecret(yaml)).toContain('val');
+    expect(maskSecret(yaml)).toContain('val');
+  });
+
+  it('exports revealSecret', () => {
+    const yaml = 'kind: ConfigMap\ndata:\n  key: val\n';
+    expect(revealSecret(yaml)).toContain('val');
   });
 
   it('exports computeDiff', () => {

@@ -24,7 +24,7 @@ import type { EventRow } from './components/EventsTab.js';
 import { formatAge } from '../resources/age.js';
 import { formatMemoryQuantity } from '../resources/quantity.js';
 import { tokenizeLine } from '../yaml/highlight.js';
-import { redactSecret } from '../yaml/redact.js';
+import { maskSecret, revealSecret } from '../yaml/redact.js';
 import { renderTimeseriesChart } from '../charts/timeseries.js';
 import { computeTrendIndicator } from '../charts/timeseries.js';
 
@@ -617,12 +617,16 @@ export function projectYamlReadLines(
   revealed: boolean,
   width: number,
 ): ViewLine[] {
-  const display = revealed ? yaml : redactSecret(yaml);
   const isSecret = kind === 'Secret';
+  const display = isSecret
+    ? revealed
+      ? revealSecret(yaml)
+      : maskSecret(yaml)
+    : yaml;
   const lines: ViewLine[] = [];
   lines.push({
     text: clipLine(
-      isSecret && !revealed ? '[Edit]  [reveal]' : '[Edit]',
+      isSecret ? (revealed ? '[Edit]  [hide]' : '[Edit]  [reveal]') : '[Edit]',
       width,
     ),
     color: 'cyan',

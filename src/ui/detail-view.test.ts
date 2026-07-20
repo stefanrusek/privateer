@@ -628,18 +628,24 @@ describe('projectEventsLines', () => {
 // ---------------------------------------------------------------------------
 
 describe('projectYamlReadLines', () => {
-  it('shows [Edit]/[reveal] for unrevealed Secrets and redacts values', () => {
-    const yaml = 'apiVersion: v1\ndata:\n  password: c2VjcmV0';
+  it('shows [Edit]/[reveal] for unrevealed Secrets and masks values', () => {
+    const yaml = 'apiVersion: v1\nkind: Secret\ndata:\n  password: c2VjcmV0';
     const lines = projectYamlReadLines(yaml, 'Secret', false, 80);
     expect(lines[0]?.text).toContain('[reveal]');
     // line-numbered body
     expect(lines[1]?.text).toContain('1 ');
+    const body = lines.map((l) => l.text).join('\n');
+    expect(body).toContain('••••••••');
+    expect(body).not.toContain('c2VjcmV0');
   });
 
-  it('reveals Secret values when revealed and drops [reveal]', () => {
-    const yaml = 'data:\n  k: v';
+  it('reveals decoded Secret plaintext when revealed and swaps [reveal] for [hide]', () => {
+    const yaml = 'kind: Secret\ndata:\n  k: dGVzdA==';
     const lines = projectYamlReadLines(yaml, 'Secret', true, 80);
-    expect(lines[0]?.text).toBe('[Edit]');
+    expect(lines[0]?.text).toBe('[Edit]  [hide]');
+    const body = lines.map((l) => l.text).join('\n');
+    // dGVzdA== base64-decodes to "test".
+    expect(body).toContain('test');
   });
 
   it('non-Secret keys are coloured blue, value-only lines plain', () => {

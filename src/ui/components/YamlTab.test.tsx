@@ -111,10 +111,10 @@ describe('YamlTab read mode', () => {
 });
 
 describe('YamlTab secret redaction', () => {
-  it('redacts Secret data by default and shows [reveal]', () => {
+  it('masks Secret data by default (fixed-width mask) and shows [reveal]', () => {
     const { lastFrame } = renderTab(makeSecret({ password: 'c2VjcmV0' }));
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('[redacted]');
+    expect(frame).toContain('••••••••');
     expect(frame).not.toContain('c2VjcmV0');
     expect(frame).toContain('[reveal]');
   });
@@ -125,17 +125,50 @@ describe('YamlTab secret redaction', () => {
     );
   });
 
-  it('reveals secret values when v is pressed (accelerator = v)', async () => {
+  it('reveals decoded secret plaintext when v is pressed (accelerator = v)', async () => {
     const { lastFrame, stdin } = renderTab(
       makeSecret({ password: 'c2VjcmV0' }),
     );
     await tick();
-    expect(lastFrame()).toContain('[redacted]');
+    expect(lastFrame()).toContain('••••••••');
     await safeWrite(stdin, 'v');
     await ticks();
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('c2VjcmV0');
+    // c2VjcmV0 base64-decodes to "secret" — reveal shows the plaintext, not
+    // the raw base64.
+    expect(frame).toContain('secret');
+    expect(frame).not.toContain('c2VjcmV0');
     expect(frame).not.toContain('[reveal]');
+    expect(frame).toContain('[hide]');
+  });
+
+  it('re-masks when v is pressed again', async () => {
+    const { lastFrame, stdin } = renderTab(
+      makeSecret({ password: 'c2VjcmV0' }),
+    );
+    await tick();
+    await safeWrite(stdin, 'v');
+    await ticks();
+    expect(lastFrame()).toContain('secret');
+    await safeWrite(stdin, 'v');
+    await ticks();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('••••••••');
+    expect(frame).not.toContain('secret');
+    expect(frame).toContain('[reveal]');
+  });
+
+  it('edit-mode buffer contains the real base64 even while masked', async () => {
+    const { lastFrame, stdin } = renderTab(
+      makeSecret({ password: 'c2VjcmV0' }),
+    );
+    await tick();
+    expect(lastFrame()).toContain('••••••••');
+    await safeWrite(stdin, 'e');
+    await ticks();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('c2VjcmV0');
+    expect(frame).not.toContain('••••••••');
   });
 });
 

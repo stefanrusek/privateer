@@ -22,7 +22,7 @@ import { Box, Text, useInput } from 'ink';
 import type { Key as InkKey } from 'ink';
 import { tokenizeLine } from '../../yaml/highlight.js';
 import type { Token } from '../../yaml/highlight.js';
-import { redactSecret } from '../../yaml/redact.js';
+import { maskSecret, revealSecret } from '../../yaml/redact.js';
 import { validateYaml } from '../../yaml/validate.js';
 import type { YamlValidationError } from '../../yaml/validate.js';
 import {
@@ -286,8 +286,8 @@ export function YamlTab({
     if (mode.kind === 'read') {
       if (input === 'e') {
         enterEditMode();
-      } else if (input === 'v' && kind === 'Secret' && !mode.revealed) {
-        transition({ kind: 'read', revealed: true });
+      } else if (input === 'v' && kind === 'Secret') {
+        transition({ kind: 'read', revealed: !mode.revealed });
       }
     } else if (mode.kind === 'edit') {
       if (key.ctrl && input === 's') {
@@ -498,18 +498,22 @@ export function YamlTab({
         />
       );
     }
-    const displayYaml = mode.revealed ? yaml : redactSecret(yaml);
-    const lines = displayYaml.split('\n');
     const isSecret = kind === 'Secret';
+    const displayYaml = isSecret
+      ? mode.revealed
+        ? revealSecret(yaml)
+        : maskSecret(yaml)
+      : yaml;
+    const lines = displayYaml.split('\n');
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" gap={2}>
           <Text color="cyan" underline>
             [Edit]
           </Text>
-          {isSecret && !mode.revealed && (
+          {isSecret && (
             <Text color="yellow" underline>
-              [reveal]
+              {mode.revealed ? '[hide]' : '[reveal]'}
             </Text>
           )}
         </Box>
