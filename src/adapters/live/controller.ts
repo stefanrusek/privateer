@@ -1377,7 +1377,12 @@ export class LiveController {
       if (CORE_KINDS.has(kind)) {
         continue;
       }
-      const result = await this.client.list(kind, { limit: 1 });
+      const scoped =
+        this.app.namespace !== '' && !CLUSTER_SCOPED_KINDS.has(kind);
+      const result = await this.client.list(
+        kind,
+        scoped ? { limit: 1, namespace: this.app.namespace } : { limit: 1 },
+      );
       if (!result.ok) {
         log.debug(
           { kind, errorKind: result.error.kind, message: result.error.message },
@@ -2170,6 +2175,7 @@ export class LiveController {
       this.seedTable(this.app.activeKind);
     }
     this.refreshCoreBadges();
+    void this.badgeSweep();
     // Remember this context's namespace so it is restored next launch (C2).
     this.persistContextMemory(this.app.context);
     this.bump();
