@@ -195,6 +195,12 @@ import {
   resolveCommand,
   DEFAULT_COMMAND,
 } from '../../exec/command-history.js';
+import {
+  buildKubectlExecArgs,
+  isCommandNotFoundError,
+  describeExecFailure,
+  FALLBACK_SHELL,
+} from '../../exec/exec-command.js';
 import { PortForwardManager } from '../../portforward/manager.js';
 import type { PortForwardManagerState } from '../../portforward/manager.js';
 import type { PortForward } from '../../portforward/types.js';
@@ -3956,12 +3962,13 @@ export class LiveController {
   private async openExecPrompt(
     resource: ResourceObject,
     container: string,
+    prefill = '',
   ): Promise<void> {
     const history = await loadHistory(this.fileSink);
     this.execPrompt = {
       resource,
       container,
-      input: new CommandInput(history, ''),
+      input: new CommandInput(history, prefill),
     };
     this.app = { ...this.app, focus: 'commandbar', mode: 'command' };
     this.bump();
@@ -4008,40 +4015,80 @@ export class LiveController {
     }
   }
 
+  /**
+   * Run `kubectl exec` via the suspend-and-handover runner (Spec 05 §4.3,
+   * P9R-0005). The default shell is retried once with {@link FALLBACK_SHELL}
+   * before any failure is reported. Local kubectl stderr (its own
+   * diagnostics — RBAC denial, pod gone, missing binary — never the remote
+   * shell's own output, which is multiplexed onto stdout by the pty) is
+   * captured rather than inherited so it can be journaled and surfaced in
+   * the UI instead of leaking to the real terminal.
+   */
   private execInto(
     resource: ResourceObject,
     container: string,
     command: string = DEFAULT_COMMAND,
+    isFallbackRetry = false,
   ): void {
     const namespace = resource.namespace ?? 'default';
     const podName = resource.name;
+    const isDefaultShell =
+      command === DEFAULT_COMMAND || command === FALLBACK_SHELL;
     this.suspendRunner(
       () =>
         new Promise<void>((resolve) => {
-          const child = spawn(
-            'kubectl',
-            [
-              'exec',
-              '-it',
-              '-n',
-              namespace,
-              podName,
-              '-c',
-              container,
-              '--',
-              'sh',
-              '-c',
-              command === DEFAULT_COMMAND
-                ? 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'
-                : command,
-            ],
-            { stdio: 'inherit' },
+          const args = buildKubectlExecArgs(
+            namespace,
+            podName,
+            container,
+            command,
+            isDefaultShell,
           );
-          child.on('exit', () => {
-            resolve();
+          let stderr = '';
+          const child = spawn('kubectl', args, {
+            stdio: ['inherit', 'inherit', 'pipe'],
           });
-          child.on('error', () => {
+          child.stderr.on('data', (chunk: Buffer) => {
+            stderr += chunk.toString();
+          });
+          const finish = (spawnError?: unknown): void => {
             resolve();
+            const errText =
+              spawnError instanceof Error ? spawnError.message : stderr.trim();
+            if (errText.length === 0) {
+              // Clean exit (or a nonzero exit from the remote shell itself,
+              // e.g. `exit 1`) — nothing kubectl-level went wrong.
+              return;
+            }
+            if (
+              command === DEFAULT_COMMAND &&
+              !isFallbackRetry &&
+              isCommandNotFoundError(errText)
+            ) {
+              log.warn(
+                { namespace, podName, container, stderr: errText },
+                'exec: default shell not found, retrying with fallback',
+              );
+              this.execInto(resource, container, FALLBACK_SHELL, true);
+              return;
+            }
+            const message = describeExecFailure(errText);
+            log.warn(
+              { namespace, podName, container, command, stderr: errText },
+              'exec failed',
+            );
+            this.showToast(`✗ ${message}`);
+            void this.openExecPrompt(
+              resource,
+              container,
+              command === DEFAULT_COMMAND ? '' : command,
+            );
+          };
+          child.on('exit', () => {
+            finish();
+          });
+          child.on('error', (err) => {
+            finish(err);
           });
         }),
     );
