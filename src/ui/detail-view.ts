@@ -543,22 +543,20 @@ function padLeft(s: string, w: number): string {
 }
 
 /**
- * Project the events table into `ViewLine[]`: the toggle bar, header, divider,
- * then one row per event (Warning rows coloured yellow). Empty states collapse
- * to a short message. Long lines clip to `width`.
+ * Project the events rows into `ViewLine[]`: header, divider, then one row
+ * per event (Warning rows coloured yellow). Empty states collapse to a short
+ * message. Long lines clip to `width`. The `[Warning]`/`[All]` toggle and the
+ * count summary are **not** part of this projection — they render in a fixed
+ * toolbar row above the scroll viewport (P9R-0003) so they stay real,
+ * clickable measured targets instead of scrolling out of reach.
  */
 export function projectEventsLines(
   events: readonly EventRow[],
-  warningCount: number,
   showAll: boolean,
   nowMs: number,
   width: number,
 ): ViewLine[] {
   const lines: ViewLine[] = [];
-  const toggle = showAll
-    ? `[Warning]  [All ✓]${warningCount > 0 ? `  ${String(warningCount)} warnings` : ''}`
-    : `[Warning ✓]  [All]  ${String(events.length)} events (${String(warningCount)} warnings)`;
-  lines.push(plain(toggle, width));
 
   if (events.length === 0) {
     lines.push(plain(showAll ? 'No events' : 'No warning events', width));

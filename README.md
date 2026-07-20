@@ -113,6 +113,7 @@ registry (`src/ui/keymap.ts`) and verified byte-for-byte by a unit test** — th
 markers; regenerate from `renderKeymapMarkdown()`.
 
 <!-- KEYMAP:START -->
+
 ### Global
 
 | Key | Action |
@@ -206,6 +207,12 @@ markers; regenerate from `renderKeymapMarkdown()`.
 | --- | --- |
 | `[ / ]` | Change the time range |
 
+### Detail · Events
+
+| Key | Action |
+| --- | --- |
+| `f` | Toggle the Warning / All events filter |
+
 ### Command bar
 
 | Key | Action |
@@ -222,6 +229,7 @@ markers; regenerate from `renderKeymapMarkdown()`.
 | `Enter` | Select |
 | `Esc` | Close |
 | `type` | Filter (where filterable) |
+
 <!-- KEYMAP:END -->
 
 ## Configuration

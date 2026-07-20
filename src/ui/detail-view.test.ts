@@ -570,19 +570,18 @@ function evt(over: Partial<EventRow>): EventRow {
 
 describe('projectEventsLines', () => {
   it('empty + warnings filter shows "No warning events"', () => {
-    const lines = projectEventsLines([], 0, false, NOW_MS, 80);
+    const lines = projectEventsLines([], false, NOW_MS, 80);
     expect(lines.map((l) => l.text).join('\n')).toContain('No warning events');
   });
 
   it('empty + showAll shows "No events"', () => {
-    const lines = projectEventsLines([], 0, true, NOW_MS, 80);
+    const lines = projectEventsLines([], true, NOW_MS, 80);
     expect(lines.map((l) => l.text).join('\n')).toContain('No events');
   });
 
   it('renders header, divider, and warning rows in yellow', () => {
     const lines = projectEventsLines(
       [evt({ type: 'Warning', reason: 'BackOff', count: 5 }), evt({})],
-      1,
       false,
       NOW_MS,
       120,
@@ -597,15 +596,9 @@ describe('projectEventsLines', () => {
     expect(normalRow?.color).toBeUndefined();
   });
 
-  it('showAll toggle bar reports the warning count', () => {
-    const lines = projectEventsLines([evt({})], 3, true, NOW_MS, 120);
-    expect(lines[0]?.text).toContain('3 warnings');
-  });
-
   it('handles events with no timestamp (empty age)', () => {
     const lines = projectEventsLines(
       [evt({ lastTimestamp: '' })],
-      0,
       true,
       NOW_MS,
       120,
@@ -622,17 +615,11 @@ describe('projectEventsLines', () => {
           count: 99999999,
         }),
       ],
-      0,
       true,
       NOW_MS,
       200,
     );
     expect(lines.length).toBeGreaterThan(2);
-  });
-
-  it('showAll with no warnings omits the warnings suffix', () => {
-    const lines = projectEventsLines([evt({})], 0, true, NOW_MS, 120);
-    expect(lines[0]?.text).not.toContain('warnings');
   });
 });
 

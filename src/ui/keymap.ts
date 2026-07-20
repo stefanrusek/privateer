@@ -31,6 +31,7 @@ export type Scope =
   | 'detail.logs'
   | 'detail.yaml'
   | 'detail.metrics'
+  | 'detail.events'
   | 'commandBar'
   | 'overlay';
 
@@ -171,6 +172,17 @@ export const KEYMAP: readonly KeyGroup[] = [
     bindings: [{ keys: '[ / ]', description: 'Change the time range' }],
   },
   {
+    scope: 'detail.events',
+    title: 'Detail · Events',
+    bindings: [
+      {
+        keys: 'f',
+        description: 'Toggle the Warning / All events filter',
+        accelerator: 'f',
+      },
+    ],
+  },
+  {
     scope: 'commandBar',
     title: 'Command bar',
     bindings: [
@@ -219,6 +231,9 @@ export function scopeForFocus(
     }
     if (tab === 'metrics') {
       return 'detail.metrics';
+    }
+    if (tab === 'events') {
+      return 'detail.events';
     }
     return 'detail';
   }

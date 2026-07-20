@@ -4,7 +4,7 @@
  * Spec 01 §3.1: Normal events are never watched, always fetched on-demand.
  */
 
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import type { KubeClient } from '../../boundaries/kube-client.js';
 import type { KubernetesObject } from '../../core/types.js';
@@ -31,6 +31,8 @@ export interface EventsTabProps {
   events: EventRow[];
   /** Total number of warning events (used in label). */
   warningCount: number;
+  /** Total number of events for the resource, regardless of filter. */
+  totalCount: number;
   /** Whether All events are shown (true) or only Warnings (false). */
   showAll: boolean;
   /** Callback to toggle the showAll filter. */
@@ -43,6 +45,13 @@ export interface EventsTabProps {
   offset?: number;
   /** Viewport height; when set the body scrolls instead of rendering all rows. */
   viewportHeight?: number;
+  /**
+   * The real, clickable `[Warning]`/`[All]` toolbar (measured `<Button>`s,
+   * built by the live adapter — P9R-0003). When omitted, a static
+   * (non-interactive) toolbar renders instead — used by the plain component
+   * tests.
+   */
+  toolbar?: ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +73,55 @@ export interface EventsFetcherResult {
   events: EventRow[];
   /** Count of Warning events (regardless of showAll). */
   warningCount: number;
+  /** Total number of events for the resource, regardless of filter. */
+  totalCount: number;
+}
+
+/**
+ * Resolve an event's display count. Modern (`events.k8s.io`-style) events
+ * often omit `count` in favor of a `series.count` (or omit both for a single
+ * occurrence); an event that exists happened at least once, so this never
+ * returns `0` (Spec P9R-0003).
+ */
+function resolveCount(e: KubernetesObject): number {
+  if (typeof e.count === 'number' && e.count > 0) {
+    return e.count;
+  }
+  const series = e.series;
+  if (
+    series !== null &&
+    typeof series === 'object' &&
+    typeof (series as Record<string, unknown>).count === 'number' &&
+    ((series as Record<string, unknown>).count as number) > 0
+  ) {
+    return (series as Record<string, unknown>).count as number;
+  }
+  return 1;
+}
+
+/**
+ * Resolve an event's display Age timestamp: `lastTimestamp` →
+ * `series.lastObservedTime` → `eventTime` → `metadata.creationTimestamp`.
+ * Never returns a value that would blank the Age column when any of these
+ * fields is present (Spec P9R-0003).
+ */
+function resolveTimestamp(e: KubernetesObject): string {
+  if (typeof e.lastTimestamp === 'string' && e.lastTimestamp !== '') {
+    return e.lastTimestamp;
+  }
+  const series = e.series;
+  const seriesLast =
+    series !== null && typeof series === 'object'
+      ? (series as Record<string, unknown>).lastObservedTime
+      : undefined;
+  if (typeof seriesLast === 'string' && seriesLast !== '') {
+    return seriesLast;
+  }
+  if (typeof e.eventTime === 'string' && e.eventTime !== '') {
+    return e.eventTime;
+  }
+  const created = e.metadata?.creationTimestamp;
+  return typeof created === 'string' ? created : '';
 }
 
 /** Fetch and process events. Called by tests and by the async hook. */
@@ -73,7 +131,9 @@ export async function useEventsFetcher(
   const { kubeClient, resourceName, resourceKind, namespace, showAll } =
     options;
 
-  // Always fetch all events for this object so we can compute warningCount.
+  // Always fetch every event for this object — filtering is a view concern
+  // (P9R-0003): no fieldSelector type=Warning here, so Normal events are
+  // never dropped before the UI gets a chance to show them.
   const allResult = await kubeClient.listEvents({
     involvedObjectName: resourceName,
     involvedObjectKind: resourceKind,
@@ -83,6 +143,7 @@ export async function useEventsFetcher(
   const allRaw: KubernetesObject[] = allResult.ok ? allResult.value : [];
 
   const warningCount = allRaw.filter((e) => e.type === 'Warning').length;
+  const totalCount = allRaw.length;
 
   const sourceRaw = showAll
     ? allRaw
@@ -91,8 +152,8 @@ export async function useEventsFetcher(
   const rows: EventRow[] = sourceRaw.map((e) => ({
     type: typeof e.type === 'string' ? e.type : '',
     reason: typeof e.reason === 'string' ? e.reason : '',
-    lastTimestamp: typeof e.lastTimestamp === 'string' ? e.lastTimestamp : '',
-    count: typeof e.count === 'number' ? e.count : 0,
+    lastTimestamp: resolveTimestamp(e),
+    count: resolveCount(e),
     message: typeof e.message === 'string' ? e.message : '',
   }));
 
@@ -103,7 +164,7 @@ export async function useEventsFetcher(
     return tb - ta;
   });
 
-  return { events: rows, warningCount };
+  return { events: rows, warningCount, totalCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -133,24 +194,72 @@ function padLeft(s: string, w: number): string {
 // EventsTab component
 // ---------------------------------------------------------------------------
 
+/**
+ * The static (non-interactive) `[Warning]`/`[All]` chips, rendered when the
+ * caller doesn't supply a real measured `toolbar` (component tests, or any
+ * host that hasn't wired one up). Active state uses the same bold styling the
+ * measured `<Button active>` applies.
+ */
+function defaultChips(showAll: boolean): React.ReactElement {
+  return showAll ? (
+    <Box flexDirection="row" gap={2}>
+      <Text dimColor>[Warning]</Text>
+      <Text bold>[All ✓]</Text>
+    </Box>
+  ) : (
+    <Box flexDirection="row" gap={2}>
+      <Text bold>[Warning ✓]</Text>
+      <Text dimColor>[All]</Text>
+    </Box>
+  );
+}
+
+/**
+ * The `N of M events` / `M events (N warnings)` summary text next to the
+ * chips (Spec P9R-0003: with the Warning filter active the count line reads
+ * `N of M events`, never a bare "1 events" that hides how many were
+ * filtered out).
+ */
+function summaryText(
+  showAll: boolean,
+  warningCount: number,
+  totalCount: number,
+): string | null {
+  if (showAll) {
+    return warningCount > 0 ? `${String(warningCount)} warnings` : null;
+  }
+  return `${String(warningCount)} of ${String(totalCount)} events`;
+}
+
 export function EventsTab({
   events,
   warningCount,
+  totalCount,
   showAll,
   onToggleShowAll: _onToggleShowAll,
   nowMs,
   width = 80,
   offset = 0,
   viewportHeight,
+  toolbar,
 }: EventsTabProps): React.ReactElement {
+  const chips = toolbar ?? defaultChips(showAll);
+  const summary = summaryText(showAll, warningCount, totalCount);
+
   if (viewportHeight !== undefined) {
     return (
-      <ScrollableLines
-        lines={projectEventsLines(events, warningCount, showAll, nowMs, width)}
-        offset={offset}
-        viewportHeight={viewportHeight}
-        width={width}
-      />
+      <Box flexDirection="column">
+        <Box flexDirection="row" gap={2}>
+          {chips}
+          {summary !== null && <Text dimColor>{summary}</Text>}
+        </Box>
+        <ScrollableLines
+          lines={projectEventsLines(events, showAll, nowMs, width)}
+          offset={offset}
+          viewportHeight={viewportHeight}
+          width={width}
+        />
+      </Box>
     );
   }
 
@@ -158,10 +267,7 @@ export function EventsTab({
   if (events.length === 0 && !showAll) {
     return (
       <Box flexDirection="column" gap={1}>
-        <Box flexDirection="row" gap={2}>
-          <Text bold>[Warning ✓]</Text>
-          <Text dimColor>[All]</Text>
-        </Box>
+        {chips}
         <Box flexDirection="row" gap={2}>
           <Text>No warning events</Text>
           <Text color="cyan" underline>
@@ -175,31 +281,17 @@ export function EventsTab({
   if (events.length === 0 && showAll) {
     return (
       <Box flexDirection="column" gap={1}>
-        <Box flexDirection="row" gap={2}>
-          <Text dimColor>[Warning]</Text>
-          <Text bold>[All ✓]</Text>
-        </Box>
+        {chips}
         <Text>No events</Text>
       </Box>
     );
   }
 
   // Toggle bar
-  const toggleBar = showAll ? (
+  const toggleBar = (
     <Box flexDirection="row" gap={2}>
-      <Text dimColor>[Warning]</Text>
-      <Text bold>[All ✓]</Text>
-      {warningCount > 0 && (
-        <Text dimColor>{String(warningCount)} warnings</Text>
-      )}
-    </Box>
-  ) : (
-    <Box flexDirection="row" gap={2}>
-      <Text bold>[Warning ✓]</Text>
-      <Text dimColor>[All]</Text>
-      <Text dimColor>
-        {String(events.length)} events ({String(warningCount)} warnings)
-      </Text>
+      {chips}
+      {summary !== null && <Text dimColor>{summary}</Text>}
     </Box>
   );
 

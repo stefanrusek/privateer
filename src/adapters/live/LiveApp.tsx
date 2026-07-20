@@ -28,6 +28,7 @@ import {
   type DropdownItem,
 } from './measured-widgets.js';
 import { LOGS_TOOLBAR_ACCELERATORS } from '../../ui/logs-toolbar.js';
+import { EVENTS_TOOLBAR_ACCELERATORS } from '../../ui/events-toolbar.js';
 import type { TabDef } from '../../ui/components/DetailPane.js';
 import { AGENT_TAB } from '../../ui/detail-tabs.js';
 
@@ -204,19 +205,55 @@ export function LiveApp({
           />
         );
       }
-      case 'events':
+      case 'events': {
+        // B04b/P9R-0003: the `[Warning]`/`[All]` chips are real measured
+        // `<Button>`s (accelerator `f`, shared by both — either chip toggles
+        // the same boolean) so clicks land and `f` documents in `?` help.
+        const eventsToolbar = (
+          <>
+            <Button
+              id="events.warning"
+              accelerator={EVENTS_TOOLBAR_ACCELERATORS['events.filter']}
+              active={!detail.showAllEvents}
+              onClick={controller.toggleShowAllEvents}
+            >
+              <Text
+                bold={!detail.showAllEvents}
+                dimColor={detail.showAllEvents}
+              >
+                {detail.showAllEvents ? '[Warning]' : '[Warning ✓]'}
+              </Text>
+            </Button>
+            <Button
+              id="events.all"
+              accelerator={EVENTS_TOOLBAR_ACCELERATORS['events.filter']}
+              active={detail.showAllEvents}
+              onClick={controller.toggleShowAllEvents}
+            >
+              <Text
+                bold={detail.showAllEvents}
+                dimColor={!detail.showAllEvents}
+              >
+                {detail.showAllEvents ? '[All ✓]' : '[All]'}
+              </Text>
+            </Button>
+          </>
+        );
         return (
           <EventsTab
             events={detail.events}
             warningCount={detail.warningCount}
+            totalCount={detail.totalEventCount}
             showAll={detail.showAllEvents}
             onToggleShowAll={controller.toggleShowAllEvents}
             nowMs={snapshot.nowMs}
             width={controller.detailScrollWidth()}
             offset={controller.detailScrollOffset()}
             viewportHeight={controller.detailScrollViewportHeight()}
+            toolbar={eventsToolbar}
           />
         );
+      }
       case 'logs': {
         const logs = snapshot.logs;
         if (logs === null) {

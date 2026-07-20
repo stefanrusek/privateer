@@ -64,6 +64,7 @@ import {
   type LogsContainerItem,
   type LogsLineLimitItem,
 } from '../../ui/logs-toolbar.js';
+import { EVENTS_TOOLBAR_ACCELERATORS } from '../../ui/events-toolbar.js';
 import {
   clampOffset,
   maxOffset,
@@ -251,6 +252,7 @@ export interface DetailState {
   tab: TabId;
   events: EventRow[];
   warningCount: number;
+  totalEventCount: number;
   showAllEvents: boolean;
   yamlMode: 'read' | 'edit' | 'discard-confirm' | 'diff';
 }
@@ -887,12 +889,16 @@ export class LiveController {
   /**
    * Rows of scrollable content the detail pane shows (Spec 03). The tab bar
    * occupies the detail region's top row, so the generic viewport is one row
-   * shorter than the inner height.
+   * shorter than the inner height. The Events tab additionally reserves a
+   * second chrome row above the scroll viewport for its `[Warning]`/`[All]`
+   * toolbar (P9R-0003) — pulled out of the scrolled content so the chips stay
+   * fixed, clickable measured targets instead of scrolling out of reach.
    */
   private detailViewportHeight(): number {
     const detail = this.frame().detail;
     const inner = detail !== null ? detail.height : 0;
-    return Math.max(1, inner - 1);
+    const chrome = this.detail?.tab === 'events' ? 2 : 1;
+    return Math.max(1, inner - chrome);
   }
 
   /** Inner width of the detail pane — content clips here (Spec 02/03). */
@@ -926,7 +932,6 @@ export class LiveController {
       case 'events':
         return projectEventsLines(
           d.events,
-          d.warningCount,
           d.showAllEvents,
           this.clock.now(),
           width,
@@ -2681,6 +2686,7 @@ export class LiveController {
       tab: effectiveTab,
       events: [],
       warningCount: 0,
+      totalEventCount: 0,
       showAllEvents: false,
       yamlMode: 'read',
     };
@@ -2713,18 +2719,24 @@ export class LiveController {
       showAll: showAllEvents,
       nowMs: this.clock.now(),
     });
-    this.applyDetailEvents(resource.uid, result.events, result.warningCount);
+    this.applyDetailEvents(
+      resource.uid,
+      result.events,
+      result.warningCount,
+      result.totalCount,
+    );
   }
 
   private applyDetailEvents(
     uid: string,
     events: EventRow[],
     warningCount: number,
+    totalEventCount: number,
   ): void {
     if (this.detail?.uid !== uid) {
       return;
     }
-    this.detail = { ...this.detail, events, warningCount };
+    this.detail = { ...this.detail, events, warningCount, totalEventCount };
     this.bump();
   }
 
@@ -5214,6 +5226,15 @@ export class LiveController {
     const jumped = jumpTab(tabs, input);
     if (jumped !== null) {
       this.setDetailTab(jumped);
+      return;
+    }
+    // `f` cycles the Events tab's Warning/All filter (P9R-0003); only while
+    // that tab is active, so it never shadows a future `f` binding elsewhere.
+    if (
+      this.detail.tab === 'events' &&
+      input === EVENTS_TOOLBAR_ACCELERATORS['events.filter']
+    ) {
+      this.toggleShowAllEvents();
       return;
     }
     // `↑/↓`, PageUp/PageDown, `g`/`G` scroll the active non-Logs tab's content
