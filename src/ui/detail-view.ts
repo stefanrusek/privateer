@@ -22,6 +22,7 @@ import type { MetricsTier } from '../metrics/discovery.js';
 import type { ViewLine } from './scroll-viewport.js';
 import type { EventRow } from './components/EventsTab.js';
 import type { CrKindDescriptor } from '../k8s/crd-grouping.js';
+import { crdFromObject, crKindLabel } from '../k8s/crd-grouping.js';
 import { formatAge } from '../resources/age.js';
 import { formatMemoryQuantity } from '../resources/quantity.js';
 import { tokenizeLine } from '../yaml/highlight.js';
@@ -536,11 +537,47 @@ function buildCrSections(
   return [metaSec, columnsSec, conditionsSec].filter((s) => s.rows.length > 0);
 }
 
+/**
+ * Overview sections for a CustomResourceDefinition object itself (ticket
+ * P9R-0018 story 4): metadata, then a SPEC section listing the group, kind,
+ * scope (Namespaced/Cluster), served versions, and an "Instances" row
+ * fronting the link to that kind's instance list. `instanceCount` is
+ * `undefined` while the controller's on-demand count fetch is still in
+ * flight — rendered as `…` rather than `0` so it never misreports "no
+ * instances" before the fetch resolves.
+ */
+function buildCrdSections(
+  resource: ResourceObject,
+  nowMs: number,
+  instanceCount?: number,
+): OverviewSection[] {
+  const metaSec = metadataSection(resource, nowMs);
+  const crd = crdFromObject(resource.raw);
+  if (crd === undefined) {
+    return [metaSec];
+  }
+  const specSec: OverviewSection = {
+    title: 'SPEC',
+    rows: [
+      { key: 'Group', value: crd.group },
+      { key: 'Kind', value: crd.kind },
+      { key: 'Scope', value: crd.namespaced ? 'Namespaced' : 'Cluster' },
+      { key: 'Versions', value: crd.versions.join(', ') },
+      {
+        key: 'Instances',
+        value: `${instanceCount === undefined ? '…' : String(instanceCount)} → view ${crKindLabel(crd.kind)}`,
+      },
+    ],
+  };
+  return [metaSec, specSec];
+}
+
 /** Build the per-kind overview sections (Spec 04 §5.2). */
 export function buildOverviewSections(
   resource: ResourceObject,
   nowMs: number,
   crDescriptor?: CrKindDescriptor,
+  crdInstanceCount?: number,
 ): OverviewSection[] {
   switch (resource.kind) {
     case 'Pod':
@@ -553,6 +590,8 @@ export function buildOverviewSections(
       return buildKafkaTopicSections(resource, nowMs);
     case 'DopplerSecret':
       return buildDopplerSecretSections(resource, nowMs);
+    case 'CustomResourceDefinition':
+      return buildCrdSections(resource, nowMs, crdInstanceCount);
     default:
       return crDescriptor !== undefined
         ? buildCrSections(resource, nowMs, crDescriptor)
@@ -579,8 +618,14 @@ export function projectOverviewLines(
   nowMs: number,
   width: number,
   crDescriptor?: CrKindDescriptor,
+  crdInstanceCount?: number,
 ): ViewLine[] {
-  const sections = buildOverviewSections(resource, nowMs, crDescriptor);
+  const sections = buildOverviewSections(
+    resource,
+    nowMs,
+    crDescriptor,
+    crdInstanceCount,
+  );
   const lines: ViewLine[] = [];
   sections.forEach((section, i) => {
     if (i > 0) {

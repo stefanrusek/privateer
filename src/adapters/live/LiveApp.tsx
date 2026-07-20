@@ -31,6 +31,7 @@ import { LOGS_TOOLBAR_ACCELERATORS } from '../../ui/logs-toolbar.js';
 import { EVENTS_TOOLBAR_ACCELERATORS } from '../../ui/events-toolbar.js';
 import type { TabDef } from '../../ui/components/DetailPane.js';
 import { AGENT_TAB } from '../../ui/detail-tabs.js';
+import { crKindLabel } from '../../k8s/crd-grouping.js';
 
 /**
  * The single mouse path: one `process.stdin` listener feeds every raw read to
@@ -172,7 +173,27 @@ export function LiveApp({
       return null;
     }
     switch (tab) {
-      case 'overview':
+      case 'overview': {
+        // CRD's own Overview links to its kind's instance list (ticket
+        // P9R-0018 story 4). The count comes from the same `badgeCounts` map
+        // the sidebar badges use, keyed by the CR kind's sidebar label —
+        // populated on open by the controller's `fetchCrdInstanceCount`
+        // (and kept fresh by the sidebar's per-group fetch if that group is
+        // later expanded/re-expanded).
+        const isCrd = detail.resource.kind === 'CustomResourceDefinition';
+        const crdKind = isCrd
+          ? (
+              detail.resource.raw.spec as
+                | { names?: { kind?: unknown } }
+                | undefined
+            )?.names?.kind
+          : undefined;
+        const crdInstanceLabel =
+          typeof crdKind === 'string' ? crKindLabel(crdKind) : undefined;
+        const crdInstanceCount =
+          crdInstanceLabel !== undefined
+            ? app.badgeCounts.get(crdInstanceLabel)
+            : undefined;
         return (
           <OverviewTab
             resource={detail.resource}
@@ -183,8 +204,28 @@ export function LiveApp({
             {...(detail.crDescriptor !== undefined
               ? { crDescriptor: detail.crDescriptor }
               : {})}
+            {...(crdInstanceCount !== undefined ? { crdInstanceCount } : {})}
+            {...(isCrd
+              ? {
+                  instancesLink: (
+                    <Button
+                      id="overview.crd.instances"
+                      onClick={controller.navigateToCrInstances}
+                    >
+                      <Text color="cyan" underline>
+                        →{' '}
+                        {crdInstanceCount === undefined
+                          ? '…'
+                          : String(crdInstanceCount)}{' '}
+                        instances
+                      </Text>
+                    </Button>
+                  ),
+                }
+              : {})}
           />
         );
+      }
       case 'yaml': {
         const reentry = controller.peekYamlEditReentry();
         return (

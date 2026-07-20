@@ -10,7 +10,7 @@
  * render (used by the static component tests and any non-measured host).
  */
 
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import type { ResourceObject } from '../../core/types.js';
 import type { CrKindDescriptor } from '../../k8s/crd-grouping.js';
@@ -41,6 +41,22 @@ export interface OverviewTabProps {
   /** CR kind's printer-column/scope descriptor (ticket P9R-0018 story 3),
    * present only when `resource` is a custom-resource instance. */
   crDescriptor?: CrKindDescriptor;
+  /**
+   * Instance count for a CustomResourceDefinition's own Overview (ticket
+   * P9R-0018 story 4). `undefined` while the controller's on-demand count
+   * fetch for this kind is still in flight — rendered as `…`. Ignored for
+   * every other resource kind.
+   */
+  crdInstanceCount?: number;
+  /**
+   * The real, clickable "→ N instances" link for a CRD's own Overview
+   * (measured `<Button>`, built by the live adapter — ticket P9R-0018 story
+   * 4), rendered as a fixed row above the scrolled content so it stays a
+   * real hit-target instead of scrolling out of reach (same pattern as the
+   * Events tab's `[Warning]`/`[All]` toolbar). Only rendered when `resource`
+   * is a CustomResourceDefinition; omitted for the plain component tests.
+   */
+  instancesLink?: ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,8 +70,14 @@ function buildSections(
   resource: ResourceObject,
   nowMs: number,
   crDescriptor?: CrKindDescriptor,
+  crdInstanceCount?: number,
 ): Section[] {
-  return buildOverviewSections(resource, nowMs, crDescriptor).map((s) => ({
+  return buildOverviewSections(
+    resource,
+    nowMs,
+    crDescriptor,
+    crdInstanceCount,
+  ).map((s) => ({
     title: s.title,
     rows: [...s.rows],
   }));
@@ -182,19 +204,45 @@ export function OverviewTab({
   offset = 0,
   viewportHeight,
   crDescriptor,
+  crdInstanceCount,
+  instancesLink,
 }: OverviewTabProps): React.ReactElement {
+  const isCrd = resource.kind === 'CustomResourceDefinition';
+
   if (viewportHeight !== undefined) {
     return (
-      <ScrollableLines
-        lines={projectOverviewLines(resource, nowMs, width, crDescriptor)}
-        offset={offset}
-        viewportHeight={viewportHeight}
-        width={width}
-      />
+      <Box flexDirection="column">
+        {isCrd && (
+          <Box flexDirection="row">
+            {instancesLink ?? (
+              <Text color="cyan" underline>
+                → view instances
+              </Text>
+            )}
+          </Box>
+        )}
+        <ScrollableLines
+          lines={projectOverviewLines(
+            resource,
+            nowMs,
+            width,
+            crDescriptor,
+            crdInstanceCount,
+          )}
+          offset={offset}
+          viewportHeight={viewportHeight}
+          width={width}
+        />
+      </Box>
     );
   }
 
-  const sections = buildSections(resource, nowMs, crDescriptor);
+  const sections = buildSections(
+    resource,
+    nowMs,
+    crDescriptor,
+    crdInstanceCount,
+  );
 
   // For DopplerSecret, extract managed secret info for the link
   const isDopplerSecret = resource.kind === 'DopplerSecret';
@@ -219,6 +267,15 @@ export function OverviewTab({
           />
         </Box>
       ))}
+      {isCrd && (
+        <Box flexDirection="row" marginTop={1}>
+          {instancesLink ?? (
+            <Text color="cyan" underline>
+              → view instances
+            </Text>
+          )}
+        </Box>
+      )}
       {isDopplerSecret && managedSecretName !== null && (
         <Box flexDirection="row" marginTop={1}>
           <Text color="cyan" underline>

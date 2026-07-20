@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
+import { Text } from 'ink';
 import { OverviewTab } from './OverviewTab.js';
 import type { ResourceObject } from '../../core/types.js';
 
@@ -636,6 +637,75 @@ describe('OverviewTab custom resource', () => {
     expect(frame).toContain('PRINTER COLUMNS');
     expect(frame).toContain('proj-1');
     expect(frame).toContain('CONDITIONS');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CustomResourceDefinition's own Overview (ticket P9R-0018 story 4)
+// ---------------------------------------------------------------------------
+
+describe('OverviewTab CustomResourceDefinition', () => {
+  const resource = makeResource({
+    kind: 'CustomResourceDefinition',
+    name: 'dopplersecrets.doppler.com',
+    namespace: null,
+    raw: {
+      spec: {
+        group: 'doppler.com',
+        names: { kind: 'DopplerSecret', plural: 'dopplersecrets' },
+        scope: 'Namespaced',
+        versions: [{ name: 'v1alpha1', served: true, storage: true }],
+      },
+    },
+  });
+
+  it('renders a default "view instances" link in the rich path', () => {
+    const { lastFrame } = render(
+      React.createElement(OverviewTab, {
+        resource,
+        nowMs: NOW_MS,
+        crdInstanceCount: 3,
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('view instances');
+    expect(frame).toContain('DopplerSecrets');
+  });
+
+  it('renders a supplied measured instancesLink in the rich path', () => {
+    const { lastFrame } = render(
+      React.createElement(OverviewTab, {
+        resource,
+        nowMs: NOW_MS,
+        instancesLink: React.createElement(Text, null, 'CLICK ME'),
+      }),
+    );
+    expect(lastFrame()).toContain('CLICK ME');
+  });
+
+  it('renders the instances link above the scrolled content', () => {
+    const { lastFrame } = render(
+      React.createElement(OverviewTab, {
+        resource,
+        nowMs: NOW_MS,
+        viewportHeight: 20,
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('view instances');
+    expect(frame).toContain('SPEC');
+  });
+
+  it('renders a supplied measured instancesLink above the scrolled content', () => {
+    const { lastFrame } = render(
+      React.createElement(OverviewTab, {
+        resource,
+        nowMs: NOW_MS,
+        viewportHeight: 20,
+        instancesLink: React.createElement(Text, null, 'CLICK ME'),
+      }),
+    );
+    expect(lastFrame()).toContain('CLICK ME');
   });
 });
 

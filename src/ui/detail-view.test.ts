@@ -385,6 +385,67 @@ describe('buildOverviewSections', () => {
     expect(dsTitles).not.toContain('SPEC');
   });
 
+  it('CustomResourceDefinition lists group/kind/scope/versions and an instance count link', () => {
+    const r = makeResource({
+      kind: 'CustomResourceDefinition',
+      name: 'dopplersecrets.doppler.com',
+      namespace: null,
+      raw: {
+        apiVersion: 'apiextensions.k8s.io/v1',
+        kind: 'CustomResourceDefinition',
+        metadata: { name: 'dopplersecrets.doppler.com' },
+        spec: {
+          group: 'doppler.com',
+          names: { kind: 'DopplerSecret', plural: 'dopplersecrets' },
+          scope: 'Namespaced',
+          versions: [
+            { name: 'v1alpha1', served: true, storage: true },
+            { name: 'v1beta1', served: true, storage: false },
+            { name: 'v1old', served: false, storage: false },
+          ],
+        },
+        status: { conditions: [{ type: 'Established', status: 'True' }] },
+      },
+    });
+    const sections = buildOverviewSections(r, NOW_MS, undefined, 3);
+    const spec = sections.find((s) => s.title === 'SPEC');
+    expect(spec).toBeDefined();
+    const rows = new Map(spec?.rows.map((row) => [row.key, row.value]));
+    expect(rows.get('Group')).toBe('doppler.com');
+    expect(rows.get('Kind')).toBe('DopplerSecret');
+    expect(rows.get('Scope')).toBe('Namespaced');
+    expect(rows.get('Versions')).toBe('v1alpha1, v1beta1');
+    expect(rows.get('Instances')).toBe('3 → view DopplerSecrets');
+  });
+
+  it('CustomResourceDefinition renders "…" for an in-flight instance count', () => {
+    const r = makeResource({
+      kind: 'CustomResourceDefinition',
+      raw: {
+        spec: {
+          group: 'doppler.com',
+          names: { kind: 'DopplerSecret', plural: 'dopplersecrets' },
+          scope: 'Cluster',
+          versions: [{ name: 'v1', served: true, storage: true }],
+        },
+      },
+    });
+    const sections = buildOverviewSections(r, NOW_MS);
+    const spec = sections.find((s) => s.title === 'SPEC');
+    const rows = new Map(spec?.rows.map((row) => [row.key, row.value]));
+    expect(rows.get('Scope')).toBe('Cluster');
+    expect(rows.get('Instances')).toBe('… → view DopplerSecrets');
+  });
+
+  it('CustomResourceDefinition with an unparseable raw object falls back to METADATA only', () => {
+    const r = makeResource({
+      kind: 'CustomResourceDefinition',
+      raw: { metadata: {} },
+    });
+    const titles = buildOverviewSections(r, NOW_MS).map((s) => s.title);
+    expect(titles).toEqual(['METADATA']);
+  });
+
   it('tolerates raw with no specs/001-initial-features/status object at all', () => {
     for (const kind of ['Deployment', 'Node', 'KafkaTopic', 'DopplerSecret']) {
       const r = makeResource({

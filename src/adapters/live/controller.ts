@@ -26,6 +26,7 @@ import type {
 import {
   groupCrds,
   crdFromObject,
+  crKindLabel,
   descriptorsByLabel,
   descriptorsForGroups,
 } from '../../k8s/crd-grouping.js';
@@ -1377,6 +1378,37 @@ export class LiveController {
     }
   }
 
+  /**
+   * Fetch and cache the instance count for a single CR kind (ticket
+   * P9R-0018 story 4): fired when a CRD's own detail Overview opens, so
+   * `badgeCounts` has an entry for it even when its sidebar group was never
+   * expanded. Shares the same `limit: 1` + `remainingItemCount` counting
+   * approach as `fetchCrGroupCounts` and writes into the same `badgeCounts`
+   * map, so a later sidebar expand of the same kind's group just refreshes
+   * the value already shown here.
+   */
+  private async fetchCrdInstanceCount(crd: CrdDefinition): Promise<void> {
+    const label = crKindLabel(crd.kind);
+    const scoped = this.app.namespace !== '' && crd.namespaced;
+    const result = await this.client.list(
+      crd.kind,
+      scoped ? { limit: 1, namespace: this.app.namespace } : { limit: 1 },
+    );
+    if (result.ok) {
+      const count =
+        result.value.items.length + (result.value.remainingItemCount ?? 0);
+      const forbidden = new Set(this.app.forbiddenKinds);
+      forbidden.delete(label);
+      this.app = { ...this.app, forbiddenKinds: forbidden };
+      this.setBadge(label, count, true);
+    } else if (result.error.kind === 'forbidden') {
+      const forbidden = new Set(this.app.forbiddenKinds);
+      forbidden.add(label);
+      this.app = { ...this.app, forbiddenKinds: forbidden };
+      this.bump();
+    }
+  }
+
   private openStreams(kafkaKinds: ReadonlySet<string>): void {
     this.streams = new StreamManager(
       this.client,
@@ -2710,6 +2742,26 @@ export class LiveController {
     this.openDetail(resource, 'overview');
   };
 
+  /**
+   * Navigate from a CRD's own detail Overview to its kind's instance list
+   * (ticket P9R-0018 story 4, Enter or click on the "→ view instances"
+   * link): resolves group/kind from the raw CRD object and selects that
+   * kind's sidebar leaf, the same call the sidebar itself makes on
+   * Enter/click. A no-op when the detail pane isn't showing a CRD (e.g. the
+   * click/Enter arrives after the pane already closed).
+   */
+  navigateToCrInstances = (): void => {
+    if (this.detail?.resource.kind !== 'CustomResourceDefinition') {
+      return;
+    }
+    const crd = crdFromObject(this.detail.resource.raw);
+    if (crd === undefined) {
+      return;
+    }
+    this.selectKind(crKindLabel(crd.kind));
+    this.setFocus('list');
+  };
+
   /** Keep the dashboard cursor on a valid navigable row and keep it visible. */
   private reconcileDashboardCursor(): void {
     const items = this.dashboardItems();
@@ -3099,6 +3151,16 @@ export class LiveController {
     }
     if (tab === 'metrics') {
       void this.fetchCharts();
+    }
+    if (resource.kind === 'CustomResourceDefinition') {
+      // Instance count for this CRD's own Overview (ticket P9R-0018 story
+      // 4): the sidebar's lazy per-group fetch (fetchCrGroupCounts) only
+      // runs on subtree expand, so a CRD opened without ever expanding its
+      // group's sidebar entry needs its own on-demand fetch.
+      const crd = crdFromObject(resource.raw);
+      if (crd !== undefined) {
+        void this.fetchCrdInstanceCount(crd);
+      }
     }
     this.charts = null;
     // Spec 03: a freshly-opened resource starts at its tab's top.
@@ -5798,6 +5860,17 @@ export class LiveController {
     const jumped = jumpTab(tabs, input);
     if (jumped !== null) {
       this.setDetailTab(jumped);
+      return;
+    }
+    // Enter on a CRD's own Overview follows the "→ view instances" link
+    // (ticket P9R-0018 story 4) to that kind's instance list — the same
+    // action the click on the toolbar link fires.
+    if (
+      key.return &&
+      this.detail.tab === 'overview' &&
+      this.detail.resource.kind === 'CustomResourceDefinition'
+    ) {
+      this.navigateToCrInstances();
       return;
     }
     // `f` cycles the Events tab's Warning/All filter (P9R-0003); only while
