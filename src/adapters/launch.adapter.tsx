@@ -21,6 +21,10 @@ import type { RawConfig } from '../boundaries/config-store.js';
 import { LiveController } from './live/controller.js';
 import { LiveApp } from './live/LiveApp.js';
 import { installMouseExitGuards } from './live/mouse-lifecycle.js';
+import {
+  ScreenLifecycle,
+  installScreenExitGuards,
+} from './live/screen-lifecycle.js';
 import { installStdinSequenceSplitter } from './live/stdin-splitter-bridge.js';
 import {
   TransformersModelDownloader,
@@ -226,20 +230,40 @@ function FirstRunFlow({
 
 function launchLiveApp(options: LaunchOptions): void {
   let instance: ReturnType<typeof render> | null = null;
+  // The whole live-app session runs inside the terminal's alternate screen
+  // buffer (P9R-0013): leaving it is what makes the TUI frame disappear
+  // cleanly on quit and what gives exec a truly blank screen to draw on,
+  // instead of drawing over/under the app's last frame.
+  const screen = new ScreenLifecycle();
   const controller = new LiveController(options, () => {
     instance?.unmount();
+    // Terminal teardown on the normal quit path (q / quit guard confirm):
+    // leave the alternate screen and show the cursor so the shell prompt
+    // returns on a clean screen.
+    screen.tearDown();
   });
   const mouse = controller.mouseLifecycle();
   // THE invariant (Spec 01 §3.5): mouse modes hard-disabled on every exit path.
   // tearDown() is idempotent, so these guards never clash with React cleanup.
   installMouseExitGuards(mouse);
-  // Exec suspend-and-handover (Spec 05 §4.3): unmount the Ink tree to
-  // restore the terminal, run the raw-TTY command, then re-render. The
-  // controller keeps all state and streams across the remount.
+  // Crash / Ctrl-C / kill: same idempotent teardown, so an uncaught
+  // exception or signal never leaves the alternate screen (and the TUI
+  // frame) painted over the shell — buffered stderr/crash output then
+  // prints visibly on the restored primary screen.
+  installScreenExitGuards(screen);
+  screen.enable();
+  // Exec suspend-and-handover (Spec 05 §4.3, P9R-0013): unmount the Ink tree
+  // and leave the alternate screen so the shell/PTY gets the terminal as a
+  // full-screen takeover (k9s-style) — no stray partial lines, no app frame
+  // visible while the shell is live. Re-enter the alternate screen and
+  // re-render when the shell exits; the controller keeps all state and
+  // streams across the remount.
   controller.setSuspendRunner((run) => {
     instance?.unmount();
     mouse.tearDown();
+    screen.tearDown();
     void run().then(() => {
+      screen.enable();
       instance = render(<LiveApp controller={controller} />);
     });
   });
