@@ -494,6 +494,7 @@ export function YamlTab({
           lines={projectYamlReadLines(yaml, kind, mode.revealed, width)}
           offset={offset}
           viewportHeight={viewportHeight}
+          width={width}
         />
       );
     }

@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
-import { MetricsTab } from './MetricsTab.js';
+import { MetricsTab, MAX_CHART_WIDTH } from './MetricsTab.js';
 import type { MetricsTabProps } from './MetricsTab.js';
 import { createRangeSelector, selectRange } from './MetricsTab.js';
 import type { ExporterCapabilities } from '../../metrics/exporters.js';
@@ -539,7 +539,7 @@ describe('MetricsTab — ChartPlaceholder with data', () => {
     }
   });
 
-  it('caps chart width at MAX_CHART_WIDTH on a very wide pane', () => {
+  it('fills a very wide pane instead of capping at MAX_CHART_WIDTH (P9R-0006)', () => {
     const cpuSeries = [
       {
         labels: {},
@@ -560,12 +560,15 @@ describe('MetricsTab — ChartPlaceholder with data', () => {
       ),
     );
     const frame = lastFrame() ?? '';
-    // Capped at 64 columns regardless of the much wider pane.
+    // Spans the full 500-col pane — no artificial cap at MAX_CHART_WIDTH.
     const chartLines = frame.split('\n').filter((l) => /[█▁▂▃▄▅▆▇]/.test(l));
     expect(chartLines.length).toBeGreaterThan(0);
     for (const line of chartLines) {
-      expect(line.length).toBeLessThanOrEqual(64);
+      expect(line.length).toBeLessThanOrEqual(500);
     }
+    expect(chartLines.some((l) => l.trimEnd().length > MAX_CHART_WIDTH)).toBe(
+      true,
+    );
   });
 
   it('ignores a non-positive paneWidth and falls back to the max width', () => {

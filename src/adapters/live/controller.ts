@@ -953,8 +953,11 @@ export class LiveController {
         ? this.charts
         : null;
     const session = charts === null ? this.sessionSeries(resource) : null;
-    const chartWidth =
-      width > 0 ? Math.min(width, MAX_CHART_WIDTH) : MAX_CHART_WIDTH;
+    // Charts render at the full measured pane width — mirrors MetricsTab's own
+    // `effectiveWidth`, which is the single source of truth this line-count
+    // projection must match so the scrollbar's total-lines math agrees with
+    // what's actually on screen (P9R-0006).
+    const chartWidth = width > 0 ? width : MAX_CHART_WIDTH;
     return {
       resourceKind: resource.kind,
       resourceName: resource.name,

@@ -180,6 +180,7 @@ export function OverviewTab({
         lines={projectOverviewLines(resource, nowMs, width)}
         offset={offset}
         viewportHeight={viewportHeight}
+        width={width}
       />
     );
   }

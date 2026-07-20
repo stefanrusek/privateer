@@ -149,6 +149,7 @@ export function EventsTab({
         lines={projectEventsLines(events, warningCount, showAll, nowMs, width)}
         offset={offset}
         viewportHeight={viewportHeight}
+        width={width}
       />
     );
   }
