@@ -21,6 +21,7 @@ import type { ExporterCapabilities } from '../metrics/exporters.js';
 import type { MetricsTier } from '../metrics/discovery.js';
 import type { ViewLine } from './scroll-viewport.js';
 import type { EventRow } from './components/EventsTab.js';
+import type { CrKindDescriptor } from '../k8s/crd-grouping.js';
 import { formatAge } from '../resources/age.js';
 import { formatMemoryQuantity } from '../resources/quantity.js';
 import { tokenizeLine } from '../yaml/highlight.js';
@@ -28,6 +29,7 @@ import { maskSecret, revealSecret } from '../yaml/redact.js';
 import { hasManagedFields, hideManagedFields } from '../yaml/managed-fields.js';
 import { renderTimeseriesChart } from '../charts/timeseries.js';
 import { computeTrendIndicator } from '../charts/timeseries.js';
+import { evalPrinterColumnPath } from '../resources/jsonpath.js';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -472,10 +474,73 @@ function buildGenericSections(
   return [metaSec, statusSec].filter((s) => s.rows.length > 0);
 }
 
+/**
+ * Rows for a `.status.conditions` array (present on most CRs and many
+ * built-ins): one row per condition, `Type` as key, `Status` as value.
+ * Malformed/non-object entries are skipped rather than crashing the row.
+ */
+function conditionRows(status: Record<string, unknown>): KvRow[] {
+  const conditions = status.conditions;
+  if (!Array.isArray(conditions)) {
+    return [];
+  }
+  return conditions
+    .filter(
+      (c): c is Record<string, unknown> => typeof c === 'object' && c !== null,
+    )
+    .map((c) => ({ key: str(c.type ?? ''), value: str(c.status ?? '') }))
+    .filter((r) => r.key !== '');
+}
+
+/**
+ * Rows for a CR kind's declared `additionalPrinterColumns`, JSONPath-evaluated
+ * against the raw object (ticket P9R-0018 story 3). A path that fails to
+ * resolve renders `—` rather than being omitted, so the column is still
+ * visible as "not populated" instead of silently vanishing.
+ */
+function printerColumnRows(
+  raw: Record<string, unknown>,
+  printerColumns: CrKindDescriptor['printerColumns'],
+): KvRow[] {
+  return printerColumns.map((col) => ({
+    key: col.name,
+    value: evalPrinterColumnPath(col.jsonPath, raw) ?? '—',
+  }));
+}
+
+/**
+ * Overview sections for a custom-resource instance (ticket P9R-0018 story
+ * 3): metadata, the CRD's declared printer-column values, and
+ * `.status.conditions` when present.
+ */
+function buildCrSections(
+  resource: ResourceObject,
+  nowMs: number,
+  crDescriptor: CrKindDescriptor,
+): OverviewSection[] {
+  const raw = resource.raw;
+  const status: Record<string, unknown> = raw.status ?? {};
+
+  const metaSec = metadataSection(resource, nowMs);
+
+  const columnsSec: OverviewSection = {
+    title: 'PRINTER COLUMNS',
+    rows: printerColumnRows(raw, crDescriptor.printerColumns),
+  };
+
+  const conditionsSec: OverviewSection = {
+    title: 'CONDITIONS',
+    rows: conditionRows(status),
+  };
+
+  return [metaSec, columnsSec, conditionsSec].filter((s) => s.rows.length > 0);
+}
+
 /** Build the per-kind overview sections (Spec 04 §5.2). */
 export function buildOverviewSections(
   resource: ResourceObject,
   nowMs: number,
+  crDescriptor?: CrKindDescriptor,
 ): OverviewSection[] {
   switch (resource.kind) {
     case 'Pod':
@@ -489,7 +554,9 @@ export function buildOverviewSections(
     case 'DopplerSecret':
       return buildDopplerSecretSections(resource, nowMs);
     default:
-      return buildGenericSections(resource, nowMs);
+      return crDescriptor !== undefined
+        ? buildCrSections(resource, nowMs, crDescriptor)
+        : buildGenericSections(resource, nowMs);
   }
 }
 
@@ -511,8 +578,9 @@ export function projectOverviewLines(
   resource: ResourceObject,
   nowMs: number,
   width: number,
+  crDescriptor?: CrKindDescriptor,
 ): ViewLine[] {
-  const sections = buildOverviewSections(resource, nowMs);
+  const sections = buildOverviewSections(resource, nowMs, crDescriptor);
   const lines: ViewLine[] = [];
   sections.forEach((section, i) => {
     if (i > 0) {

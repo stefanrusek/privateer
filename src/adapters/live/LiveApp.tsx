@@ -180,6 +180,9 @@ export function LiveApp({
             width={controller.detailScrollWidth()}
             offset={controller.detailScrollOffset()}
             viewportHeight={controller.detailScrollViewportHeight()}
+            {...(detail.crDescriptor !== undefined
+              ? { crDescriptor: detail.crDescriptor }
+              : {})}
           />
         );
       case 'yaml': {

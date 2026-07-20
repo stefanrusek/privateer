@@ -584,6 +584,62 @@ describe('OverviewTab Generic', () => {
 });
 
 // ---------------------------------------------------------------------------
+// CR overview (ticket P9R-0018 story 3)
+// ---------------------------------------------------------------------------
+
+describe('OverviewTab custom resource', () => {
+  const CR_DESCRIPTOR = {
+    kind: 'CustomKind',
+    group: 'example.io',
+    version: 'v1alpha1',
+    plural: 'customkinds',
+    namespaced: true,
+    printerColumns: [
+      { name: 'Project', jsonPath: '.spec.project', priority: 0 },
+    ],
+  };
+
+  const resource = makeResource({
+    kind: 'CustomKind',
+    raw: {
+      metadata: { name: 'my-secret' },
+      spec: { project: 'proj-1' },
+      status: { conditions: [{ type: 'Ready', status: 'True' }] },
+    },
+  });
+
+  it('renders printer columns and conditions in the rich (non-scrolled) path', () => {
+    const { lastFrame } = render(
+      React.createElement(OverviewTab, {
+        resource,
+        nowMs: NOW_MS,
+        crDescriptor: CR_DESCRIPTOR,
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('PRINTER COLUMNS');
+    expect(frame).toContain('proj-1');
+    expect(frame).toContain('CONDITIONS');
+    expect(frame).toContain('Ready');
+  });
+
+  it('renders printer columns and conditions in the scrolled path', () => {
+    const { lastFrame } = render(
+      React.createElement(OverviewTab, {
+        resource,
+        nowMs: NOW_MS,
+        crDescriptor: CR_DESCRIPTOR,
+        viewportHeight: 20,
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('PRINTER COLUMNS');
+    expect(frame).toContain('proj-1');
+    expect(frame).toContain('CONDITIONS');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Annotations collapse behavior (Spec 04 §5.3)
 // ---------------------------------------------------------------------------
 

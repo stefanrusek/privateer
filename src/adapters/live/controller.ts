@@ -280,6 +280,11 @@ import {
 export interface DetailState {
   uid: string;
   resource: ResourceObject;
+  /** CR kind's group/version/plural/printer-column descriptor (ticket
+   * P9R-0018 story 3), present only when `resource` is a custom-resource
+   * instance — resolved once at `openDetail` time so the Overview tab can
+   * render printer-column values/conditions without re-deriving it. */
+  crDescriptor?: CrKindDescriptor;
   tab: TabId;
   events: EventRow[];
   warningCount: number;
@@ -980,7 +985,12 @@ export class LiveController {
     const width = this.detailWidth();
     switch (d.tab) {
       case 'overview':
-        return projectOverviewLines(d.resource, this.clock.now(), width);
+        return projectOverviewLines(
+          d.resource,
+          this.clock.now(),
+          width,
+          d.crDescriptor,
+        );
       case 'yaml':
         return projectYamlReadLines(
           this.yamlForDetail(),
@@ -3067,9 +3077,13 @@ export class LiveController {
       tab === 'overview' ? this.tabByKind.get(resource.kind) : undefined;
     const effectiveTab = remembered ?? tab;
     const editYaml = tab === 'yaml' && options?.editYaml === true;
+    const crDescriptor = descriptorsForGroups(this.app.crdGroups).get(
+      resource.kind,
+    );
     this.detail = {
       uid: resource.uid,
       resource,
+      ...(crDescriptor !== undefined ? { crDescriptor } : {}),
       tab: effectiveTab,
       events: [],
       warningCount: 0,

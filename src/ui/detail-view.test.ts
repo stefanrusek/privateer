@@ -477,6 +477,104 @@ describe('buildOverviewSections', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// CR overview sections (ticket P9R-0018 story 3)
+// ---------------------------------------------------------------------------
+
+describe('buildOverviewSections — custom resources', () => {
+  const CR_DESCRIPTOR = {
+    kind: 'CustomKind',
+    group: 'example.io',
+    version: 'v1alpha1',
+    plural: 'customkinds',
+    namespaced: true,
+    printerColumns: [
+      { name: 'Project', jsonPath: '.spec.project', priority: 0 },
+      { name: 'Config', jsonPath: '.spec.config', priority: 0 },
+      { name: 'Missing', jsonPath: '.spec.nope', priority: 0 },
+    ],
+  };
+
+  it('falls back to generic sections when no descriptor is supplied', () => {
+    const r = makeResource({
+      kind: 'CustomKind',
+      raw: { metadata: {}, spec: { project: 'p' }, status: { phase: 'Ready' } },
+    });
+    const titles = buildOverviewSections(r, NOW_MS).map((s) => s.title);
+    expect(titles).toEqual(['METADATA', 'STATUS']);
+  });
+
+  it('renders printer-column values and conditions when a descriptor is given', () => {
+    const r = makeResource({
+      kind: 'CustomKind',
+      raw: {
+        metadata: {},
+        spec: { project: 'proj-1', config: 'prd' },
+        status: {
+          conditions: [
+            { type: 'Ready', status: 'True' },
+            { type: 'Synced', status: 'False' },
+          ],
+        },
+      },
+    });
+    const sections = buildOverviewSections(r, NOW_MS, CR_DESCRIPTOR);
+    const titles = sections.map((s) => s.title);
+    expect(titles).toEqual(['METADATA', 'PRINTER COLUMNS', 'CONDITIONS']);
+
+    const columns = sections.find((s) => s.title === 'PRINTER COLUMNS');
+    expect(columns?.rows).toEqual([
+      { key: 'Project', value: 'proj-1' },
+      { key: 'Config', value: 'prd' },
+      { key: 'Missing', value: '—' },
+    ]);
+
+    const conditions = sections.find((s) => s.title === 'CONDITIONS');
+    expect(conditions?.rows).toEqual([
+      { key: 'Ready', value: 'True' },
+      { key: 'Synced', value: 'False' },
+    ]);
+  });
+
+  it('omits the CONDITIONS section when status.conditions is absent', () => {
+    const r = makeResource({
+      kind: 'CustomKind',
+      raw: { metadata: {}, spec: {} },
+    });
+    const descriptor = { ...CR_DESCRIPTOR, printerColumns: [] };
+    const titles = buildOverviewSections(r, NOW_MS, descriptor).map(
+      (s) => s.title,
+    );
+    expect(titles).toEqual(['METADATA']);
+  });
+
+  it('skips malformed condition entries without crashing', () => {
+    const r = makeResource({
+      kind: 'CustomKind',
+      raw: {
+        metadata: {},
+        status: {
+          conditions: [
+            null,
+            'oops',
+            { status: 'True' },
+            { type: 'Synced' },
+            { type: 'Ready', status: 'True' },
+          ],
+        },
+      },
+    });
+    const descriptor = { ...CR_DESCRIPTOR, printerColumns: [] };
+    const conditions = buildOverviewSections(r, NOW_MS, descriptor).find(
+      (s) => s.title === 'CONDITIONS',
+    );
+    expect(conditions?.rows).toEqual([
+      { key: 'Synced', value: '' },
+      { key: 'Ready', value: 'True' },
+    ]);
+  });
+});
+
 describe('projectOverviewLines', () => {
   it('emits a bold title, padded rows, and a blank spacer between sections', () => {
     const r = makeResource({

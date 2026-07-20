@@ -13,6 +13,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { ResourceObject } from '../../core/types.js';
+import type { CrKindDescriptor } from '../../k8s/crd-grouping.js';
 import {
   projectOverviewLines,
   buildOverviewSections,
@@ -37,6 +38,9 @@ export interface OverviewTabProps {
   offset?: number;
   /** Viewport height; when set the body scrolls instead of rendering all rows. */
   viewportHeight?: number;
+  /** CR kind's printer-column/scope descriptor (ticket P9R-0018 story 3),
+   * present only when `resource` is a custom-resource instance. */
+  crDescriptor?: CrKindDescriptor;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,8 +50,12 @@ export interface OverviewTabProps {
 
 type Section = OverviewSection;
 
-function buildSections(resource: ResourceObject, nowMs: number): Section[] {
-  return buildOverviewSections(resource, nowMs).map((s) => ({
+function buildSections(
+  resource: ResourceObject,
+  nowMs: number,
+  crDescriptor?: CrKindDescriptor,
+): Section[] {
+  return buildOverviewSections(resource, nowMs, crDescriptor).map((s) => ({
     title: s.title,
     rows: [...s.rows],
   }));
@@ -173,11 +181,12 @@ export function OverviewTab({
   width = 80,
   offset = 0,
   viewportHeight,
+  crDescriptor,
 }: OverviewTabProps): React.ReactElement {
   if (viewportHeight !== undefined) {
     return (
       <ScrollableLines
-        lines={projectOverviewLines(resource, nowMs, width)}
+        lines={projectOverviewLines(resource, nowMs, width, crDescriptor)}
         offset={offset}
         viewportHeight={viewportHeight}
         width={width}
@@ -185,7 +194,7 @@ export function OverviewTab({
     );
   }
 
-  const sections = buildSections(resource, nowMs);
+  const sections = buildSections(resource, nowMs, crDescriptor);
 
   // For DopplerSecret, extract managed secret info for the link
   const isDopplerSecret = resource.kind === 'DopplerSecret';
