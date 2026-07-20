@@ -110,6 +110,10 @@ import { MouseLifecycle } from './mouse-lifecycle.js';
 import type { PickerItem } from '../../ui/components/PickerOverlay.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
 import type { ClusterSummary } from '../../ui/components/HealthDashboard.js';
+import {
+  isNodeReady,
+  isNodeUnderPressure,
+} from '../../resources/status/index.js';
 import type { EvaluatedRule } from '../../health/types.js';
 import type { AgentExchange } from '../../ui/components/AgentTab.js';
 import type { AgentAction } from '../../command/action.js';
@@ -1942,8 +1946,10 @@ export class LiveController {
       warnings: pods.filter((p) => p.status.color === 'yellow').length,
       errors: pods.filter((p) => p.status.color === 'red').length,
       pending: pods.filter((p) => p.status.color === 'grey').length,
-      nodesReady: nodes.filter((n) => n.status.color === 'green').length,
+      nodesReady: nodes.filter((n) => isNodeReady(n.raw)).length,
       nodesTotal: nodes.length,
+      nodesUnderPressure: nodes.filter((n) => isNodeUnderPressure(n.raw))
+        .length,
       namespaceCount: namespaces.length,
     };
     this.kafkaDetected = detectKafka(this.store, ctx);
@@ -5146,6 +5152,7 @@ function emptySummary(): ClusterSummary {
     pending: 0,
     nodesReady: 0,
     nodesTotal: 0,
+    nodesUnderPressure: 0,
     namespaceCount: 0,
   };
 }

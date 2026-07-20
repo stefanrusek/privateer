@@ -29,6 +29,8 @@ export interface ClusterSummary {
   pending: number;
   nodesReady: number;
   nodesTotal: number;
+  /** Nodes with any pressure condition (Memory/Disk/PID) True; informational only — never subtracted from nodesReady. */
+  nodesUnderPressure: number;
   namespaceCount: number;
 }
 
@@ -177,6 +179,12 @@ function SummarySection({
         Nodes: {String(summary.nodesReady)}/{String(summary.nodesTotal)} ready
         {'   '}Namespaces: {String(summary.namespaceCount)}
       </Text>
+      {summary.nodesUnderPressure > 0 && (
+        <Text color="yellow">
+          ⚠ {String(summary.nodesUnderPressure)}{' '}
+          {summary.nodesUnderPressure === 1 ? 'node' : 'nodes'} under pressure
+        </Text>
+      )}
     </Box>
   );
 }

@@ -26,6 +26,7 @@ const DEFAULT_SUMMARY: ClusterSummary = {
   pending: 2,
   nodesReady: 5,
   nodesTotal: 5,
+  nodesUnderPressure: 0,
   namespaceCount: 8,
 };
 
@@ -197,6 +198,37 @@ describe('HealthDashboard — summary section', () => {
       React.createElement(HealthDashboard, makeProps()),
     );
     expect(lastFrame()).toContain('SUMMARY');
+  });
+
+  it('does not show a pressure warning when nodesUnderPressure is 0', () => {
+    const { lastFrame } = render(
+      React.createElement(HealthDashboard, makeProps()),
+    );
+    expect(lastFrame()).not.toContain('under pressure');
+  });
+
+  it('shows a singular pressure warning for one node under pressure', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          summary: { ...DEFAULT_SUMMARY, nodesUnderPressure: 1 },
+        }),
+      ),
+    );
+    expect(lastFrame()).toContain('1 node under pressure');
+  });
+
+  it('shows a plural pressure warning for multiple nodes under pressure', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          summary: { ...DEFAULT_SUMMARY, nodesUnderPressure: 2 },
+        }),
+      ),
+    );
+    expect(lastFrame()).toContain('2 nodes under pressure');
   });
 });
 
