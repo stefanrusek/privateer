@@ -182,6 +182,9 @@ export function LiveApp({
             onReload={controller.yamlReload}
             onOpenInEditor={controller.yamlOpenInEditor}
             onModeChange={controller.yamlModeChanged}
+            onNoChanges={controller.showYamlNoChangesToast}
+            managedVisible={detail.managedVisible}
+            onToggleManagedFields={controller.toggleManagedFieldsVisible}
             {...(reentry !== null ? { reentryContent: reentry } : {})}
             onReentryConsumed={controller.clearYamlEditReentry}
             width={controller.detailScrollWidth()}

@@ -161,6 +161,7 @@ export const KEYMAP: readonly KeyGroup[] = [
     bindings: [
       { keys: 'e', description: 'Edit the YAML' },
       { keys: 'v', description: 'Reveal (Secrets)' },
+      { keys: 'm', description: 'Toggle managedFields visibility' },
       { keys: 'Ctrl+S', description: 'Save — review the diff (editing)' },
       { keys: 'Ctrl+E', description: 'Open in $EDITOR (editing)' },
       { keys: 'Esc', description: 'Cancel the edit (editing)' },

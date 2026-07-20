@@ -25,6 +25,7 @@ import { formatAge } from '../resources/age.js';
 import { formatMemoryQuantity } from '../resources/quantity.js';
 import { tokenizeLine } from '../yaml/highlight.js';
 import { maskSecret, revealSecret } from '../yaml/redact.js';
+import { hasManagedFields, hideManagedFields } from '../yaml/managed-fields.js';
 import { renderTimeseriesChart } from '../charts/timeseries.js';
 import { computeTrendIndicator } from '../charts/timeseries.js';
 
@@ -606,7 +607,8 @@ export function projectEventsLines(
 
 /**
  * Project read-mode YAML into `ViewLine[]`: an action bar, then one
- * line-numbered line per source line (redacted unless `revealed` for Secrets).
+ * line-numbered line per source line (redacted unless `revealed` for Secrets;
+ * `metadata.managedFields` dropped unless `managedVisible`, P9R-0016).
  * Highlighting collapses to a single colour per line (the dominant token kind is
  * not preserved through the flat slice; the line text is line-numbered and
  * clipped to `width`, never wrapped).
@@ -616,19 +618,26 @@ export function projectYamlReadLines(
   kind: string,
   revealed: boolean,
   width: number,
+  managedVisible = false,
 ): ViewLine[] {
+  const managed = hasManagedFields(yaml);
+  const withManaged = managedVisible ? yaml : hideManagedFields(yaml);
   const isSecret = kind === 'Secret';
   const display = isSecret
     ? revealed
-      ? revealSecret(yaml)
-      : maskSecret(yaml)
-    : yaml;
+      ? revealSecret(withManaged)
+      : maskSecret(withManaged)
+    : withManaged;
   const lines: ViewLine[] = [];
+  const chips = ['[Edit]'];
+  if (isSecret) {
+    chips.push(revealed ? '[hide]' : '[reveal]');
+  }
+  if (managed) {
+    chips.push(managedVisible ? '[hide managed]' : '[managed]');
+  }
   lines.push({
-    text: clipLine(
-      isSecret ? (revealed ? '[Edit]  [hide]' : '[Edit]  [reveal]') : '[Edit]',
-      width,
-    ),
+    text: clipLine(chips.join('  '), width),
     color: 'cyan',
   });
   display.split('\n').forEach((line, i) => {

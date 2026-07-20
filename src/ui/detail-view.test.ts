@@ -648,6 +648,25 @@ describe('projectYamlReadLines', () => {
     expect(body).toContain('test');
   });
 
+  it('hides managedFields by default with a [managed] chip, and shows them when managedVisible', () => {
+    const yaml =
+      'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cfg\n  managedFields:\n    - manager: kubectl\ndata:\n  key: value';
+    const hidden = projectYamlReadLines(yaml, 'ConfigMap', false, 80, false);
+    expect(hidden[0]?.text).toBe('[Edit]  [managed]');
+    expect(hidden.map((l) => l.text).join('\n')).not.toContain('managedFields');
+
+    const shown = projectYamlReadLines(yaml, 'ConfigMap', false, 80, true);
+    expect(shown[0]?.text).toBe('[Edit]  [hide managed]');
+    expect(shown.map((l) => l.text).join('\n')).toContain('managedFields');
+  });
+
+  it('omits the [managed] chip when the resource has no managedFields', () => {
+    const yaml =
+      'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cfg\ndata:\n  key: value';
+    const lines = projectYamlReadLines(yaml, 'ConfigMap', false, 80);
+    expect(lines[0]?.text).toBe('[Edit]');
+  });
+
   it('non-Secret keys are coloured blue, value-only lines plain', () => {
     const lines = projectYamlReadLines(
       'key: value\n  plain',

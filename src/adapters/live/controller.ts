@@ -15,6 +15,7 @@ import {
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import jsYaml from 'js-yaml';
+import { canonicalKeyOrder } from '../../yaml/canonical-order.js';
 import { KubeConfig } from '@kubernetes/client-node';
 import type { LaunchOptions } from '../../cli/args.js';
 import type { KubeError } from '../../boundaries/kube-client.js';
@@ -256,6 +257,14 @@ export interface DetailState {
   totalEventCount: number;
   showAllEvents: boolean;
   yamlMode: 'read' | 'edit' | 'discard-confirm' | 'diff';
+  /**
+   * Whether `metadata.managedFields` is currently shown in the YAML read
+   * view (P9R-0016). Session-scoped (resets on every `openDetail`), owned
+   * here rather than in `YamlTab` local state because toggling it changes
+   * the read-mode line count and the controller's viewport scroll extent
+   * (`detailLines()`) must stay in sync with what's actually rendered.
+   */
+  managedVisible: boolean;
 }
 
 export interface ConfirmState {
@@ -929,6 +938,7 @@ export class LiveController {
           d.resource.kind,
           false,
           width,
+          d.managedVisible,
         );
       case 'events':
         return projectEventsLines(
@@ -2255,6 +2265,27 @@ export class LiveController {
     }
   };
 
+  /**
+   * Toggle `metadata.managedFields` visibility in the YAML read view (`m`,
+   * P9R-0016). Session-scoped: lives on `DetailState` (reset on every
+   * `openDetail`) rather than in `YamlTab`, so it stays in sync with the
+   * scroll-viewport line count computed by `detailLines()`.
+   */
+  toggleManagedFieldsVisible = (): void => {
+    if (this.detail !== null) {
+      this.detail = {
+        ...this.detail,
+        managedVisible: !this.detail.managedVisible,
+      };
+      this.bump();
+    }
+  };
+
+  /** Ctrl+S on an unmodified buffer: a transient notice, no Review dialog (P9R-0016). */
+  showYamlNoChangesToast = (): void => {
+    this.showToast('No changes');
+  };
+
   // -------------------------------------------------------------------------
   // YAML editor cluster boundary (B07). The YamlTab component owns the editor
   // state and the pure apply/conflict reducer; these callbacks perform the only
@@ -2264,7 +2295,7 @@ export class LiveController {
   /** The resource currently shown in the YAML tab, serialized to YAML. */
   yamlForDetail(): string {
     const raw = this.detail?.resource.raw ?? {};
-    return jsYaml.dump(raw, { lineWidth: -1, indent: 2 });
+    return jsYaml.dump(canonicalKeyOrder(raw), { lineWidth: -1, indent: 2 });
   }
 
   /** A header label for the diff (`Kind/namespace/name`). */
@@ -2319,7 +2350,10 @@ export class LiveController {
     }
     return {
       ok: true,
-      yaml: jsYaml.dump(result.value, { lineWidth: -1, indent: 2 }),
+      yaml: jsYaml.dump(canonicalKeyOrder(result.value), {
+        lineWidth: -1,
+        indent: 2,
+      }),
     };
   };
 
@@ -2676,11 +2710,16 @@ export class LiveController {
   // Detail pane
   // -------------------------------------------------------------------------
 
-  private openDetail(resource: ResourceObject, tab: TabId): void {
+  private openDetail(
+    resource: ResourceObject,
+    tab: TabId,
+    options?: { editYaml?: boolean },
+  ): void {
     // Re-open on the kind's last-used tab when entering via plain Enter.
     const remembered =
       tab === 'overview' ? this.tabByKind.get(resource.kind) : undefined;
     const effectiveTab = remembered ?? tab;
+    const editYaml = tab === 'yaml' && options?.editYaml === true;
     this.detail = {
       uid: resource.uid,
       resource,
@@ -2689,7 +2728,8 @@ export class LiveController {
       warningCount: 0,
       totalEventCount: 0,
       showAllEvents: false,
-      yamlMode: 'read',
+      yamlMode: editYaml ? 'edit' : 'read',
+      managedVisible: false,
     };
     if (tab === 'logs' && resource.kind === 'Pod') {
       this.initLogs(resource);
@@ -2702,7 +2742,20 @@ export class LiveController {
     this.charts = null;
     // Spec 03: a freshly-opened resource starts at its tab's top.
     this.resetDetailOffset();
-    this.app = { ...this.app, showDetail: true, focus: 'detail' };
+    this.app = {
+      ...this.app,
+      showDetail: true,
+      focus: 'detail',
+      mode: editYaml ? 'edit' : this.app.mode,
+    };
+    if (editYaml) {
+      // P9R-0016: list-level `e` opens the detail directly in YAML edit
+      // mode, matching the keymap text "Open the YAML editor" (a second `e`
+      // was previously required). Reuse the `$EDITOR` reentry seam — YamlTab
+      // already boots straight into edit mode and reports it back via
+      // `onModeChange` when `reentryContent` is set.
+      this.yamlEditReentry = this.yamlForDetail();
+    }
     void this.fetchDetailEvents();
     this.bump();
   }
@@ -5215,7 +5268,7 @@ export class LiveController {
       return;
     }
     if (input === 'e') {
-      this.openDetail(resource, 'yaml');
+      this.openDetail(resource, 'yaml', { editYaml: true });
       return;
     }
     if (input === 'y') {

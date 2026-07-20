@@ -172,6 +172,59 @@ describe('YamlTab secret redaction', () => {
   });
 });
 
+describe('YamlTab managedFields toggle (P9R-0016)', () => {
+  function makeConfigMapWithManagedFields(): KubernetesObject {
+    return {
+      apiVersion: 'v1',
+      kind: 'ConfigMap',
+      metadata: {
+        name: 'my-cfg',
+        namespace: 'default',
+        resourceVersion: '1',
+        managedFields: [{ manager: 'kubectl', operation: 'Update' }],
+      },
+      data: { key: 'value' },
+    };
+  }
+
+  it('hides managedFields by default, shows a [managed] chip, and calls onToggleManagedFields on m', async () => {
+    const onToggleManagedFields = vi.fn();
+    const { lastFrame, stdin } = renderTab(makeConfigMapWithManagedFields(), {
+      onToggleManagedFields,
+    });
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[managed]');
+    expect(frame).not.toContain('managedFields');
+    await safeWrite(stdin, 'm');
+    expect(onToggleManagedFields).toHaveBeenCalledOnce();
+  });
+
+  it('shows managedFields and a [hide managed] chip when managedVisible is true', () => {
+    const { lastFrame } = renderTab(makeConfigMapWithManagedFields(), {
+      managedVisible: true,
+    });
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[hide managed]');
+    expect(frame).toContain('managedFields');
+  });
+
+  it('m with no onToggleManagedFields wired is a harmless no-op', async () => {
+    const { lastFrame, stdin } = renderTab(makeConfigMapWithManagedFields());
+    await safeWrite(stdin, 'm');
+    expect(lastFrame()).toContain('[managed]');
+  });
+
+  it('does not show a [managed] chip or respond to m for resources without managedFields', async () => {
+    const onToggleManagedFields = vi.fn();
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ key: 'v' }), {
+      onToggleManagedFields,
+    });
+    expect(lastFrame()).not.toContain('[managed]');
+    await safeWrite(stdin, 'm');
+    expect(onToggleManagedFields).not.toHaveBeenCalled();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Edit mode entry / exit
 // ---------------------------------------------------------------------------
@@ -197,10 +250,23 @@ describe('YamlTab edit mode', () => {
   it('Ctrl+S with valid YAML opens the diff', async () => {
     const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }));
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     const frame = lastFrame() ?? '';
     expect(frame).toContain('[Apply]');
     expect(frame).toContain('[Cancel]');
+  });
+
+  it('Ctrl+S with an unmodified buffer is a no-op (P9R-0016)', async () => {
+    const onNoChanges = vi.fn();
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }), {
+      onNoChanges,
+    });
+    await safeWrite(stdin, 'e');
+    await safeWrite(stdin, '\x13');
+    expect(onNoChanges).toHaveBeenCalledOnce();
+    expect(lastFrame()).toContain('EDITING');
+    expect(lastFrame()).not.toContain('[Apply]');
   });
 
   it('Ctrl+S / Escape in read mode are no-ops', async () => {
@@ -223,6 +289,7 @@ describe('YamlTab diff + apply flow', () => {
       onSave,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13'); // → diff
     await safeWrite(stdin, '\r'); // → apply
     await ticks();
@@ -233,6 +300,7 @@ describe('YamlTab diff + apply flow', () => {
   it('cancel in diff returns to edit mode', async () => {
     const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }));
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13'); // → diff
     await safeWrite(stdin, '\x1B'); // cancel → edit
     await ticks();
@@ -254,6 +322,7 @@ describe('YamlTab diff + apply flow', () => {
       onReload,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13'); // → diff
     await safeWrite(stdin, '\r'); // → apply → 409
     await ticks();
@@ -273,6 +342,7 @@ describe('YamlTab diff + apply flow', () => {
       onReplace,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     await safeWrite(stdin, '\r');
     await ticks();
@@ -291,6 +361,7 @@ describe('YamlTab diff + apply flow', () => {
       onReload,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     await safeWrite(stdin, '\r');
     await ticks();
@@ -307,6 +378,7 @@ describe('YamlTab diff + apply flow', () => {
       onReplace,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     await safeWrite(stdin, '\r');
     await ticks();
@@ -714,7 +786,10 @@ describe('YamlTab cursor editing', () => {
   it('preserves the cursor when cancelling the diff', async () => {
     const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }));
     await tick();
-    await press(stdin, 'e', RIGHT, '\x13'); // edit → right → Ctrl+S → diff
+    // Dirty a different line (so line 0 stays untouched for the assertions
+    // below) then move back to line 0, col 1, before Ctrl+S — an unmodified
+    // buffer is now a no-op save (P9R-0016) and never reaches the diff.
+    await press(stdin, 'e', DOWN, 'Z', UP, LEFT, RIGHT, '\x13');
     expect(lastFrame()).toContain('[Cancel]');
     await press(stdin, '\x1B'); // cancel → edit, cursor at col 1
     await press(stdin, 'X');
@@ -739,6 +814,7 @@ describe('YamlTab onModeChange', () => {
     };
     await safeWrite(stdin, 'e');
     await waitFor(1);
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     await waitFor(2);
     await safeWrite(stdin, '\r');

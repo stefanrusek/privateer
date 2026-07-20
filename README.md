@@ -197,6 +197,7 @@ markers; regenerate from `renderKeymapMarkdown()`.
 | --- | --- |
 | `e` | Edit the YAML |
 | `v` | Reveal (Secrets) |
+| `m` | Toggle managedFields visibility |
 | `Ctrl+S` | Save — review the diff (editing) |
 | `Ctrl+E` | Open in $EDITOR (editing) |
 | `Esc` | Cancel the edit (editing) |
