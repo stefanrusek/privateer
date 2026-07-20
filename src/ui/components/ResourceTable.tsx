@@ -48,15 +48,42 @@ function truncate(text: string, maxWidth: number): string {
   return text.slice(0, maxWidth - 1) + '…';
 }
 
-function padRight(text: string, width: number): string {
-  if (text.length >= width) {
-    return text.slice(0, width);
-  }
-  return text + ' '.repeat(width - text.length);
+// ---------------------------------------------------------------------------
+// Column gutter (Spec P9R-0007)
+//
+// Every rendered column reserves at least one trailing blank cell within its
+// own allocated width, so adjacent columns/headers never collide — a
+// truncated header still leaves a gap before the next header starts, and a
+// right-aligned cell (e.g. Age) can't extend all the way to the following
+// column's first character. This lives here (not per-view) because every
+// resource list renders through this shared component.
+//
+// Both helpers below truncate content to `colWidth - 1` first, so the
+// content half is always strictly shorter than `colWidth` — the trailing
+// gutter cell is filled by the padding itself, never by content.
+// ---------------------------------------------------------------------------
+
+/** The column width usable for content, reserving a ≥1-char trailing gutter. */
+function contentWidth(colWidth: number): number {
+  return Math.max(0, colWidth - 1);
 }
 
-function padLeft(text: string, width: number): string {
-  return ' '.repeat(Math.max(0, width - text.length)) + text.slice(0, width);
+/** Left-align content, truncated to leave the gutter, padded to the full column width. */
+function padRightWithGutter(text: string, colWidth: number): string {
+  const content = truncate(text, contentWidth(colWidth));
+  return content + ' '.repeat(colWidth - content.length);
+}
+
+/**
+ * Right-align content within the gutter-reduced width, then append the
+ * gutter as trailing space(s) so the value never reaches the next column.
+ */
+function padLeftWithGutter(text: string, colWidth: number): string {
+  const inner = contentWidth(colWidth);
+  const content = text.slice(0, inner);
+  return (
+    ' '.repeat(inner - content.length) + content + ' '.repeat(colWidth - inner)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -118,14 +145,12 @@ function renderCell(
   const cellText = col.accessor(raw, nowMs);
 
   if (col.align === 'right') {
-    return <Text key={col.header}>{padLeft(cellText, colWidth)}</Text>;
+    return (
+      <Text key={col.header}>{padLeftWithGutter(cellText, colWidth)}</Text>
+    );
   }
 
-  return (
-    <Text key={col.header}>
-      {padRight(truncate(cellText, colWidth), colWidth)}
-    </Text>
-  );
+  return <Text key={col.header}>{padRightWithGutter(cellText, colWidth)}</Text>;
 }
 
 function rowColor(row: TableRow): InkColor | undefined {
@@ -232,7 +257,7 @@ export function ResourceTable(props: ResourceTableProps): React.ReactElement {
     // `width` is always >= 1 here (pinned widths are >= 2; a windowed scrollable
     // column is only emitted when at least one cell of it fits), so overwriting
     // one edge cell with a marker never shifts the column.
-    let cellText = padRight(truncate(headerText, width), width);
+    let cellText = padRightWithGutter(headerText, width);
     if (window.leftMore && i === firstScrollableIndex) {
       cellText = '‹' + cellText.slice(1);
     }
