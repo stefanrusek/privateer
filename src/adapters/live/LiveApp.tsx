@@ -29,6 +29,7 @@ import {
 } from './measured-widgets.js';
 import { LOGS_TOOLBAR_ACCELERATORS } from '../../ui/logs-toolbar.js';
 import type { TabDef } from '../../ui/components/DetailPane.js';
+import { AGENT_TAB } from '../../ui/detail-tabs.js';
 
 /**
  * The single mouse path: one `process.stdin` listener feeds every raw read to
@@ -363,7 +364,7 @@ export function LiveApp({
       if (snapshot.agentPaneOpen) {
         return (
           <Box flexDirection="column">
-            <Text bold>Agent</Text>
+            {renderTabBar([AGENT_TAB], 'agent')}
             <AgentTab
               exchanges={snapshot.agentExchanges}
               onClearHistory={controller.clearAgentHistory}

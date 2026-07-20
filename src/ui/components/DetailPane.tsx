@@ -12,7 +12,12 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { ResourceObject } from '../../core/types.js';
-import { getAvailableTabs, type TabId, type TabDef } from '../detail-tabs.js';
+import {
+  getAvailableTabs,
+  navigableTabsFor,
+  type TabId,
+  type TabDef,
+} from '../detail-tabs.js';
 
 export type { TabId, TabDef };
 export { getAvailableTabs };
@@ -60,6 +65,11 @@ export function DetailPane({
   renderTabBar,
 }: DetailPaneProps): React.ReactElement {
   const availableTabs = getAvailableTabs(resource.kind, hasPrometheus);
+  // Full navigable order — content tabs + the always-present Agent tab, in the
+  // same order as the `1`-`6` number-key shortcuts (Spec 04 §4.2, P9R-0002).
+  // The measured tab-bar slot renders this list directly so Agent is a
+  // first-class, clickable, active-highlightable tab like any other.
+  const allTabs = navigableTabsFor(resource.kind, hasPrometheus);
 
   // Tab label builder
   function tabLabel(tab: TabDef): string {
@@ -88,7 +98,7 @@ export function DetailPane({
   if (renderTabBar !== undefined) {
     return (
       <Box flexDirection="column">
-        {renderTabBar(availableTabs, activeTab)}
+        {renderTabBar(allTabs, activeTab)}
         <Box flexDirection="column">{renderTabContent(activeTab)}</Box>
       </Box>
     );
