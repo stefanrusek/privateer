@@ -391,6 +391,10 @@ const BADGE_INTERVAL_MS = 60_000;
 const DEFAULT_VISIBLE_HEIGHT = 20;
 /** Lines the detail wheel scrolls per wheel notch (Spec 02 §9). */
 const WHEEL_LINES = 3;
+/** Default status-bar hint line, restored once a toast expires (P9R-0010). */
+const DEFAULT_HINTS = ['Space agent', '/ search', '? help', 'q quit'];
+/** Transient toasts (✓ Copied…, ✓ Saved to…) auto-clear after this long (P9R-0010). */
+const TOAST_TTL_MS = 5000;
 
 /** Flatten a frame border {@link Segment} into a 1-wide hit-test rectangle. */
 function segmentRect(seg: Segment): {
@@ -538,6 +542,11 @@ export class LiveController {
   private readonly fileSink = new FsFileSink();
   private started = false;
   private layoutSaveDebounce: (() => void) | null = null;
+  // Toast auto-clear (P9R-0010): set only by showToast/showLogsConfirmation,
+  // so ordinary setHints() calls (agent "thinking…", mode resets) never
+  // start a timer and are unaffected by clearToast()/clearLogsConfirmation().
+  private toastTimer: (() => void) | null = null;
+  private logsConfirmTimer: (() => void) | null = null;
   // Active detail tab remembered per resource kind (Spec 01 §4).
   private tabByKind = new Map<string, TabId>();
   // Per-context {namespace, activeKind} memory (chunk 08 §4), persisted in
@@ -1041,12 +1050,19 @@ export class LiveController {
   }
 
   private appWithIndicators(): AppState {
-    const active = this.pf
+    const live = this.pf
       .getState()
-      .forwards.filter((f) => f.status !== 'failed').length;
+      .forwards.filter((f) => f.status !== 'failed');
+    // Live-derived, not a set-once message (P9R-0010): disappears the moment
+    // the last forward stops, and lists every survivor when several are up.
+    const forwarding = live.map(
+      (f) =>
+        `⇄ Forwarding localhost:${String(f.localPort)} → ${f.podName}:${String(f.remotePort)}`,
+    );
     const hints = [
       `⌖ ${this.app.focus}`,
-      ...(active > 0 ? [`⇄ ${String(active)}`] : []),
+      ...(live.length > 0 ? [`⇄ ${String(live.length)}`] : []),
+      ...forwarding,
       ...this.app.hints,
     ];
     return { ...this.app, hints };
@@ -2728,7 +2744,7 @@ export class LiveController {
           .delete(resource.kind, resource.name, resource.namespace)
           .then((result) => {
             if (!result.ok) {
-              this.setHints([`✗ Delete failed: ${result.error.message}`]);
+              this.showToast(`✗ Delete failed: ${result.error.message}`);
             }
           });
       },
@@ -2747,7 +2763,7 @@ export class LiveController {
         const b64 = Buffer.from(resource.name).toString('base64');
         process.stdout.write(`\x1b]52;c;${b64}\x07`);
       }
-      this.setHints([`✓ Copied ${resource.name}`]);
+      this.showToast(`✓ Copied ${resource.name}`);
     } catch {
       // Clipboard unavailable — non-fatal.
     }
@@ -2756,6 +2772,67 @@ export class LiveController {
   private setHints(hints: string[]): void {
     this.app = { ...this.app, hints };
     this.bump();
+  }
+
+  /**
+   * Show a transient status-bar toast (✓ Copied…, ✗ Invalid ports…). Unlike
+   * {@link setHints}, this starts a TTL that reverts to {@link DEFAULT_HINTS}
+   * (P9R-0010) — either after {@link TOAST_TTL_MS} or on the next
+   * state-changing interaction via {@link clearToast}.
+   */
+  private showToast(message: string): void {
+    this.toastTimer?.();
+    this.setHints([message]);
+    this.toastTimer = this.clock.setTimeout(() => {
+      this.toastTimer = null;
+      this.setHints([...DEFAULT_HINTS]);
+    }, TOAST_TTL_MS);
+  }
+
+  /** Clear a pending toast (if any) back to the default hint line. */
+  private clearToast(): void {
+    if (this.toastTimer === null) {
+      return;
+    }
+    this.toastTimer();
+    this.toastTimer = null;
+    this.setHints([...DEFAULT_HINTS]);
+  }
+
+  /**
+   * Show a transient confirmation in the Logs tab footer (✓ Saved to…). Same
+   * TTL/clear-on-interaction contract as {@link showToast} (P9R-0010).
+   */
+  private showLogsConfirmation(message: string): void {
+    this.logsConfirmTimer?.();
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.confirmation = message;
+    this.logsConfirmTimer = this.clock.setTimeout(() => {
+      this.logsConfirmTimer = null;
+      const l2 = this.logs;
+      if (l2 !== null) {
+        l2.confirmation = undefined;
+        this.bump();
+      }
+    }, TOAST_TTL_MS);
+    this.bump();
+  }
+
+  /** Clear a pending Logs confirmation (if any). */
+  private clearLogsConfirmation(): void {
+    if (this.logsConfirmTimer === null) {
+      return;
+    }
+    this.logsConfirmTimer();
+    this.logsConfirmTimer = null;
+    const l = this.logs;
+    if (l?.confirmation !== undefined) {
+      l.confirmation = undefined;
+      this.bump();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -2800,7 +2877,7 @@ export class LiveController {
         this.applyAgentAction(bang.action);
         break;
       case 'unknown':
-        this.setHints([`✗ Unknown command: ${bang.raw}`]);
+        this.showToast(`✗ Unknown command: ${bang.raw}`);
         break;
     }
     this.bump();
@@ -3052,7 +3129,7 @@ export class LiveController {
           }
         : exchange,
     );
-    this.setHints(['Space agent', '/ search', '? help', 'q quit']);
+    this.setHints([...DEFAULT_HINTS]);
     if (action === null || action.action === 'answer') {
       this.openAgentTab();
     }
@@ -3154,7 +3231,7 @@ export class LiveController {
     this.stopLogs();
     const picker = buildContainerPicker(resource.raw);
     if (picker.options.length === 0) {
-      this.setHints(['✗ No containers found']);
+      this.showToast('✗ No containers found');
       return;
     }
     const hasDefault = picker.defaultIndex >= 0;
@@ -3705,14 +3782,14 @@ export class LiveController {
       l.ring.toArray(),
       this.clock.now(),
     );
-    const l2 = this.logs;
-    if (l2 === null) {
+    if (this.logs === null) {
       return;
     }
-    l2.confirmation = result.ok
-      ? `✓ Saved to ${result.value.displayPath}`
-      : `✗ ${result.error.kind}`;
-    this.bump();
+    this.showLogsConfirmation(
+      result.ok
+        ? `✓ Saved to ${result.value.displayPath}`
+        : `✗ ${result.error.kind}`,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -3866,11 +3943,10 @@ export class LiveController {
           remotePort: remote,
           localPort: local,
         });
-        this.setHints([
-          `⇄ Forwarding localhost:${String(local)} → ${prompt.podName}:${String(remote)}`,
-        ]);
+        // The "⇄ Forwarding …" segment is derived live from the forward
+        // registry in appWithIndicators() — nothing to set here (P9R-0010).
       } else {
-        this.setHints(['✗ Invalid ports — expected remote:local']);
+        this.showToast('✗ Invalid ports — expected remote:local');
       }
       this.bump();
       return;
@@ -4210,6 +4286,9 @@ export class LiveController {
    * {@link dispatchMouse} reducer decides the action and we execute it.
    */
   handleMouseEvent(event: MouseEvent): void {
+    // A click is a state-changing interaction too (P9R-0010).
+    this.clearToast();
+    this.clearLogsConfirmation();
     // The port-forward manager's [✕]/[retry]/[New]/[Close] are clickable; any
     // click outside them is swallowed so it can't act on the list behind.
     if (this.pfManagerOpen) {
@@ -4533,7 +4612,7 @@ export class LiveController {
   ): void {
     const picker = buildContainerPicker(resource.raw);
     if (picker.options.length === 0) {
-      this.setHints(['✗ No containers found']);
+      this.showToast('✗ No containers found');
       return;
     }
     if (picker.autoOpen && picker.defaultIndex >= 0) {
@@ -4560,6 +4639,10 @@ export class LiveController {
     if (isLeakedMouseInput(input)) {
       return;
     }
+    // Any real keypress is a state-changing interaction (P9R-0010): clear
+    // whichever transient toasts are pending before routing the key.
+    this.clearToast();
+    this.clearLogsConfirmation();
     // Terminals can deliver rapid keystrokes as one chunk ("jj"); split so
     // navigation handlers see single keypresses. Text-entry handlers append
     // per character, which is equivalent to appending the chunk.
