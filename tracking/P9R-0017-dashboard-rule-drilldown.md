@@ -2,7 +2,7 @@
 spile: ticket
 id: P9R-0017
 type: feature
-status: ready
+status: verifying
 owner: stefan
 resolution:
 blocked_by: []

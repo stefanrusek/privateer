@@ -11,9 +11,17 @@ project: p9r
 
 ## Needs Attention
 
-_Nothing needs attention._
+| ID | Title | Status | Note |
+| --- | --- | --- | --- |
+| [P9R-0017](../P9R-0017-dashboard-rule-drilldown.md) | Cluster Health rule drill-down — [show], [show passing], and offender navigation | verifying | |
 
 ## Board
+
+### verifying
+
+| ID | Title | Type | Owner | Blocked | PR |
+| --- | --- | --- | --- | --- | --- |
+| [P9R-0017](../P9R-0017-dashboard-rule-drilldown.md) | Cluster Health rule drill-down — [show], [show passing], and offender navigation | feature | stefan | | |
 
 ### ready
 
@@ -35,7 +43,6 @@ _Nothing needs attention._
 | [P9R-0014](../P9R-0014-rapid-arrow-keys-dropped.md) | Rapid arrow-key bursts are partially dropped | bug | stefan | | |
 | [P9R-0015](../P9R-0015-nodes-view-polish.md) | Nodes view — empty capacity columns, duplicate Ready row, raw Ki memory | bug | stefan | | |
 | [P9R-0016](../P9R-0016-yaml-editor-presentation.md) | YAML presentation — key order varies by kind, managedFields noise, no-op save dialog, `e` doesn't edit | bug | stefan | | |
-| [P9R-0017](../P9R-0017-dashboard-rule-drilldown.md) | Cluster Health rule drill-down — [show], [show passing], and offender navigation | feature | stefan | | |
 | [P9R-0018](../P9R-0018-custom-resource-instance-browsing.md) | Browse custom resource instances, not just CRDs | feature | stefan | | |
 
 ## Recently Closed

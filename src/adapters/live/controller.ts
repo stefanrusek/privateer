@@ -116,7 +116,16 @@ import {
   isNodeReady,
   isNodeUnderPressure,
 } from '../../resources/status/index.js';
-import type { EvaluatedRule } from '../../health/types.js';
+import type { AffectedResource, EvaluatedRule } from '../../health/types.js';
+import {
+  buildDashboardItems,
+  clampCursor,
+  ensureVisible,
+  moveCursor,
+  navigableIndices,
+  resolveAffected,
+  type DashboardItem,
+} from '../../ui/dashboard-nav.js';
 import type { AgentExchange } from '../../ui/components/AgentTab.js';
 import type { AgentAction } from '../../command/action.js';
 import {
@@ -291,6 +300,14 @@ export interface HealthState {
   summary: ClusterSummary;
   rules: EvaluatedRule[];
   showPassing: boolean;
+  /** Rule ids expanded to their offender list (P9R-0017). */
+  expandedRuleIds: Set<string>;
+  /** Rule ids whose offenders are fully expanded past the cap. */
+  showAllRuleIds: Set<string>;
+  /** Item-index cursor into the best-practices rows; -1 when none. */
+  cursor: number;
+  /** Scroll offset (item index) for the best-practices list. */
+  scrollOffset: number;
 }
 
 /** Display-ready logs view state consumed by LogsTab. */
@@ -407,6 +424,13 @@ const ANIMATION_TICK_MS = 250;
 const HEALTH_INTERVAL_MS = 60_000;
 const BADGE_INTERVAL_MS = 60_000;
 const DEFAULT_VISIBLE_HEIGHT = 20;
+
+/**
+ * Rows reserved above the Best Practices offender list on the Overview
+ * dashboard (title + SUMMARY block + section header/divider) when computing
+ * how many rows scroll before the cursor is clipped (P9R-0017).
+ */
+const DASHBOARD_CHROME_ROWS = 11;
 /** Lines the detail wheel scrolls per wheel notch (Spec 02 §9). */
 const WHEEL_LINES = 3;
 /** Default status-bar hint line, restored once a toast expires (P9R-0010). */
@@ -463,11 +487,7 @@ export class LiveController {
    */
   private detailOffset: ScrollState = { offset: 0 };
   private confirm: ConfirmState | null = null;
-  private health: HealthState = {
-    summary: emptySummary(),
-    rules: [],
-    showPassing: false,
-  };
+  private health: HealthState = emptyHealth();
   private agentExchanges: AgentExchange[] = [];
   private switchStatus: SwitchStatus = null;
   private contextFilter = '';
@@ -2212,6 +2232,15 @@ export class LiveController {
 
   setNamespace = (namespace: string): void => {
     this.app = { ...this.app, namespace };
+    // Reset the dashboard drill-down (P9R-0017): a namespace switch changes
+    // which resources the rules match, so expansion/cursor start fresh.
+    this.health = {
+      ...this.health,
+      expandedRuleIds: new Set(),
+      showAllRuleIds: new Set(),
+      cursor: -1,
+      scrollOffset: 0,
+    };
     if (this.app.activeKind !== 'Overview') {
       this.seedTable(this.app.activeKind);
     }
@@ -2443,8 +2472,162 @@ export class LiveController {
 
   toggleShowPassing = (): void => {
     this.health = { ...this.health, showPassing: !this.health.showPassing };
+    this.reconcileDashboardCursor();
     this.bump();
   };
+
+  // -------------------------------------------------------------------------
+  // Overview dashboard rule drill-down (P9R-0017)
+  // -------------------------------------------------------------------------
+
+  /** The flattened best-practices row model for the current health state. */
+  private dashboardItems(): DashboardItem[] {
+    return buildDashboardItems({
+      rules: this.health.rules,
+      expandedRuleIds: this.health.expandedRuleIds,
+      showAllRuleIds: this.health.showAllRuleIds,
+      showPassing: this.health.showPassing,
+    });
+  }
+
+  /** Rows the best-practices list shows before scrolling (chrome reserved). */
+  dashboardViewport(): number {
+    return Math.max(1, this.visibleHeight() - DASHBOARD_CHROME_ROWS);
+  }
+
+  /** Expand/collapse a rule's offender list (P9R-0017). */
+  toggleRule = (ruleId: string): void => {
+    const expanded = new Set(this.health.expandedRuleIds);
+    const showAll = new Set(this.health.showAllRuleIds);
+    if (expanded.has(ruleId)) {
+      expanded.delete(ruleId);
+      showAll.delete(ruleId);
+    } else {
+      expanded.add(ruleId);
+    }
+    this.health = {
+      ...this.health,
+      expandedRuleIds: expanded,
+      showAllRuleIds: showAll,
+    };
+    this.reconcileDashboardCursor();
+    this.bump();
+  };
+
+  /** Reveal the remaining offenders past the cap-at-10 fold (P9R-0017). */
+  showAllOffenders = (ruleId: string): void => {
+    const showAll = new Set(this.health.showAllRuleIds);
+    showAll.add(ruleId);
+    this.health = { ...this.health, showAllRuleIds: showAll };
+    this.reconcileDashboardCursor();
+    this.bump();
+  };
+
+  /**
+   * Navigate from an offender to the resource: select its kind's list and open
+   * its detail pane. When the resource no longer exists (fixed/deleted since
+   * evaluation), show a transient notice and stay on the dashboard.
+   */
+  navigateToOffender = (offender: AffectedResource): void => {
+    const resource = resolveAffected(
+      this.store.list(this.app.context, offender.kind),
+      offender,
+    );
+    if (resource === undefined) {
+      this.showToast('no longer present');
+      this.bump();
+      return;
+    }
+    this.selectKind(kindToLabel(offender.kind));
+    if (this.table !== null) {
+      const rows = getSortedFilteredRows(this.table);
+      const idx = rows.findIndex((r) => r.resource.uid === resource.uid);
+      if (idx >= 0) {
+        this.selectedIndex = idx;
+      }
+    }
+    this.openDetail(resource, 'overview');
+  };
+
+  /** Keep the dashboard cursor on a valid navigable row and keep it visible. */
+  private reconcileDashboardCursor(): void {
+    const items = this.dashboardItems();
+    const cursor = clampCursor(items, this.health.cursor);
+    const scrollOffset = ensureVisible(
+      cursor,
+      this.health.scrollOffset,
+      this.dashboardViewport(),
+    );
+    this.health = { ...this.health, cursor, scrollOffset };
+  }
+
+  /** Keyboard routing for the focused Overview dashboard (P9R-0017). */
+  private handleDashboardInput(input: string, key: InkKey): void {
+    const items = this.dashboardItems();
+    if (navigableIndices(items).length === 0) {
+      return;
+    }
+    let cursor = this.health.cursor;
+    if (key.downArrow || input === 'j') {
+      cursor = moveCursor(items, cursor, 1);
+      this.setDashboardCursor(cursor);
+      return;
+    }
+    if (key.upArrow || input === 'k') {
+      cursor = moveCursor(items, cursor, -1);
+      this.setDashboardCursor(cursor);
+      return;
+    }
+    const item = items[cursor];
+    if (item === undefined) {
+      // No active cursor yet — the first navigation key seeds it above.
+      return;
+    }
+    if (key.rightArrow) {
+      if (item.type === 'rule' && item.navigable && !item.expanded) {
+        this.toggleRule(item.ruleId);
+      }
+      return;
+    }
+    if (key.leftArrow) {
+      if (item.type === 'rule' && item.navigable && item.expanded) {
+        this.toggleRule(item.ruleId);
+      }
+      return;
+    }
+    if (key.return) {
+      this.activateDashboardItem(item);
+    }
+  }
+
+  private setDashboardCursor(cursor: number): void {
+    const scrollOffset = ensureVisible(
+      cursor,
+      this.health.scrollOffset,
+      this.dashboardViewport(),
+    );
+    this.health = { ...this.health, cursor, scrollOffset };
+    this.bump();
+  }
+
+  private activateDashboardItem(item: DashboardItem): void {
+    switch (item.type) {
+      case 'rule':
+        this.toggleRule(item.ruleId);
+        return;
+      case 'offender':
+        this.navigateToOffender(item.offender);
+        return;
+      case 'more':
+        this.showAllOffenders(item.ruleId);
+        return;
+      case 'passingToggle':
+        this.toggleShowPassing();
+        return;
+      case 'passingRule':
+        return;
+    }
+  }
 
   confirmCancel = (): void => {
     this.confirm = null;
@@ -2666,7 +2849,7 @@ export class LiveController {
     this.detail = null;
     this.stopLogs();
     this.table = null;
-    this.health = { summary: emptySummary(), rules: [], showPassing: false };
+    this.health = emptyHealth();
     if (restored.activeKind === 'Overview') {
       this.columns = [];
     } else {
@@ -5240,6 +5423,7 @@ export class LiveController {
 
   private handleListInput(input: string, key: InkKey): void {
     if (this.app.activeKind === 'Overview') {
+      this.handleDashboardInput(input, key);
       return;
     }
     if (this.table === null) {
@@ -5450,5 +5634,18 @@ function emptySummary(): ClusterSummary {
     nodesTotal: 0,
     nodesUnderPressure: 0,
     namespaceCount: 0,
+  };
+}
+
+/** A fresh HealthState with an empty drill-down (P9R-0017 reset). */
+function emptyHealth(): HealthState {
+  return {
+    summary: emptySummary(),
+    rules: [],
+    showPassing: false,
+    expandedRuleIds: new Set(),
+    showAllRuleIds: new Set(),
+    cursor: -1,
+    scrollOffset: 0,
   };
 }

@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
+import { Text } from 'ink';
 import React from 'react';
 import { HealthDashboard, ruleResultSummary } from './HealthDashboard.js';
 import type {
@@ -132,14 +133,37 @@ function makeProps(
     summary: DEFAULT_SUMMARY,
     rules: [],
     showPassing: false,
+    expandedRuleIds: new Set<string>(),
+    showAllRuleIds: new Set<string>(),
+    cursor: -1,
+    focused: false,
+    bestPracticesViewport: 100,
+    bestPracticesScroll: 0,
     metrics: DEFAULT_METRICS,
     kafka: NO_KAFKA,
     onNavigateWarnings: noop,
     onNavigateErrors: noop,
-    onShowRule: noop,
+    onToggleRule: noop,
+    onShowAllOffenders: noop,
+    onNavigateOffender: noop,
     onToggleShowPassing: noop,
     onNavigateKafkaTopic: noop,
     ...overrides,
+  };
+}
+
+function manyOffenders(n: number): EvaluatedRule {
+  const rule = RULE_CATALOG.find((r) => r.id === 'RES-001')!;
+  return {
+    rule,
+    result: {
+      status: 'error',
+      affectedResources: Array.from({ length: n }, (_, i) => ({
+        kind: 'Pod',
+        namespace: 'default',
+        name: `pod-${String(i).padStart(3, '0')}`,
+      })),
+    },
   };
 }
 
@@ -302,7 +326,7 @@ describe('HealthDashboard — best practices section', () => {
         }),
       ),
     );
-    expect(lastFrame()).toContain('OK');
+    expect(lastFrame()).toContain('✓');
     expect(lastFrame()).toContain('[hide passing]');
   });
 
@@ -332,6 +356,187 @@ describe('HealthDashboard — best practices section', () => {
     const frame = lastFrame() ?? '';
     // Count [show] occurrences — there shouldn't be any from the OK rule
     expect(frame).not.toContain('[show]\n');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rule drill-down (P9R-0017)
+// ---------------------------------------------------------------------------
+
+describe('HealthDashboard — rule drill-down', () => {
+  it('expands an error rule to its offenders and shows [hide]', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          rules: [makeErrorRule()],
+          expandedRuleIds: new Set(['RES-001']),
+        }),
+      ),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[hide]');
+    expect(frame).toContain('Pod/default/api-pod');
+    expect(frame).toContain('Pod/default/web-pod');
+    expect(frame).not.toContain('[show]');
+  });
+
+  it('caps offenders at 10 with a "… and N more [all]" fold', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          rules: [manyOffenders(47)],
+          expandedRuleIds: new Set(['RES-001']),
+        }),
+      ),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('pod-000');
+    expect(frame).toContain('pod-009');
+    expect(frame).not.toContain('pod-010');
+    expect(frame).toContain('… and 37 more');
+    expect(frame).toContain('[all]');
+  });
+
+  it('shows every offender when the rule is in showAllRuleIds', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          rules: [manyOffenders(47)],
+          expandedRuleIds: new Set(['RES-001']),
+          showAllRuleIds: new Set(['RES-001']),
+        }),
+      ),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('pod-046');
+    expect(frame).not.toContain('more');
+  });
+
+  it('renders a visible cursor gutter when focused', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          rules: [makeErrorRule()],
+          focused: true,
+          cursor: 0,
+        }),
+      ),
+    );
+    expect(lastFrame()).toContain('›');
+  });
+
+  it('uses renderButton for measured affordances when provided', () => {
+    const ids: string[] = [];
+    const { lastFrame } = render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          rules: [makeErrorRule()],
+          expandedRuleIds: new Set(['RES-001']),
+          renderButton: (spec) => {
+            ids.push(spec.id);
+            return React.createElement(Text, { key: spec.id }, spec.label);
+          },
+        }),
+      ),
+    );
+    expect(ids).toContain('dashboard.rule.RES-001');
+    expect(ids.some((id) => id.startsWith('dashboard.offender.RES-001'))).toBe(
+      true,
+    );
+    expect(lastFrame()).toContain('[hide]');
+  });
+
+  it('fires offender and [all] callbacks through the affordances', () => {
+    const specs: { id: string; onClick: () => void }[] = [];
+    let navigated: string | null = null;
+    let showedAll: string | null = null;
+    render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          rules: [manyOffenders(47)],
+          expandedRuleIds: new Set(['RES-001']),
+          onNavigateOffender: (offender) => {
+            navigated = offender.name;
+          },
+          onShowAllOffenders: (ruleId) => {
+            showedAll = ruleId;
+          },
+          renderButton: (spec) => {
+            specs.push({ id: spec.id, onClick: spec.onClick });
+            return React.createElement(Text, { key: spec.id }, spec.label);
+          },
+        }),
+      ),
+    );
+    const offenderSpec = specs.find((s) =>
+      s.id.startsWith('dashboard.offender.RES-001'),
+    );
+    const moreSpec = specs.find((s) => s.id === 'dashboard.more.RES-001');
+    offenderSpec?.onClick();
+    moreSpec?.onClick();
+    expect(navigated).toBe('pod-000');
+    expect(showedAll).toBe('RES-001');
+  });
+
+  it('fires the rule toggle callback through its affordance', () => {
+    let toggled: string | null = null;
+    const specs: { id: string; onClick: () => void }[] = [];
+    render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          rules: [makeErrorRule()],
+          onToggleRule: (ruleId) => {
+            toggled = ruleId;
+          },
+          renderButton: (spec) => {
+            specs.push({ id: spec.id, onClick: spec.onClick });
+            return React.createElement(Text, { key: spec.id }, spec.label);
+          },
+        }),
+      ),
+    );
+    specs.find((s) => s.id === 'dashboard.rule.RES-001')?.onClick();
+    expect(toggled).toBe('RES-001');
+  });
+
+  it('windows offenders and shows scroll hints', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          rules: [manyOffenders(47)],
+          expandedRuleIds: new Set(['RES-001']),
+          showAllRuleIds: new Set(['RES-001']),
+          bestPracticesViewport: 5,
+          bestPracticesScroll: 3,
+        }),
+      ),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('more above');
+    expect(frame).toContain('more below');
+  });
+
+  it('renders the passing rules dimmed list when expanded', () => {
+    const { lastFrame } = render(
+      React.createElement(
+        HealthDashboard,
+        makeProps({
+          rules: [makeOkRule()],
+          showPassing: true,
+        }),
+      ),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('✓');
+    expect(frame).toContain('[hide passing]');
   });
 });
 

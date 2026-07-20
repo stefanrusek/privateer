@@ -119,6 +119,12 @@ export function LiveApp({
           summary={health.summary}
           rules={health.rules}
           showPassing={health.showPassing}
+          expandedRuleIds={health.expandedRuleIds}
+          showAllRuleIds={health.showAllRuleIds}
+          cursor={health.cursor}
+          focused={app.focus === 'list'}
+          bestPracticesViewport={controller.dashboardViewport()}
+          bestPracticesScroll={health.scrollOffset}
           metrics={controller.metricsOverview()}
           kafka={controller.kafkaSection()}
           onNavigateWarnings={() => {
@@ -127,9 +133,14 @@ export function LiveApp({
           onNavigateErrors={() => {
             controller.navigateToPodsWithStatus('error');
           }}
-          onShowRule={() => undefined}
+          onToggleRule={controller.toggleRule}
+          onShowAllOffenders={controller.showAllOffenders}
+          onNavigateOffender={controller.navigateToOffender}
           onToggleShowPassing={controller.toggleShowPassing}
           onNavigateKafkaTopic={() => undefined}
+          renderButton={({ id, label, onClick, active }) => (
+            <Button id={id} label={label} active={active} onClick={onClick} />
+          )}
         />
       );
     }
