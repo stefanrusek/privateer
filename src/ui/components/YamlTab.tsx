@@ -254,7 +254,14 @@ export function YamlTab({
       ? {
           kind: 'edit',
           edit: editStateFromContent(reentryContent),
-          baseYaml: yaml,
+          // Normalize through the editor's own splitter so a dirty check
+          // compares like-for-like (jsYaml dumps a trailing newline that
+          // `contentOf` drops) — mirrors `enterEditMode`. Without this, the
+          // list-level `e` reentry (P9R-0016) seeded `baseYaml` from the raw
+          // `yaml` prop, which still had the trailing newline, so an
+          // unmodified buffer compared unequal to its own base and Ctrl+S /
+          // Escape wrongly treated it as dirty.
+          baseYaml: contentOf(editStateFromContent(yaml)),
           validationError: validateYaml(reentryContent),
         }
       : null;

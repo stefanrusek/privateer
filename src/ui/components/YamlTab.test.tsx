@@ -468,6 +468,41 @@ describe('YamlTab $EDITOR reentry seed', () => {
     expect(lastFrame()).toContain('[Edit]');
     expect(onReentryConsumed).not.toHaveBeenCalled();
   });
+
+  // The list-level `e` shortcut reuses this same reentry seam (controller's
+  // `openDetail` sets `yamlEditReentry` to the canonical serialization,
+  // identical to the `yaml` prop) rather than going through `enterEditMode`.
+  // Regression for P9R-0016: an unmodified buffer entered this way must be a
+  // true no-op — Ctrl+S shows the no-op notice (never the diff) and Escape
+  // returns straight to read mode (never the discard prompt).
+  it('list-e entry: an unmodified reentry buffer is a no-op on Ctrl+S', async () => {
+    const resource = makeConfigMap({ env: 'staging' });
+    const canonical = dump(resource);
+    const onNoChanges = vi.fn();
+    const { lastFrame, stdin } = renderTab(resource, {
+      reentryContent: canonical,
+      onReentryConsumed: vi.fn(),
+      onNoChanges,
+    });
+    await ticks();
+    expect(lastFrame()).toContain('EDITING');
+    await safeWrite(stdin, '\x13'); // Ctrl+S
+    expect(onNoChanges).toHaveBeenCalledOnce();
+    expect(lastFrame()).not.toContain('[Apply]');
+  });
+
+  it('list-e entry: Escape on an unmodified reentry buffer skips the discard prompt', async () => {
+    const resource = makeConfigMap({ env: 'staging' });
+    const canonical = dump(resource);
+    const { lastFrame, stdin } = renderTab(resource, {
+      reentryContent: canonical,
+      onReentryConsumed: vi.fn(),
+    });
+    await ticks();
+    await safeWrite(stdin, '\x1B'); // Escape
+    expect(lastFrame()).not.toContain('Discard changes?');
+    expect(lastFrame()).toContain('[Edit]');
+  });
 });
 
 // ---------------------------------------------------------------------------
