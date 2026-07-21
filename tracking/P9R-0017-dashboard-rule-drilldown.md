@@ -2,7 +2,7 @@
 spile: ticket
 id: P9R-0017
 type: feature
-status: verifying
+status: implementing
 owner: stefan
 resolution:
 blocked_by: []
@@ -104,3 +104,17 @@ end the user must re-derive by hand.
 > and `[show passing]` produced no change whatsoever; there is also no
 > keyboard path to activate them. The affordances are rendered but wired to
 > nothing — stubbed UI.
+
+> [!NOTE]
+> Verification 2026-07-20 (live tmux pass, post-implementation): `[show]`/
+> `[hide]`/`[all]`/`[show passing]` all work; kind-prefixed offenders and the
+> >10 cap render correctly; the KEYBOARD offender-nav path (dashboard focused,
+> ↑/↓ cursor onto an offender, Enter → navigates to the resource's list+detail)
+> works. **Remaining gap:** clicking an offender line with the MOUSE does not
+> navigate — nothing happens. Repro: Overview → click `[show]` on "pods have no
+> CPU limit set" → click any `Pod/ns/name` offender line (no scrolling
+> involved). Expected: navigates like Enter. Actual: stays on Overview. A first
+> fix attempt (commit 5423e89) addressed only scroll-induced stale hit-rects
+> via a `remeasureKey`; the no-scroll case is still unwired, so the click isn't
+> reaching `navigateToOffender`. Dropped back to implementing for this one
+> clause.
