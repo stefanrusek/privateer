@@ -139,8 +139,14 @@ export function LiveApp({
           onNavigateOffender={controller.navigateToOffender}
           onToggleShowPassing={controller.toggleShowPassing}
           onNavigateKafkaTopic={() => undefined}
-          renderButton={({ id, label, onClick, active }) => (
-            <Button id={id} label={label} active={active} onClick={onClick} />
+          renderButton={({ id, label, onClick, active, remeasureKey }) => (
+            <Button
+              id={id}
+              label={label}
+              active={active}
+              onClick={onClick}
+              remeasureKey={remeasureKey}
+            />
           )}
         />
       );

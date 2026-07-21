@@ -84,6 +84,16 @@ export interface DashboardButtonSpec {
   onClick: () => void;
   /** Cursor highlight (bold). */
   active: boolean;
+  /**
+   * Forces a remeasure even though id/label/layer are unchanged. The
+   * best-practices list is windowed (`BestPracticesSection`'s `scroll`):
+   * scrolling shifts every still-mounted row's screen position without
+   * changing its React key, id, or label, so a measured Button would
+   * otherwise keep its stale pre-scroll rect and silently miss clicks (the
+   * same class of bug `PortForwardManager` hit — see its `remeasureKey`).
+   * Callers pass the current scroll offset here.
+   */
+  remeasureKey: number;
 }
 
 export interface HealthDashboardProps {
@@ -266,6 +276,7 @@ function gutter(active: boolean): React.ReactElement {
 function DashboardRow({
   item,
   active,
+  scroll,
   onToggleRule,
   onShowAllOffenders,
   onNavigateOffender,
@@ -274,6 +285,8 @@ function DashboardRow({
 }: {
   item: DashboardItem;
   active: boolean;
+  /** Current best-practices scroll offset — see `DashboardButtonSpec.remeasureKey`. */
+  scroll: number;
   onToggleRule: (ruleId: string) => void;
   onShowAllOffenders: (ruleId: string) => void;
   onNavigateOffender: (offender: AffectedResource) => void;
@@ -298,6 +311,7 @@ function DashboardRow({
                   id: `dashboard.rule.${item.ruleId}`,
                   label: item.expanded ? '[hide]' : '[show]',
                   active,
+                  remeasureKey: scroll,
                   onClick: () => {
                     onToggleRule(item.ruleId);
                   },
@@ -318,6 +332,7 @@ function DashboardRow({
               id: `dashboard.offender.${item.ruleId}.${item.offender.kind}.${item.offender.namespace}.${item.offender.name}`,
               label: item.text,
               active,
+              remeasureKey: scroll,
               onClick: () => {
                 onNavigateOffender(item.offender);
               },
@@ -336,6 +351,7 @@ function DashboardRow({
               id: `dashboard.more.${item.ruleId}`,
               label: '[all]',
               active,
+              remeasureKey: scroll,
               onClick: () => {
                 onShowAllOffenders(item.ruleId);
               },
@@ -356,6 +372,7 @@ function DashboardRow({
               id: 'dashboard.passing',
               label: item.showPassing ? '[hide passing]' : '[show passing]',
               active,
+              remeasureKey: scroll,
               onClick: onToggleShowPassing,
             },
             renderButton,
@@ -416,6 +433,7 @@ function BestPracticesSection({
             key={absoluteIndex}
             item={item}
             active={focused && absoluteIndex === cursor}
+            scroll={scroll}
             onToggleRule={onToggleRule}
             onShowAllOffenders={onShowAllOffenders}
             onNavigateOffender={onNavigateOffender}
