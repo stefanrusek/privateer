@@ -236,6 +236,7 @@ export function LiveApp({
         const reentry = controller.peekYamlEditReentry();
         return (
           <YamlTab
+            key={detail.resource.uid}
             yaml={controller.yamlForDetail()}
             kind={detail.resource.kind}
             title={controller.yamlTitle()}

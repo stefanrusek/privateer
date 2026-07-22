@@ -170,6 +170,67 @@ describe('YamlTab secret redaction', () => {
     expect(frame).toContain('c2VjcmV0');
     expect(frame).not.toContain('••••••••');
   });
+
+  it('reveal state resets when navigating to a different Secret resource (P9R-0012)', async () => {
+    // Test the behavior with a keyed wrapper: when the key changes (simulating
+    // navigation to a different resource), the component remounts and the reveal
+    // state resets to masked.
+    function SecretTabWithKey({
+      secret,
+      resourceId,
+    }: {
+      secret: KubernetesObject;
+      resourceId: string;
+    }): React.ReactElement {
+      return React.createElement(YamlTab, {
+        key: resourceId,
+        ...makeProps(secret),
+      });
+    }
+
+    const secret1 = makeSecret({ password: 'c2VjcmV0' }); // base64 for "secret"
+    secret1.metadata!.name = 'db-creds-1';
+    const secret2 = makeSecret({ apiKey: 'dGVzdHRva2VuYWJj' }); // base64 for "testtokenabc"
+    secret2.metadata!.name = 'api-token-2';
+
+    const { lastFrame, stdin, rerender } = render(
+      React.createElement(SecretTabWithKey, {
+        secret: secret1,
+        resourceId: 'res-1',
+      }),
+    );
+
+    // Verify secret-1 is rendered and masked
+    await tick();
+    let frame = lastFrame() ?? '';
+    expect(frame).toContain('••••••••');
+    expect(frame).toContain('[reveal]');
+
+    // Reveal secret-1
+    await safeWrite(stdin, 'v');
+    await ticks();
+    frame = lastFrame() ?? '';
+    // c2VjcmV0 decodes to "secret"
+    expect(frame).toContain('secret');
+    expect(frame).toContain('[hide]');
+
+    // Navigate to secret-2 by re-rendering with a different key and resource
+    rerender(
+      React.createElement(SecretTabWithKey, {
+        secret: secret2,
+        resourceId: 'res-2',
+      }),
+    );
+    await ticks();
+
+    // Verify secret-2 is masked (reveal state was reset on remount)
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('••••••••');
+    expect(frame).toContain('[reveal]');
+    // Verify it's not showing the decoded value from secret-1
+    expect(frame).not.toContain('secret');
+    expect(frame).not.toContain('testtokenabc');
+  });
 });
 
 describe('YamlTab managedFields toggle (P9R-0016)', () => {
