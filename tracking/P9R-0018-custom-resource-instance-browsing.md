@@ -2,9 +2,9 @@
 spile: ticket
 id: P9R-0018
 type: feature
-status: implementing
+status: closed
 owner: stefan
-resolution:
+resolution: done
 blocked_by: []
 created: 2026-07-20
 relations:

@@ -15,18 +15,15 @@ _Nothing needs attention._
 
 ## Board
 
-### implementing
-
-| ID | Title | Type | Owner | Blocked | PR |
-| --- | --- | --- | --- | --- | --- |
-| [P9R-0005](../P9R-0005-exec-failures-silent-and-stderr-leak.md) | Exec failures are silent; the error leaks to stderr instead of the UI | bug | stefan | | |
-| [P9R-0008](../P9R-0008-prometheus-autodiscovery-misses-plain-service.md) | Prometheus auto-discovery misses a service literally named `prometheus` | bug | stefan | | |
-| [P9R-0018](../P9R-0018-custom-resource-instance-browsing.md) | Browse custom resource instances, not just CRDs | feature | stefan | | |
+_No open tickets._
 
 ## Recently Closed
 
 | ID | Title | Resolution |
 | --- | --- | --- |
+| [P9R-0005](../P9R-0005-exec-failures-silent-and-stderr-leak.md) | Exec failures are silent; the error leaks to stderr instead of the UI | done |
+| [P9R-0008](../P9R-0008-prometheus-autodiscovery-misses-plain-service.md) | Prometheus auto-discovery misses a service literally named `prometheus` | done |
+| [P9R-0018](../P9R-0018-custom-resource-instance-browsing.md) | Browse custom resource instances, not just CRDs | done |
 | [P9R-0001](../P9R-0001-dashboard-node-ready-count-wrong.md) | Dashboard node summary reports a Ready node as not ready | done |
 | [P9R-0002](../P9R-0002-agent-tab-missing-from-tab-strip.md) | Agent tab is invisible in the detail tab strip | done |
 | [P9R-0003](../P9R-0003-events-tab-filter-and-fallbacks.md) | Events tab — dead filter chips, missing Normal events, zero Count and blank Age | done |
