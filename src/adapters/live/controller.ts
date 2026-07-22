@@ -2199,6 +2199,7 @@ export class LiveController {
       strimziPresent: this.kafkaDetected.deploymentType === 'strimzi',
       kafkaExporter: this.metricsCaps.kafkaExporter,
       strimziJmx: this.metricsCaps.strimziJmx,
+      prometheusConnected: this.metricsTier === 'prometheus',
     };
     const rules = evaluateAllRules(this.store, ctx, caps);
     this.health = { ...this.health, summary, rules };

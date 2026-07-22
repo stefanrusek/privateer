@@ -161,12 +161,11 @@ export const OBS_010: HealthRule = {
   title: () =>
     `No Prometheus found in cluster (searched: ${DISCOVERY_SEARCH_DESCRIPTION})`,
   evaluate(_store: StateStore, _context: string, caps: RuleCaps): RuleResult {
-    // This rule fires when no metrics exporter capabilities are present,
-    // indicating Prometheus is not available.
-    if (!caps.kafkaExporter && !caps.strimziJmx) {
-      // Check whether any cadvisor/kube-state-metrics signals could indicate
-      // Prometheus — but since we only have kafkaExporter and strimziJmx in
-      // caps for this chunk, we signal based on no caps at all.
+    // Keys off the real discovery/connection outcome (metricsTier ===
+    // 'prometheus' in the controller), not exporter-capability proxies —
+    // those can be false even once Prometheus is genuinely connected
+    // (P9R-0008), which contradicted the dashboard's "connected" state.
+    if (!caps.prometheusConnected) {
       return {
         status: 'warn',
         affectedResources: [],

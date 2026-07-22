@@ -52,6 +52,14 @@ export interface RuleCaps {
   readonly strimziPresent: boolean;
   /** Doppler or External Secrets operator detected. */
   readonly secretsOperatorPresent: boolean;
+  /**
+   * True once metrics discovery has actually connected to a Prometheus
+   * source (controller's `metricsTier === 'prometheus'`) — the real
+   * discovery/connection outcome, not a proxy inferred from exporter
+   * capabilities (P9R-0008: those proxies contradicted the dashboard's
+   * genuine connected state).
+   */
+  readonly prometheusConnected: boolean;
 }
 
 export const EMPTY_CAPS: RuleCaps = {
@@ -59,6 +67,7 @@ export const EMPTY_CAPS: RuleCaps = {
   strimziJmx: false,
   strimziPresent: false,
   secretsOperatorPresent: false,
+  prometheusConnected: false,
 };
 
 export interface EvaluatedRule {

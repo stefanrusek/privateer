@@ -30,6 +30,7 @@ const WITH_ALL: RuleCaps = {
   strimziJmx: true,
   strimziPresent: true,
   secretsOperatorPresent: false,
+  prometheusConnected: false,
 };
 
 /** Seed a Strimzi CRD to make detectKafka return 'strimzi'. */

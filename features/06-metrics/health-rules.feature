@@ -46,9 +46,15 @@ Feature: Health rule catalog — representative rules across categories
     When health rule "OBS-010" is evaluated
     Then the health rule result status is "warn"
 
-  Scenario: OBS-010 is ok when kafkaExporter capability is present
+  Scenario: OBS-010 still warns when only exporter capabilities are present
     Given a health rule evaluation environment
     And the kafkaExporter capability is enabled
+    When health rule "OBS-010" is evaluated
+    Then the health rule result status is "warn"
+
+  Scenario: OBS-010 is ok when Prometheus is actually connected
+    Given a health rule evaluation environment
+    And Prometheus is connected
     When health rule "OBS-010" is evaluated
     Then the health rule result status is "ok"
 
