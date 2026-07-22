@@ -34,6 +34,7 @@ import {
   crKindLabel,
   descriptorsByLabel,
   descriptorsForGroups,
+  resolveActiveEventKind,
 } from '../../k8s/crd-grouping.js';
 import type { CrKindDescriptor } from '../../k8s/crd-grouping.js';
 import type {
@@ -1485,10 +1486,7 @@ export class LiveController {
     if (removed.length === 0) {
       return;
     }
-    const activeKind =
-      this.app.activeKind === 'Overview'
-        ? null
-        : labelToKind(this.app.activeKind);
+    const activeKind = this.activeEventKind() ?? null;
     if (this.table !== null && kind === activeKind) {
       const now = this.clock.now();
       for (const resource of removed) {
@@ -1514,10 +1512,7 @@ export class LiveController {
 
     const kind = event.object.kind ?? event.kind;
     this.clearKindMarks(kindToLabel(kind));
-    const activeKind =
-      this.app.activeKind === 'Overview'
-        ? null
-        : labelToKind(this.app.activeKind);
+    const activeKind = this.activeEventKind() ?? null;
 
     if (this.table !== null && kind === activeKind) {
       if (this.matchesNamespaceFilter(event.namespace, kind)) {
@@ -1673,7 +1668,7 @@ export class LiveController {
       const forbidden = new Set(this.app.forbiddenKinds);
       forbidden.add(label);
       this.app = { ...this.app, forbiddenKinds: forbidden };
-      if (this.table !== null && labelToKind(this.app.activeKind) === kind) {
+      if (this.table !== null && this.activeEventKind() === kind) {
         this.table = { ...this.table, loadState: 'forbidden' };
       }
     } else {
@@ -2361,6 +2356,23 @@ export class LiveController {
     this.table = { ...this.table, loadState: 'ready' };
     this.clampSelection();
     this.bump();
+  }
+
+  /**
+   * The Kubernetes kind backing the currently active sidebar selection, for
+   * matching incoming store/stream events — built-in kinds via
+   * `labelToKind`, dynamic CR kinds via the CRD-descriptor fallback
+   * (P9R-0018 live-update fix; see `resolveActiveEventKind`).
+   */
+  private activeEventKind(): string | undefined {
+    if (this.app.activeKind === 'Overview') {
+      return undefined;
+    }
+    return resolveActiveEventKind(
+      this.app.activeKind,
+      this.app.crdGroups,
+      labelToKind(this.app.activeKind),
+    );
   }
 
   private storeHasKind(kind: string): boolean {

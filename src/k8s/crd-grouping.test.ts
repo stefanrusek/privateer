@@ -5,6 +5,7 @@ import {
   descriptorsByLabel,
   crdFromObject,
   crKindLabel,
+  resolveActiveEventKind,
 } from './crd-grouping.js';
 import type { CrdDefinition } from '../boundaries/kube-client.js';
 import type { KubernetesObject } from '../core/types.js';
@@ -432,5 +433,41 @@ describe('crdFromObject', () => {
       },
     };
     expect(crdFromObject(obj)?.versions).toEqual([]);
+  });
+});
+
+describe('resolveActiveEventKind', () => {
+  const crds: CrdDefinition[] = [
+    {
+      group: 'secrets.doppler.com',
+      kind: 'DopplerSecret',
+      plural: 'dopplersecrets',
+      namespaced: true,
+      versions: ['v1alpha1'],
+      established: true,
+      printerColumns: [],
+    },
+  ];
+  const groups = groupCrds(crds);
+
+  it('returns the built-in kind untouched when one was already resolved', () => {
+    expect(resolveActiveEventKind('Pods', groups, 'Pod')).toBe('Pod');
+  });
+
+  it('resolves a dynamic CR sidebar label to its kind via the CRD descriptor', () => {
+    // This is the P9R-0018 live-update bug: a CR kind's sidebar label
+    // ("DopplerSecrets") never resolves through the static built-in map, so
+    // callers that only tried a built-in lookup got `undefined` here and a
+    // live ADDED/MODIFIED/DELETED event for "DopplerSecret" could never
+    // match the active list — the table silently never repainted.
+    expect(resolveActiveEventKind('DopplerSecrets', groups, undefined)).toBe(
+      'DopplerSecret',
+    );
+  });
+
+  it('returns undefined for an unknown label with no built-in or CR match', () => {
+    expect(
+      resolveActiveEventKind('NotAKind', groups, undefined),
+    ).toBeUndefined();
   });
 });

@@ -125,6 +125,30 @@ export function descriptorsByLabel(
 }
 
 /**
+ * Resolve the active sidebar selection's Kubernetes kind for the purpose of
+ * matching incoming store/stream events (ticket P9R-0018 live-update fix).
+ *
+ * `builtinKind` is the caller's already-computed `labelToKind(activeLabel)`
+ * result (built-in kinds resolve there and never touch `crdGroups`). When
+ * that's `undefined` — the active label is a dynamic CR kind's sidebar leaf,
+ * e.g. "DopplerSecrets" — fall back to `descriptorsByLabel`, the same
+ * resolution `seedTable` already performs when first opening the list.
+ * Without this fallback, callers that only ever tried `labelToKind` would
+ * compare a real event kind ("DopplerSecret") against `undefined` and the
+ * live list would never repaint for any CR kind.
+ */
+export function resolveActiveEventKind(
+  activeLabel: string,
+  crdGroups: readonly CrdGroup[],
+  builtinKind: string | undefined,
+): string | undefined {
+  if (builtinKind !== undefined) {
+    return builtinKind;
+  }
+  return descriptorsByLabel(crdGroups).get(activeLabel)?.kind;
+}
+
+/**
  * Parse a raw watched CustomResourceDefinition object (list/watch event
  * body) into a CrdDefinition, or `undefined` if the object is missing
  * fields required to address it (group/kind/plural/scope). Used to keep
