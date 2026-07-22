@@ -2,9 +2,9 @@
 spile: ticket
 id: P9R-0017
 type: feature
-status: implementing
+status: closed
 owner: stefan
-resolution:
+resolution: done
 blocked_by: []
 created: 2026-07-20
 relations:
@@ -118,3 +118,14 @@ end the user must re-derive by hand.
 > via a `remeasureKey`; the no-scroll case is still unwired, so the click isn't
 > reaching `navigateToOffender`. Dropped back to implementing for this one
 > clause.
+
+> [!NOTE]
+> Verification 2026-07-22 (live tmux pass): all criteria pass, including the
+> previously-failing MOUSE offender click — a fresh-capture click on an
+> offender row navigates correctly. A static root-cause pass (three
+> end-to-end reproductions against the real Button/registry/dispatch chain,
+> landed as permanent regression tests) found no defect, and the live pass
+> reproduced the earlier symptom only when clicking coordinates captured
+> *before* live pod-churn reflowed the dashboard. Conclusion: the 2026-07-20
+> "mouse click does nothing" report was a stale-coordinate artifact of the
+> live-updating layout, not a wiring bug. Closed as done.
