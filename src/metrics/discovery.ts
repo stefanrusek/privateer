@@ -221,10 +221,11 @@ interface ServicePort {
   readonly name: string | null;
 }
 
-interface ServiceCandidate {
+export interface ServiceCandidate {
   readonly name: string;
   readonly namespace: string;
   readonly rank: 1 | 2 | 3;
+  readonly port: number;
   readonly url: string;
 }
 
@@ -302,8 +303,27 @@ function classifyServiceCandidate(
     name,
     namespace,
     rank,
+    port: chosenPort,
     url: `http://${name}.${namespace}:${String(chosenPort)}`,
   };
+}
+
+/**
+ * Select the best Prometheus Service candidate from an already-fetched list
+ * of Services, per P9R-0008's preference order (labels, then name, then
+ * port 9090 / named http-ish port), with namespace tie-break. Exposed
+ * separately from {@link tryServiceScan} so callers that need to reach the
+ * Service via a tunnel (rather than in-cluster DNS) — e.g. p9r running on
+ * the operator's host — can pick the candidate without a direct-DNS probe.
+ */
+export function selectServiceCandidate(
+  items: readonly KubernetesObject[],
+): ServiceCandidate | null {
+  const candidates = items
+    .map(classifyServiceCandidate)
+    .filter((c): c is ServiceCandidate => c !== null)
+    .sort(compareCandidates);
+  return candidates[0] ?? null;
 }
 
 function namespaceRank(namespace: string): number {

@@ -3,7 +3,7 @@
  * Covers all seven cascade branches and degrade paths.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { discoverMetricsSource } from './discovery.js';
+import { discoverMetricsSource, selectServiceCandidate } from './discovery.js';
 import type { DiscoveryDeps } from './discovery.js';
 import { FakeMetricsSource } from '../boundaries/metrics-source.fake.js';
 import { FakeKubeClient } from '../boundaries/kube-client.fake.js';
@@ -797,5 +797,48 @@ describe('discoverMetricsSource', () => {
       expect(second.tier).toBe('prometheus');
       expect(second.url).toBe('http://new:9090');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// selectServiceCandidate (used directly by the live controller to pick a
+// Service to tunnel to, without probing in-cluster DNS from the host)
+// ---------------------------------------------------------------------------
+
+describe('selectServiceCandidate', () => {
+  it('returns null when there are no Services', () => {
+    expect(selectServiceCandidate([])).toBeNull();
+  });
+
+  it('returns null when no Service matches any criterion', () => {
+    const items = [
+      makeService('metrics-thing', 'apps', { ports: [{ port: 8080 }] }),
+    ];
+    expect(selectServiceCandidate(items)).toBeNull();
+  });
+
+  it('picks the plain-named prometheus Service on port 9090', () => {
+    const items = [makeService('prometheus', 'default')];
+    const result = selectServiceCandidate(items);
+    expect(result).toEqual({
+      name: 'prometheus',
+      namespace: 'default',
+      rank: 2,
+      port: 9090,
+      url: 'http://prometheus.default:9090',
+    });
+  });
+
+  it('prefers a known label over a name match', () => {
+    const items = [
+      makeService('prometheus', 'apps'),
+      makeService('op-prom', 'zzz', {
+        labels: { 'app.kubernetes.io/name': 'prometheus' },
+        ports: [{ port: 9090 }],
+      }),
+    ];
+    const result = selectServiceCandidate(items);
+    expect(result?.name).toBe('op-prom');
+    expect(result?.rank).toBe(1);
   });
 });

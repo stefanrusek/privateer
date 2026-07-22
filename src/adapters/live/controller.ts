@@ -229,6 +229,7 @@ import { PortForwardManager } from '../../portforward/manager.js';
 import type { PortForwardManagerState } from '../../portforward/manager.js';
 import type { PortForward } from '../../portforward/types.js';
 import type { MetricsTier } from '../../metrics/discovery.js';
+import { selectServiceCandidate } from '../../metrics/discovery.js';
 import { SystemTunnel } from '../../metrics/system-tunnel.js';
 import {
   createRangeSelector,
@@ -1797,7 +1798,13 @@ export class LiveController {
     }
   }
 
-  /** Find a Prometheus service to tunnel to (standard names, then labels). */
+  /**
+   * Find a Prometheus service to tunnel to, via the pure discovery cascade
+   * (Spec 06 §2.2 / P9R-0008): known operator/helm labels, then a
+   * recognized name (prometheus/prometheus-server/prometheus-operated),
+   * then any Service exposing port 9090 (or a named http/web/http-web port
+   * on a prometheus-named Service), ties broken by namespace order.
+   */
   private async findPrometheusService(): Promise<{
     name: string;
     namespace: string;
@@ -1807,37 +1814,7 @@ export class LiveController {
     if (!services.ok) {
       return null;
     }
-    const standardNames = new Set([
-      'prometheus-operated',
-      'prometheus',
-      'prometheus-server',
-    ]);
-    interface SvcRaw {
-      metadata?: {
-        name?: string;
-        namespace?: string;
-        labels?: Record<string, string>;
-      };
-      spec?: { ports?: { port?: number }[] };
-    }
-    const items = services.value.items as SvcRaw[];
-    const byName = items.find((svc) =>
-      standardNames.has(svc.metadata?.name ?? ''),
-    );
-    const byLabel = items.find(
-      (svc) =>
-        svc.metadata?.labels?.app === 'prometheus' ||
-        svc.metadata?.labels?.['app.kubernetes.io/name'] === 'prometheus',
-    );
-    const found = byName ?? byLabel;
-    if (found?.metadata?.name === undefined) {
-      return null;
-    }
-    return {
-      name: found.metadata.name,
-      namespace: found.metadata.namespace ?? 'default',
-      port: found.spec?.ports?.[0]?.port ?? 9090,
-    };
+    return selectServiceCandidate(services.value.items);
   }
 
   private awaitTunnel(
