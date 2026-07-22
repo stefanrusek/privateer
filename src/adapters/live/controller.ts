@@ -16,6 +16,11 @@ import {
 import { randomBytes } from 'node:crypto';
 import jsYaml from 'js-yaml';
 import { canonicalKeyOrder } from '../../yaml/canonical-order.js';
+import {
+  resolveDetailYaml,
+  shouldFetchFullYaml,
+  type YamlCacheEntry,
+} from '../../yaml/yaml-cache.js';
 import { KubeConfig } from '@kubernetes/client-node';
 import type { LaunchOptions } from '../../cli/args.js';
 import type {
@@ -583,6 +588,18 @@ export class LiveController {
   // content here so the remounted YamlTab can seed itself straight back into a
   // live edit buffer; the component consumes and clears it on mount.
   private yamlEditReentry: string | null = null;
+
+  // Full-object YAML cache (P9R-0016 story 1b): the store strips
+  // `metadata.managedFields` from every resource before it's stored (memory
+  // economy). `yamlForDetail` renders straight from the store's stripped
+  // `raw`, so `hasManagedFields`/the `[managed]` chip were unreachable on the
+  // normal open path. When the YAML tab is showing, fetch the full object
+  // via the same `client.get` round trip `yamlReload` uses for 409 recovery,
+  // and cache it here keyed by the open detail's uid — `yamlForDetail` prefers
+  // this cache over the stripped fallback whenever it's for the resource
+  // that's currently open.
+  private fullYamlCache: YamlCacheEntry | null = null;
+  private fullYamlFetchUid: string | null = null;
 
   // Metrics (Spec 06): discovery tier + session buffer for the
   // metrics-server fallback (40-sample rolling window per pod/node).
@@ -2446,6 +2463,9 @@ export class LiveController {
       if (tab === 'metrics') {
         void this.fetchCharts();
       }
+      if (tab === 'yaml') {
+        this.fetchFullYamlForDetail(this.detail.resource);
+      }
       // Spec 03: the new tab starts at its top (Logs starts at its bottom,
       // owned by `this.logs`).
       this.resetDetailOffset();
@@ -2457,6 +2477,8 @@ export class LiveController {
     this.detail = null;
     this.agentPaneOpen = false;
     this.charts = null;
+    this.fullYamlCache = null;
+    this.fullYamlFetchUid = null;
     this.stopLogs();
     this.app = { ...this.app, showDetail: false, focus: 'list' };
     this.bump();
@@ -2497,10 +2519,62 @@ export class LiveController {
   // side effects the reducer asks for. The component never touches kubeClient.
   // -------------------------------------------------------------------------
 
-  /** The resource currently shown in the YAML tab, serialized to YAML. */
+  /**
+   * The resource currently shown in the YAML tab, serialized to YAML.
+   * Prefers the full-object fetch cached by {@link fetchFullYamlForDetail}
+   * (has `managedFields`) over the store's stripped `raw`, falling back to
+   * the latter while the fetch is in flight, hasn't started, or failed.
+   */
   yamlForDetail(): string {
     const raw = this.detail?.resource.raw ?? {};
-    return jsYaml.dump(canonicalKeyOrder(raw), { lineWidth: -1, indent: 2 });
+    const fallback = jsYaml.dump(canonicalKeyOrder(raw), {
+      lineWidth: -1,
+      indent: 2,
+    });
+    return resolveDetailYaml(
+      this.fullYamlCache,
+      this.detail?.uid ?? '',
+      fallback,
+    );
+  }
+
+  /**
+   * Kick off (at most one concurrent) full-object fetch for the resource
+   * shown in the YAML tab, so `yamlForDetail` can serve the unstripped
+   * object (managedFields intact) instead of the store's stripped `raw`.
+   * No-op if a fetch for this uid is already in flight or already cached.
+   */
+  private fetchFullYamlForDetail(resource: ResourceObject): void {
+    if (
+      !shouldFetchFullYaml(
+        this.fullYamlCache,
+        this.fullYamlFetchUid,
+        resource.uid,
+      )
+    ) {
+      return;
+    }
+    this.fullYamlFetchUid = resource.uid;
+    void this.client
+      .get(resource.kind, resource.name, resource.namespace)
+      .then((result) => {
+        if (this.fullYamlFetchUid === resource.uid) {
+          this.fullYamlFetchUid = null;
+        }
+        if (!result.ok) {
+          return;
+        }
+        this.fullYamlCache = {
+          uid: resource.uid,
+          yaml: jsYaml.dump(canonicalKeyOrder(result.value), {
+            lineWidth: -1,
+            indent: 2,
+          }),
+        };
+        if (this.detail?.uid === resource.uid) {
+          this.bump();
+        }
+      });
   }
 
   /** A header label for the diff (`Kind/namespace/name`). */
@@ -2553,13 +2627,14 @@ export class LiveController {
     if (!result.ok) {
       return { ok: false, message: result.error.message };
     }
-    return {
-      ok: true,
-      yaml: jsYaml.dump(canonicalKeyOrder(result.value), {
-        lineWidth: -1,
-        indent: 2,
-      }),
-    };
+    const yaml = jsYaml.dump(canonicalKeyOrder(result.value), {
+      lineWidth: -1,
+      indent: 2,
+    });
+    // Keep the managedFields cache in step with the freshly reloaded object
+    // (P9R-0016 story 1b) — same round trip, no reason to let the two drift.
+    this.fullYamlCache = { uid: r.uid, yaml };
+    return { ok: true, yaml };
   };
 
   /**
@@ -3155,6 +3230,9 @@ export class LiveController {
       // already boots straight into edit mode and reports it back via
       // `onModeChange` when `reentryContent` is set.
       this.yamlEditReentry = this.yamlForDetail();
+    }
+    if (effectiveTab === 'yaml') {
+      this.fetchFullYamlForDetail(resource);
     }
     void this.fetchDetailEvents();
     this.bump();
