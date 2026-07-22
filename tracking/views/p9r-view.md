@@ -11,11 +11,17 @@ project: p9r
 
 ## Needs Attention
 
-_Nothing needs attention._
+| ID | Title | Status | Note |
+| --- | --- | --- | --- |
+| [P9R-0019](../P9R-0019-direct-edit-misses-managed-fields.md) | Direct-to-edit (`e` on a list row) edits without managedFields | refining | |
 
 ## Board
 
-_No open tickets._
+### refining
+
+| ID | Title | Type | Owner | Blocked | PR |
+| --- | --- | --- | --- | --- | --- |
+| [P9R-0019](../P9R-0019-direct-edit-misses-managed-fields.md) | Direct-to-edit (`e` on a list row) edits without managedFields | bug | stefan | | |
 
 ## Recently Closed
 
