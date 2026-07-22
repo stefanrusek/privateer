@@ -4,6 +4,7 @@ import {
   isCommandNotFoundError,
   extractMissingExecutable,
   describeExecFailure,
+  formatExecPromptLine,
   DEFAULT_SHELL,
   FALLBACK_SHELL,
 } from './exec-command.js';
@@ -105,5 +106,32 @@ describe('describeExecFailure', () => {
 
   it('falls back to "unknown error" when stderr is blank', () => {
     expect(describeExecFailure('   ')).toBe('exec failed: unknown error');
+  });
+});
+
+describe('formatExecPromptLine', () => {
+  it('renders the plain prompt line when no failure is pending', () => {
+    expect(formatExecPromptLine('cloudflared-0', '', '/bin/bash', null)).toBe(
+      'exec cloudflared-0 ▸ /bin/bash (↑ history)',
+    );
+  });
+
+  it('shows the typed command in place of the default when non-empty', () => {
+    expect(
+      formatExecPromptLine('cloudflared-0', 'ls -la', '/bin/bash', null),
+    ).toBe('exec cloudflared-0 ▸ ls -la (↑ history)');
+  });
+
+  it('prefixes a pending failure so it stays visible alongside the reopened prompt (P9R-0005)', () => {
+    expect(
+      formatExecPromptLine(
+        'cloudflared-0',
+        '',
+        '/bin/bash',
+        'exec failed: "sh" not found in container — try a different command',
+      ),
+    ).toBe(
+      '✗ exec failed: "sh" not found in container — try a different command — exec cloudflared-0 ▸ /bin/bash (↑ history)',
+    );
   });
 });

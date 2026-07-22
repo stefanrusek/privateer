@@ -64,3 +64,20 @@ export function describeExecFailure(stderr: string): string {
   const firstLine = firstLineRaw.replace(/^error:\s*/i, '').trim();
   return `exec failed: ${firstLine.length > 0 ? firstLine : 'unknown error'}`;
 }
+
+/**
+ * Render the exec-prompt command-bar line (P9R-0005 follow-up: a toast
+ * fired alongside the reopened prompt was invisible — the prompt occludes
+ * the toast's line the instant it reopens). When a failure is pending it is
+ * folded into the same line the prompt already owns, so the user sees it
+ * the moment the prompt reappears instead of a toast that never renders.
+ */
+export function formatExecPromptLine(
+  resourceName: string,
+  shownCommand: string,
+  defaultCommand: string,
+  pendingError: string | null,
+): string {
+  const base = `exec ${resourceName} ▸ ${shownCommand.length > 0 ? shownCommand : defaultCommand} (↑ history)`;
+  return pendingError === null ? base : `✗ ${pendingError} — ${base}`;
+}

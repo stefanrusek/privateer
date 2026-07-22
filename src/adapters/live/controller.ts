@@ -228,6 +228,7 @@ import {
   buildKubectlExecArgs,
   isCommandNotFoundError,
   describeExecFailure,
+  formatExecPromptLine,
   FALLBACK_SHELL,
 } from '../../exec/exec-command.js';
 import { PortForwardManager } from '../../portforward/manager.js';
@@ -572,6 +573,13 @@ export class LiveController {
     resource: ResourceObject;
     container: string;
     input: CommandInput;
+    /**
+     * Failure message from the previous exec attempt, if the prompt reopened
+     * after one (P9R-0005 follow-up). Rendered inline in the command-bar
+     * line itself — a toast fired alongside the reopen is invisible because
+     * the reopened prompt occludes it the instant it renders.
+     */
+    error: string | null;
   } | null = null;
   private picker:
     | (PickerViewState & {
@@ -1167,8 +1175,12 @@ export class LiveController {
 
   private commandBarText(): string {
     if (this.execPrompt !== null) {
-      const shown = this.execPrompt.input.value;
-      return `exec ${this.execPrompt.resource.name} ▸ ${shown.length > 0 ? shown : DEFAULT_COMMAND} (↑ history)`;
+      return formatExecPromptLine(
+        this.execPrompt.resource.name,
+        this.execPrompt.input.value,
+        DEFAULT_COMMAND,
+        this.execPrompt.error,
+      );
     }
     if (this.portPrompt !== null) {
       return `⇄ ${this.portPrompt.podName} ports remote:local = ${this.portPrompt.text}`;
@@ -4435,12 +4447,14 @@ export class LiveController {
     resource: ResourceObject,
     container: string,
     prefill = '',
+    error: string | null = null,
   ): Promise<void> {
     const history = await loadHistory(this.fileSink);
     this.execPrompt = {
       resource,
       container,
       input: new CommandInput(history, prefill),
+      error,
     };
     this.app = { ...this.app, focus: 'commandbar', mode: 'command' };
     this.bump();
@@ -4549,11 +4563,14 @@ export class LiveController {
               { namespace, podName, container, command, stderr: errText },
               'exec failed',
             );
-            this.showToast(`✗ ${message}`);
+            // Fold the failure into the reopened prompt's own render
+            // (P9R-0005 follow-up) instead of a toast — the reopened
+            // prompt occludes the toast's line before the user can read it.
             void this.openExecPrompt(
               resource,
               container,
               command === DEFAULT_COMMAND ? '' : command,
+              message,
             );
           };
           child.on('exit', () => {
