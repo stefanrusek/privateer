@@ -84,7 +84,7 @@ function tallEventsLines(): ViewLine[] {
     count: i,
     message: `event-message-${String(i)}`,
   }));
-  return projectEventsLines(events, 8, true, NOW_MS, WIDTH);
+  return projectEventsLines(events, true, NOW_MS, WIDTH);
 }
 
 function tallMetricsLines(): ViewLine[] {

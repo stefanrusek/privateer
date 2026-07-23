@@ -15,9 +15,28 @@ import {
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import jsYaml from 'js-yaml';
+import { canonicalKeyOrder } from '../../yaml/canonical-order.js';
+import {
+  resolveDetailYaml,
+  shouldFetchFullYaml,
+  type YamlCacheEntry,
+} from '../../yaml/yaml-cache.js';
 import { KubeConfig } from '@kubernetes/client-node';
 import type { LaunchOptions } from '../../cli/args.js';
-import type { KubeError } from '../../boundaries/kube-client.js';
+import type {
+  KubeError,
+  WatchSubscription,
+  CrdDefinition,
+} from '../../boundaries/kube-client.js';
+import {
+  groupCrds,
+  crdFromObject,
+  crKindLabel,
+  descriptorsByLabel,
+  descriptorsForGroups,
+  resolveActiveEventKind,
+} from '../../k8s/crd-grouping.js';
+import type { CrKindDescriptor } from '../../k8s/crd-grouping.js';
 import type {
   ResourceEvent,
   ResourceObject,
@@ -64,6 +83,7 @@ import {
   type LogsContainerItem,
   type LogsLineLimitItem,
 } from '../../ui/logs-toolbar.js';
+import { EVENTS_TOOLBAR_ACCELERATORS } from '../../ui/events-toolbar.js';
 import {
   clampOffset,
   maxOffset,
@@ -110,7 +130,20 @@ import { MouseLifecycle } from './mouse-lifecycle.js';
 import type { PickerItem } from '../../ui/components/PickerOverlay.js';
 import type { EventRow } from '../../ui/components/EventsTab.js';
 import type { ClusterSummary } from '../../ui/components/HealthDashboard.js';
-import type { EvaluatedRule } from '../../health/types.js';
+import {
+  isNodeReady,
+  isNodeUnderPressure,
+} from '../../resources/status/index.js';
+import type { AffectedResource, EvaluatedRule } from '../../health/types.js';
+import {
+  buildDashboardItems,
+  clampCursor,
+  ensureVisible,
+  moveCursor,
+  navigableIndices,
+  resolveAffected,
+  type DashboardItem,
+} from '../../ui/dashboard-nav.js';
 import type { AgentExchange } from '../../ui/components/AgentTab.js';
 import type { AgentAction } from '../../command/action.js';
 import {
@@ -123,7 +156,7 @@ import {
   scrollUp,
   setHorizontalOffset,
 } from '../../ui/resource-table-model.js';
-import { getColumns } from '../../resources/columns.js';
+import { getColumns, getCrColumns } from '../../resources/columns.js';
 import {
   naturalWidths,
   pinnedCount,
@@ -139,6 +172,9 @@ import { detectKafka } from '../../health/kafka-detection.js';
 import {
   SIDEBAR_CATEGORIES,
   flattenSidebarNav,
+  sidebarCategoriesWithCr,
+  crGroupId,
+  CR_GROUP_ID_PREFIX,
 } from '../../ui/sidebar-data.js';
 import { useEventsFetcher } from '../../ui/components/EventsTab.js';
 import { parseBangCommand } from '../../command/commands.js';
@@ -173,6 +209,7 @@ import {
   prevMatch,
   type SearchState,
 } from '../../logs/search.js';
+import { routeLogsSearchKey } from '../../logs/search-input.js';
 import {
   LINE_OPTIONS,
   DEFAULT_LINE_OPTION,
@@ -188,10 +225,18 @@ import {
   resolveCommand,
   DEFAULT_COMMAND,
 } from '../../exec/command-history.js';
+import {
+  buildKubectlExecArgs,
+  isCommandNotFoundError,
+  describeExecFailure,
+  formatExecPromptLine,
+  FALLBACK_SHELL,
+} from '../../exec/exec-command.js';
 import { PortForwardManager } from '../../portforward/manager.js';
 import type { PortForwardManagerState } from '../../portforward/manager.js';
 import type { PortForward } from '../../portforward/types.js';
 import type { MetricsTier } from '../../metrics/discovery.js';
+import { selectServiceCandidate } from '../../metrics/discovery.js';
 import { SystemTunnel } from '../../metrics/system-tunnel.js';
 import {
   createRangeSelector,
@@ -244,11 +289,25 @@ import {
 export interface DetailState {
   uid: string;
   resource: ResourceObject;
+  /** CR kind's group/version/plural/printer-column descriptor (ticket
+   * P9R-0018 story 3), present only when `resource` is a custom-resource
+   * instance — resolved once at `openDetail` time so the Overview tab can
+   * render printer-column values/conditions without re-deriving it. */
+  crDescriptor?: CrKindDescriptor;
   tab: TabId;
   events: EventRow[];
   warningCount: number;
+  totalEventCount: number;
   showAllEvents: boolean;
   yamlMode: 'read' | 'edit' | 'discard-confirm' | 'diff';
+  /**
+   * Whether `metadata.managedFields` is currently shown in the YAML read
+   * view (P9R-0016). Session-scoped (resets on every `openDetail`), owned
+   * here rather than in `YamlTab` local state because toggling it changes
+   * the read-mode line count and the controller's viewport scroll extent
+   * (`detailLines()`) must stay in sync with what's actually rendered.
+   */
+  managedVisible: boolean;
 }
 
 export interface ConfirmState {
@@ -269,6 +328,14 @@ export interface HealthState {
   summary: ClusterSummary;
   rules: EvaluatedRule[];
   showPassing: boolean;
+  /** Rule ids expanded to their offender list (P9R-0017). */
+  expandedRuleIds: Set<string>;
+  /** Rule ids whose offenders are fully expanded past the cap. */
+  showAllRuleIds: Set<string>;
+  /** Item-index cursor into the best-practices rows; -1 when none. */
+  cursor: number;
+  /** Scroll offset (item index) for the best-practices list. */
+  scrollOffset: number;
 }
 
 /** Display-ready logs view state consumed by LogsTab. */
@@ -385,8 +452,19 @@ const ANIMATION_TICK_MS = 250;
 const HEALTH_INTERVAL_MS = 60_000;
 const BADGE_INTERVAL_MS = 60_000;
 const DEFAULT_VISIBLE_HEIGHT = 20;
+
+/**
+ * Rows reserved above the Best Practices offender list on the Overview
+ * dashboard (title + SUMMARY block + section header/divider) when computing
+ * how many rows scroll before the cursor is clipped (P9R-0017).
+ */
+const DASHBOARD_CHROME_ROWS = 11;
 /** Lines the detail wheel scrolls per wheel notch (Spec 02 §9). */
 const WHEEL_LINES = 3;
+/** Default status-bar hint line, restored once a toast expires (P9R-0010). */
+const DEFAULT_HINTS = ['Space agent', '/ search', '? help', 'q quit'];
+/** Transient toasts (✓ Copied…, ✓ Saved to…) auto-clear after this long (P9R-0010). */
+const TOAST_TTL_MS = 5000;
 
 /** Flatten a frame border {@link Segment} into a 1-wide hit-test rectangle. */
 function segmentRect(seg: Segment): {
@@ -421,6 +499,14 @@ export class LiveController {
   private readonly clock = new SystemClock();
   private store: StateStore;
   private streams: StreamManager | null = null;
+  /** Live watch on CustomResourceDefinition, keeping the CR sidebar groups
+   * current as CRDs are added/removed (Spec 03 §7). */
+  private crdWatch: WatchSubscription | null = null;
+  /** All discovered CRDs (established or not), keyed by `plural.group`. */
+  private knownCrds = new Map<string, CrdDefinition>();
+  /** CR-group subgroup ids already given their default (collapsed) state,
+   * so a later re-discovery doesn't re-collapse a group the user expanded. */
+  private crdGroupIdsDefaulted = new Set<string>();
 
   private app: AppState;
   private cursorKind = 'Overview';
@@ -437,11 +523,7 @@ export class LiveController {
    */
   private detailOffset: ScrollState = { offset: 0 };
   private confirm: ConfirmState | null = null;
-  private health: HealthState = {
-    summary: emptySummary(),
-    rules: [],
-    showPassing: false,
-  };
+  private health: HealthState = emptyHealth();
   private agentExchanges: AgentExchange[] = [];
   private switchStatus: SwitchStatus = null;
   private contextFilter = '';
@@ -492,6 +574,13 @@ export class LiveController {
     resource: ResourceObject;
     container: string;
     input: CommandInput;
+    /**
+     * Failure message from the previous exec attempt, if the prompt reopened
+     * after one (P9R-0005 follow-up). Rendered inline in the command-bar
+     * line itself — a toast fired alongside the reopen is invisible because
+     * the reopened prompt occludes it the instant it renders.
+     */
+    error: string | null;
   } | null = null;
   private picker:
     | (PickerViewState & {
@@ -508,6 +597,18 @@ export class LiveController {
   // content here so the remounted YamlTab can seed itself straight back into a
   // live edit buffer; the component consumes and clears it on mount.
   private yamlEditReentry: string | null = null;
+
+  // Full-object YAML cache (P9R-0016 story 1b): the store strips
+  // `metadata.managedFields` from every resource before it's stored (memory
+  // economy). `yamlForDetail` renders straight from the store's stripped
+  // `raw`, so `hasManagedFields`/the `[managed]` chip were unreachable on the
+  // normal open path. When the YAML tab is showing, fetch the full object
+  // via the same `client.get` round trip `yamlReload` uses for 409 recovery,
+  // and cache it here keyed by the open detail's uid — `yamlForDetail` prefers
+  // this cache over the stripped fallback whenever it's for the resource
+  // that's currently open.
+  private fullYamlCache: YamlCacheEntry | null = null;
+  private fullYamlFetchUid: string | null = null;
 
   // Metrics (Spec 06): discovery tier + session buffer for the
   // metrics-server fallback (40-sample rolling window per pod/node).
@@ -534,6 +635,11 @@ export class LiveController {
   private readonly fileSink = new FsFileSink();
   private started = false;
   private layoutSaveDebounce: (() => void) | null = null;
+  // Toast auto-clear (P9R-0010): set only by showToast/showLogsConfirmation,
+  // so ordinary setHints() calls (agent "thinking…", mode resets) never
+  // start a timer and are unaffected by clearToast()/clearLogsConfirmation().
+  private toastTimer: (() => void) | null = null;
+  private logsConfirmTimer: (() => void) | null = null;
   // Active detail tab remembered per resource kind (Spec 01 §4).
   private tabByKind = new Map<string, TabId>();
   // Per-context {namespace, activeKind} memory (chunk 08 §4), persisted in
@@ -786,6 +892,7 @@ export class LiveController {
     });
     this.flushLayout();
     this.streams?.stop();
+    this.crdWatch?.close();
     this.healthDebounce?.();
     this.healthDebounce = null;
     // Tear down the metrics port-forward child, or its lingering kubectl
@@ -874,12 +981,16 @@ export class LiveController {
   /**
    * Rows of scrollable content the detail pane shows (Spec 03). The tab bar
    * occupies the detail region's top row, so the generic viewport is one row
-   * shorter than the inner height.
+   * shorter than the inner height. The Events tab additionally reserves a
+   * second chrome row above the scroll viewport for its `[Warning]`/`[All]`
+   * toolbar (P9R-0003) — pulled out of the scrolled content so the chips stay
+   * fixed, clickable measured targets instead of scrolling out of reach.
    */
   private detailViewportHeight(): number {
     const detail = this.frame().detail;
     const inner = detail !== null ? detail.height : 0;
-    return Math.max(1, inner - 1);
+    const chrome = this.detail?.tab === 'events' ? 2 : 1;
+    return Math.max(1, inner - chrome);
   }
 
   /** Inner width of the detail pane — content clips here (Spec 02/03). */
@@ -902,18 +1013,23 @@ export class LiveController {
     const width = this.detailWidth();
     switch (d.tab) {
       case 'overview':
-        return projectOverviewLines(d.resource, this.clock.now(), width);
+        return projectOverviewLines(
+          d.resource,
+          this.clock.now(),
+          width,
+          d.crDescriptor,
+        );
       case 'yaml':
         return projectYamlReadLines(
           this.yamlForDetail(),
           d.resource.kind,
           false,
           width,
+          d.managedVisible,
         );
       case 'events':
         return projectEventsLines(
           d.events,
-          d.warningCount,
           d.showAllEvents,
           this.clock.now(),
           width,
@@ -940,8 +1056,11 @@ export class LiveController {
         ? this.charts
         : null;
     const session = charts === null ? this.sessionSeries(resource) : null;
-    const chartWidth =
-      width > 0 ? Math.min(width, MAX_CHART_WIDTH) : MAX_CHART_WIDTH;
+    // Charts render at the full measured pane width — mirrors MetricsTab's own
+    // `effectiveWidth`, which is the single source of truth this line-count
+    // projection must match so the scrollbar's total-lines math agrees with
+    // what's actually on screen (P9R-0006).
+    const chartWidth = width > 0 ? width : MAX_CHART_WIDTH;
     return {
       resourceKind: resource.kind,
       resourceName: resource.name,
@@ -1037,12 +1156,19 @@ export class LiveController {
   }
 
   private appWithIndicators(): AppState {
-    const active = this.pf
+    const live = this.pf
       .getState()
-      .forwards.filter((f) => f.status !== 'failed').length;
+      .forwards.filter((f) => f.status !== 'failed');
+    // Live-derived, not a set-once message (P9R-0010): disappears the moment
+    // the last forward stops, and lists every survivor when several are up.
+    const forwarding = live.map(
+      (f) =>
+        `⇄ Forwarding localhost:${String(f.localPort)} → ${f.podName}:${String(f.remotePort)}`,
+    );
     const hints = [
       `⌖ ${this.app.focus}`,
-      ...(active > 0 ? [`⇄ ${String(active)}`] : []),
+      ...(live.length > 0 ? [`⇄ ${String(live.length)}`] : []),
+      ...forwarding,
       ...this.app.hints,
     ];
     return { ...this.app, hints };
@@ -1050,8 +1176,12 @@ export class LiveController {
 
   private commandBarText(): string {
     if (this.execPrompt !== null) {
-      const shown = this.execPrompt.input.value;
-      return `exec ${this.execPrompt.resource.name} ▸ ${shown.length > 0 ? shown : DEFAULT_COMMAND} (↑ history)`;
+      return formatExecPromptLine(
+        this.execPrompt.resource.name,
+        this.execPrompt.input.value,
+        DEFAULT_COMMAND,
+        this.execPrompt.error,
+      );
     }
     if (this.portPrompt !== null) {
       return `⇄ ${this.portPrompt.podName} ports remote:local = ${this.portPrompt.text}`;
@@ -1160,6 +1290,10 @@ export class LiveController {
    */
   private async startStreamsWithCrds(): Promise<void> {
     let kafkaKinds = new Set<string>();
+    this.crdWatch?.close();
+    this.crdWatch = null;
+    this.knownCrds = new Map();
+    this.crdGroupIdsDefaulted = new Set();
     const crds = await this.client.discoverCrds();
     if (crds.ok) {
       this.client.registerCrds(crds.value);
@@ -1167,6 +1301,7 @@ export class LiveController {
       // table work without a separate watch.
       const now = this.clock.now();
       for (const crd of crds.value) {
+        this.knownCrds.set(`${crd.plural}.${crd.group}`, crd);
         this.store.applyEvent(this.app.context, {
           type: 'ADDED',
           apiVersion: 'apiextensions.k8s.io/v1',
@@ -1188,8 +1323,121 @@ export class LiveController {
       if (crds.value.some((crd) => crd.group === 'kafka.strimzi.io')) {
         kafkaKinds = new Set(['Kafka', 'KafkaTopic']);
       }
+      this.updateCrdGroups();
+      // Keep the Custom Resources sidebar groups live as CRDs are
+      // added/removed on the cluster (Spec 03 §7), independent of the
+      // per-kind watches StreamManager opens only for opened kinds.
+      this.crdWatch = this.client.watch(
+        'CustomResourceDefinition',
+        {},
+        (event) => {
+          this.onCrdWatchEvent(event);
+        },
+      );
     }
     this.openStreams(kafkaKinds);
+  }
+
+  /** Apply an ADDED/MODIFIED/DELETED event for a CustomResourceDefinition
+   * to the known-CRD map, then recompute the sidebar's established groups. */
+  private onCrdWatchEvent(event: ResourceEvent): void {
+    const key = event.name;
+    if (event.type === 'DELETED') {
+      this.knownCrds.delete(key);
+    } else {
+      const crd = crdFromObject(event.object);
+      if (crd === undefined) {
+        return;
+      }
+      this.knownCrds.set(key, crd);
+      this.client.registerCrds([...this.knownCrds.values()]);
+    }
+    this.updateCrdGroups();
+    this.bump();
+  }
+
+  /** Recompute `app.crdGroups` from `knownCrds`, defaulting any newly seen
+   * CR-group subgroup to collapsed without disturbing groups the user has
+   * already toggled. */
+  private updateCrdGroups(): void {
+    const groups = groupCrds([...this.knownCrds.values()]);
+    const collapsed = new Set(this.app.collapsedCategories);
+    for (const group of groups) {
+      const id = crGroupId(group.group);
+      if (!this.crdGroupIdsDefaulted.has(id)) {
+        collapsed.add(id);
+        this.crdGroupIdsDefaulted.add(id);
+      }
+    }
+    this.app = {
+      ...this.app,
+      crdGroups: groups,
+      collapsedCategories: collapsed,
+    };
+  }
+
+  /**
+   * Lazily fetch instance counts for one CR API group's kinds (Spec 03 §7):
+   * fired on subtree expand, and again on every re-expand so counts stay
+   * fresh without a standing watch on unopened kinds.
+   */
+  private async fetchCrGroupCounts(group: string): Promise<void> {
+    const g = this.app.crdGroups.find((x) => x.group === group);
+    if (g === undefined) {
+      return;
+    }
+    for (const entry of g.kinds) {
+      const label = `${entry.kind}s`;
+      const scoped = this.app.namespace !== '' && entry.namespaced;
+      const result = await this.client.list(
+        entry.kind,
+        scoped ? { limit: 1, namespace: this.app.namespace } : { limit: 1 },
+      );
+      if (result.ok) {
+        const count =
+          result.value.items.length + (result.value.remainingItemCount ?? 0);
+        const forbidden = new Set(this.app.forbiddenKinds);
+        forbidden.delete(label);
+        this.app = { ...this.app, forbiddenKinds: forbidden };
+        this.setBadge(label, count, true);
+      } else if (result.error.kind === 'forbidden') {
+        const forbidden = new Set(this.app.forbiddenKinds);
+        forbidden.add(label);
+        this.app = { ...this.app, forbiddenKinds: forbidden };
+        this.bump();
+      }
+    }
+  }
+
+  /**
+   * Fetch and cache the instance count for a single CR kind (ticket
+   * P9R-0018 story 4): fired when a CRD's own detail Overview opens, so
+   * `badgeCounts` has an entry for it even when its sidebar group was never
+   * expanded. Shares the same `limit: 1` + `remainingItemCount` counting
+   * approach as `fetchCrGroupCounts` and writes into the same `badgeCounts`
+   * map, so a later sidebar expand of the same kind's group just refreshes
+   * the value already shown here.
+   */
+  private async fetchCrdInstanceCount(crd: CrdDefinition): Promise<void> {
+    const label = crKindLabel(crd.kind);
+    const scoped = this.app.namespace !== '' && crd.namespaced;
+    const result = await this.client.list(
+      crd.kind,
+      scoped ? { limit: 1, namespace: this.app.namespace } : { limit: 1 },
+    );
+    if (result.ok) {
+      const count =
+        result.value.items.length + (result.value.remainingItemCount ?? 0);
+      const forbidden = new Set(this.app.forbiddenKinds);
+      forbidden.delete(label);
+      this.app = { ...this.app, forbiddenKinds: forbidden };
+      this.setBadge(label, count, true);
+    } else if (result.error.kind === 'forbidden') {
+      const forbidden = new Set(this.app.forbiddenKinds);
+      forbidden.add(label);
+      this.app = { ...this.app, forbiddenKinds: forbidden };
+      this.bump();
+    }
   }
 
   private openStreams(kafkaKinds: ReadonlySet<string>): void {
@@ -1205,8 +1453,54 @@ export class LiveController {
       (kind, count) => {
         this.setBadge(kindToLabel(kind), count, true);
       },
+      (kind, degraded) => {
+        this.onStreamDegraded(kind, degraded);
+      },
+      (kind, present) => {
+        this.onStreamRelist(kind, present);
+      },
     );
     this.streams.start(kafkaKinds);
+  }
+
+  /** Toggle the degraded-stream indicator for `kind` (P9R-0009 relist recovery). */
+  private onStreamDegraded(kind: string, degraded: boolean): void {
+    const label = kindToLabel(kind === 'WarningEvents' ? 'Event' : kind);
+    const dimmed = new Set(this.app.dimmedKinds);
+    if (degraded) {
+      dimmed.add(label);
+    } else {
+      dimmed.delete(label);
+    }
+    this.app = { ...this.app, dimmedKinds: dimmed };
+    this.bump();
+  }
+
+  /**
+   * Reconcile the store against a fresh relist after 410/expired recovery
+   * (P9R-0009): drop resources of `kind` absent from `present` — DELETED
+   * events missed while the watch was down — and prune the active table.
+   */
+  private onStreamRelist(kind: string, present: ReadonlySet<string>): void {
+    const removed = this.store.reconcileList(this.app.context, kind, present);
+    if (removed.length === 0) {
+      return;
+    }
+    const activeKind = this.activeEventKind() ?? null;
+    if (this.table !== null && kind === activeKind) {
+      const now = this.clock.now();
+      for (const resource of removed) {
+        if (this.matchesNamespaceFilter(resource.namespace, kind)) {
+          this.table = applyResourceEvent(
+            this.table,
+            { type: 'DELETED', resource },
+            now,
+          );
+        }
+      }
+      this.clampSelection();
+    }
+    this.bump();
   }
 
   private onResourceEvent(event: ResourceEvent): void {
@@ -1218,10 +1512,7 @@ export class LiveController {
 
     const kind = event.object.kind ?? event.kind;
     this.clearKindMarks(kindToLabel(kind));
-    const activeKind =
-      this.app.activeKind === 'Overview'
-        ? null
-        : labelToKind(this.app.activeKind);
+    const activeKind = this.activeEventKind() ?? null;
 
     if (this.table !== null && kind === activeKind) {
       if (this.matchesNamespaceFilter(event.namespace, kind)) {
@@ -1324,7 +1615,12 @@ export class LiveController {
       if (CORE_KINDS.has(kind)) {
         continue;
       }
-      const result = await this.client.list(kind, { limit: 1 });
+      const scoped =
+        this.app.namespace !== '' && !CLUSTER_SCOPED_KINDS.has(kind);
+      const result = await this.client.list(
+        kind,
+        scoped ? { limit: 1, namespace: this.app.namespace } : { limit: 1 },
+      );
       if (!result.ok) {
         log.debug(
           { kind, errorKind: result.error.kind, message: result.error.message },
@@ -1372,7 +1668,7 @@ export class LiveController {
       const forbidden = new Set(this.app.forbiddenKinds);
       forbidden.add(label);
       this.app = { ...this.app, forbiddenKinds: forbidden };
-      if (this.table !== null && labelToKind(this.app.activeKind) === kind) {
+      if (this.table !== null && this.activeEventKind() === kind) {
         this.table = { ...this.table, loadState: 'forbidden' };
       }
     } else {
@@ -1396,11 +1692,25 @@ export class LiveController {
     }
   }
 
+  /**
+   * Whether `kind` is cluster-scoped and therefore exempt from namespace
+   * filtering. Built-ins consult the static set; CR kinds consult their
+   * CRD's `spec.scope` (ticket P9R-0018 story 2: a cluster-scoped CR kind
+   * stays visible/listable under a namespace filter, like Nodes).
+   */
+  private isClusterScopedKind(kind: string): boolean {
+    if (CLUSTER_SCOPED_KINDS.has(kind)) {
+      return true;
+    }
+    const descriptor = descriptorsForGroups(this.app.crdGroups).get(kind);
+    return descriptor !== undefined && !descriptor.namespaced;
+  }
+
   private matchesNamespaceFilter(
     namespace: string | null,
     kind: string,
   ): boolean {
-    if (this.app.namespace === '' || CLUSTER_SCOPED_KINDS.has(kind)) {
+    if (this.app.namespace === '' || this.isClusterScopedKind(kind)) {
       return true;
     }
     return namespace === this.app.namespace;
@@ -1503,14 +1813,22 @@ export class LiveController {
   }
 
   private refreshMetricsColumns(): void {
-    if (this.app.activeKind !== 'Overview') {
-      this.columns = this.columnsForKind(
-        labelToKind(this.app.activeKind) ?? '',
-      );
+    // Sparkline columns only ever apply to the built-in Pod/Node kinds
+    // (columnsForKind's metrics branch); CR kinds never resolve here, so
+    // skip rather than clobber their printer-column layout with GENERIC_COLS.
+    const kind = labelToKind(this.app.activeKind);
+    if (this.app.activeKind !== 'Overview' && kind !== undefined) {
+      this.columns = this.columnsForKind(kind);
     }
   }
 
-  /** Find a Prometheus service to tunnel to (standard names, then labels). */
+  /**
+   * Find a Prometheus service to tunnel to, via the pure discovery cascade
+   * (Spec 06 §2.2 / P9R-0008): known operator/helm labels, then a
+   * recognized name (prometheus/prometheus-server/prometheus-operated),
+   * then any Service exposing port 9090 (or a named http/web/http-web port
+   * on a prometheus-named Service), ties broken by namespace order.
+   */
   private async findPrometheusService(): Promise<{
     name: string;
     namespace: string;
@@ -1520,37 +1838,7 @@ export class LiveController {
     if (!services.ok) {
       return null;
     }
-    const standardNames = new Set([
-      'prometheus-operated',
-      'prometheus',
-      'prometheus-server',
-    ]);
-    interface SvcRaw {
-      metadata?: {
-        name?: string;
-        namespace?: string;
-        labels?: Record<string, string>;
-      };
-      spec?: { ports?: { port?: number }[] };
-    }
-    const items = services.value.items as SvcRaw[];
-    const byName = items.find((svc) =>
-      standardNames.has(svc.metadata?.name ?? ''),
-    );
-    const byLabel = items.find(
-      (svc) =>
-        svc.metadata?.labels?.app === 'prometheus' ||
-        svc.metadata?.labels?.['app.kubernetes.io/name'] === 'prometheus',
-    );
-    const found = byName ?? byLabel;
-    if (found?.metadata?.name === undefined) {
-      return null;
-    }
-    return {
-      name: found.metadata.name,
-      namespace: found.metadata.namespace ?? 'default',
-      port: found.spec?.ports?.[0]?.port ?? 9090,
-    };
+    return selectServiceCandidate(services.value.items);
   }
 
   private awaitTunnel(
@@ -1734,7 +2022,13 @@ export class LiveController {
   }
 
   /** Columns for a kind, with CPU/Memory sparklines when metrics flow. */
-  private columnsForKind(kind: string): ColumnDef[] {
+  private columnsForKind(
+    kind: string,
+    crDescriptor?: CrKindDescriptor,
+  ): ColumnDef[] {
+    if (crDescriptor !== undefined) {
+      return getCrColumns(crDescriptor.namespaced, crDescriptor.printerColumns);
+    }
     const base = getColumns(kind);
     if (
       this.metricsTier === 'none' ||
@@ -1893,8 +2187,10 @@ export class LiveController {
       warnings: pods.filter((p) => p.status.color === 'yellow').length,
       errors: pods.filter((p) => p.status.color === 'red').length,
       pending: pods.filter((p) => p.status.color === 'grey').length,
-      nodesReady: nodes.filter((n) => n.status.color === 'green').length,
+      nodesReady: nodes.filter((n) => isNodeReady(n.raw)).length,
       nodesTotal: nodes.length,
+      nodesUnderPressure: nodes.filter((n) => isNodeUnderPressure(n.raw))
+        .length,
       namespaceCount: namespaces.length,
     };
     this.kafkaDetected = detectKafka(this.store, ctx);
@@ -1903,6 +2199,7 @@ export class LiveController {
       strimziPresent: this.kafkaDetected.deploymentType === 'strimzi',
       kafkaExporter: this.metricsCaps.kafkaExporter,
       strimziJmx: this.metricsCaps.strimziJmx,
+      prometheusConnected: this.metricsTier === 'prometheus',
     };
     const rules = evaluateAllRules(this.store, ctx, caps);
     this.health = { ...this.health, summary, rules };
@@ -1954,14 +2251,27 @@ export class LiveController {
   // -------------------------------------------------------------------------
 
   private seedTable(kindLabel: string): void {
-    const kind = labelToKind(kindLabel);
+    let kind = labelToKind(kindLabel);
+    let crDescriptor: CrKindDescriptor | undefined;
     if (kind === undefined) {
-      this.table = null;
-      this.columns = [];
-      return;
+      // Not a built-in — resolve via the CRD-discovery seam (Spec 03 §7,
+      // ticket P9R-0018 story 2) before giving up on the placeholder.
+      crDescriptor = descriptorsByLabel(this.app.crdGroups).get(kindLabel);
+      if (crDescriptor === undefined) {
+        this.table = null;
+        this.columns = [];
+        return;
+      }
+      kind = crDescriptor.kind;
     }
-    this.columns = this.columnsForKind(kind);
+    this.columns = this.columnsForKind(kind, crDescriptor);
     let model = createTableModel(kind);
+    if (crDescriptor !== undefined) {
+      model = {
+        ...model,
+        forbiddenMessage: `forbidden — check RBAC for ${crDescriptor.group}/${crDescriptor.kind}`,
+      };
+    }
     model = applySearch(model, this.app.search);
     const now = this.clock.now();
     const resources = this.store
@@ -2049,6 +2359,23 @@ export class LiveController {
     this.bump();
   }
 
+  /**
+   * The Kubernetes kind backing the currently active sidebar selection, for
+   * matching incoming store/stream events — built-in kinds via
+   * `labelToKind`, dynamic CR kinds via the CRD-descriptor fallback
+   * (P9R-0018 live-update fix; see `resolveActiveEventKind`).
+   */
+  private activeEventKind(): string | undefined {
+    if (this.app.activeKind === 'Overview') {
+      return undefined;
+    }
+    return resolveActiveEventKind(
+      this.app.activeKind,
+      this.app.crdGroups,
+      labelToKind(this.app.activeKind),
+    );
+  }
+
   private storeHasKind(kind: string): boolean {
     // Core kinds are watched from startup — treat as ready once streams run.
     return (
@@ -2099,22 +2426,38 @@ export class LiveController {
 
   toggleCategory = (cat: string): void => {
     const collapsed = new Set(this.app.collapsedCategories);
-    if (collapsed.has(cat)) {
+    const wasCollapsed = collapsed.has(cat);
+    if (wasCollapsed) {
       collapsed.delete(cat);
     } else {
       collapsed.add(cat);
     }
     this.app = { ...this.app, collapsedCategories: collapsed };
     this.saveLayout();
+    if (wasCollapsed && cat.startsWith(CR_GROUP_ID_PREFIX)) {
+      // Counts are fetched lazily per group on expand, and refreshed on
+      // every re-expand (Spec 03 §7) — never eagerly for all groups.
+      void this.fetchCrGroupCounts(cat.slice(CR_GROUP_ID_PREFIX.length));
+    }
     this.bump();
   };
 
   setNamespace = (namespace: string): void => {
     this.app = { ...this.app, namespace };
+    // Reset the dashboard drill-down (P9R-0017): a namespace switch changes
+    // which resources the rules match, so expansion/cursor start fresh.
+    this.health = {
+      ...this.health,
+      expandedRuleIds: new Set(),
+      showAllRuleIds: new Set(),
+      cursor: -1,
+      scrollOffset: 0,
+    };
     if (this.app.activeKind !== 'Overview') {
       this.seedTable(this.app.activeKind);
     }
     this.refreshCoreBadges();
+    void this.badgeSweep();
     // Remember this context's namespace so it is restored next launch (C2).
     this.persistContextMemory(this.app.context);
     this.bump();
@@ -2145,6 +2488,9 @@ export class LiveController {
       if (tab === 'metrics') {
         void this.fetchCharts();
       }
+      if (tab === 'yaml') {
+        this.fetchFullYamlForDetail(this.detail.resource);
+      }
       // Spec 03: the new tab starts at its top (Logs starts at its bottom,
       // owned by `this.logs`).
       this.resetDetailOffset();
@@ -2156,6 +2502,8 @@ export class LiveController {
     this.detail = null;
     this.agentPaneOpen = false;
     this.charts = null;
+    this.fullYamlCache = null;
+    this.fullYamlFetchUid = null;
     this.stopLogs();
     this.app = { ...this.app, showDetail: false, focus: 'list' };
     this.bump();
@@ -2169,16 +2517,89 @@ export class LiveController {
     }
   };
 
+  /**
+   * Toggle `metadata.managedFields` visibility in the YAML read view (`m`,
+   * P9R-0016). Session-scoped: lives on `DetailState` (reset on every
+   * `openDetail`) rather than in `YamlTab`, so it stays in sync with the
+   * scroll-viewport line count computed by `detailLines()`.
+   */
+  toggleManagedFieldsVisible = (): void => {
+    if (this.detail !== null) {
+      this.detail = {
+        ...this.detail,
+        managedVisible: !this.detail.managedVisible,
+      };
+      this.bump();
+    }
+  };
+
+  /** Ctrl+S on an unmodified buffer: a transient notice, no Review dialog (P9R-0016). */
+  showYamlNoChangesToast = (): void => {
+    this.showToast('No changes');
+  };
+
   // -------------------------------------------------------------------------
   // YAML editor cluster boundary (B07). The YamlTab component owns the editor
   // state and the pure apply/conflict reducer; these callbacks perform the only
   // side effects the reducer asks for. The component never touches kubeClient.
   // -------------------------------------------------------------------------
 
-  /** The resource currently shown in the YAML tab, serialized to YAML. */
+  /**
+   * The resource currently shown in the YAML tab, serialized to YAML.
+   * Prefers the full-object fetch cached by {@link fetchFullYamlForDetail}
+   * (has `managedFields`) over the store's stripped `raw`, falling back to
+   * the latter while the fetch is in flight, hasn't started, or failed.
+   */
   yamlForDetail(): string {
     const raw = this.detail?.resource.raw ?? {};
-    return jsYaml.dump(raw, { lineWidth: -1, indent: 2 });
+    const fallback = jsYaml.dump(canonicalKeyOrder(raw), {
+      lineWidth: -1,
+      indent: 2,
+    });
+    return resolveDetailYaml(
+      this.fullYamlCache,
+      this.detail?.uid ?? '',
+      fallback,
+    );
+  }
+
+  /**
+   * Kick off (at most one concurrent) full-object fetch for the resource
+   * shown in the YAML tab, so `yamlForDetail` can serve the unstripped
+   * object (managedFields intact) instead of the store's stripped `raw`.
+   * No-op if a fetch for this uid is already in flight or already cached.
+   */
+  private fetchFullYamlForDetail(resource: ResourceObject): void {
+    if (
+      !shouldFetchFullYaml(
+        this.fullYamlCache,
+        this.fullYamlFetchUid,
+        resource.uid,
+      )
+    ) {
+      return;
+    }
+    this.fullYamlFetchUid = resource.uid;
+    void this.client
+      .get(resource.kind, resource.name, resource.namespace)
+      .then((result) => {
+        if (this.fullYamlFetchUid === resource.uid) {
+          this.fullYamlFetchUid = null;
+        }
+        if (!result.ok) {
+          return;
+        }
+        this.fullYamlCache = {
+          uid: resource.uid,
+          yaml: jsYaml.dump(canonicalKeyOrder(result.value), {
+            lineWidth: -1,
+            indent: 2,
+          }),
+        };
+        if (this.detail?.uid === resource.uid) {
+          this.bump();
+        }
+      });
   }
 
   /** A header label for the diff (`Kind/namespace/name`). */
@@ -2231,10 +2652,14 @@ export class LiveController {
     if (!result.ok) {
       return { ok: false, message: result.error.message };
     }
-    return {
-      ok: true,
-      yaml: jsYaml.dump(result.value, { lineWidth: -1, indent: 2 }),
-    };
+    const yaml = jsYaml.dump(canonicalKeyOrder(result.value), {
+      lineWidth: -1,
+      indent: 2,
+    });
+    // Keep the managedFields cache in step with the freshly reloaded object
+    // (P9R-0016 story 1b) — same round trip, no reason to let the two drift.
+    this.fullYamlCache = { uid: r.uid, yaml };
+    return { ok: true, yaml };
   };
 
   /**
@@ -2317,8 +2742,182 @@ export class LiveController {
 
   toggleShowPassing = (): void => {
     this.health = { ...this.health, showPassing: !this.health.showPassing };
+    this.reconcileDashboardCursor();
     this.bump();
   };
+
+  // -------------------------------------------------------------------------
+  // Overview dashboard rule drill-down (P9R-0017)
+  // -------------------------------------------------------------------------
+
+  /** The flattened best-practices row model for the current health state. */
+  private dashboardItems(): DashboardItem[] {
+    return buildDashboardItems({
+      rules: this.health.rules,
+      expandedRuleIds: this.health.expandedRuleIds,
+      showAllRuleIds: this.health.showAllRuleIds,
+      showPassing: this.health.showPassing,
+    });
+  }
+
+  /** Rows the best-practices list shows before scrolling (chrome reserved). */
+  dashboardViewport(): number {
+    return Math.max(1, this.visibleHeight() - DASHBOARD_CHROME_ROWS);
+  }
+
+  /** Expand/collapse a rule's offender list (P9R-0017). */
+  toggleRule = (ruleId: string): void => {
+    const expanded = new Set(this.health.expandedRuleIds);
+    const showAll = new Set(this.health.showAllRuleIds);
+    if (expanded.has(ruleId)) {
+      expanded.delete(ruleId);
+      showAll.delete(ruleId);
+    } else {
+      expanded.add(ruleId);
+    }
+    this.health = {
+      ...this.health,
+      expandedRuleIds: expanded,
+      showAllRuleIds: showAll,
+    };
+    this.reconcileDashboardCursor();
+    this.bump();
+  };
+
+  /** Reveal the remaining offenders past the cap-at-10 fold (P9R-0017). */
+  showAllOffenders = (ruleId: string): void => {
+    const showAll = new Set(this.health.showAllRuleIds);
+    showAll.add(ruleId);
+    this.health = { ...this.health, showAllRuleIds: showAll };
+    this.reconcileDashboardCursor();
+    this.bump();
+  };
+
+  /**
+   * Navigate from an offender to the resource: select its kind's list and open
+   * its detail pane. When the resource no longer exists (fixed/deleted since
+   * evaluation), show a transient notice and stay on the dashboard.
+   */
+  navigateToOffender = (offender: AffectedResource): void => {
+    const resource = resolveAffected(
+      this.store.list(this.app.context, offender.kind),
+      offender,
+    );
+    if (resource === undefined) {
+      this.showToast('no longer present');
+      this.bump();
+      return;
+    }
+    this.selectKind(kindToLabel(offender.kind));
+    if (this.table !== null) {
+      const rows = getSortedFilteredRows(this.table);
+      const idx = rows.findIndex((r) => r.resource.uid === resource.uid);
+      if (idx >= 0) {
+        this.selectedIndex = idx;
+      }
+    }
+    this.openDetail(resource, 'overview');
+  };
+
+  /**
+   * Navigate from a CRD's own detail Overview to its kind's instance list
+   * (ticket P9R-0018 story 4, Enter or click on the "→ view instances"
+   * link): resolves group/kind from the raw CRD object and selects that
+   * kind's sidebar leaf, the same call the sidebar itself makes on
+   * Enter/click. A no-op when the detail pane isn't showing a CRD (e.g. the
+   * click/Enter arrives after the pane already closed).
+   */
+  navigateToCrInstances = (): void => {
+    if (this.detail?.resource.kind !== 'CustomResourceDefinition') {
+      return;
+    }
+    const crd = crdFromObject(this.detail.resource.raw);
+    if (crd === undefined) {
+      return;
+    }
+    this.selectKind(crKindLabel(crd.kind));
+    this.setFocus('list');
+  };
+
+  /** Keep the dashboard cursor on a valid navigable row and keep it visible. */
+  private reconcileDashboardCursor(): void {
+    const items = this.dashboardItems();
+    const cursor = clampCursor(items, this.health.cursor);
+    const scrollOffset = ensureVisible(
+      cursor,
+      this.health.scrollOffset,
+      this.dashboardViewport(),
+    );
+    this.health = { ...this.health, cursor, scrollOffset };
+  }
+
+  /** Keyboard routing for the focused Overview dashboard (P9R-0017). */
+  private handleDashboardInput(input: string, key: InkKey): void {
+    const items = this.dashboardItems();
+    if (navigableIndices(items).length === 0) {
+      return;
+    }
+    let cursor = this.health.cursor;
+    if (key.downArrow || input === 'j') {
+      cursor = moveCursor(items, cursor, 1);
+      this.setDashboardCursor(cursor);
+      return;
+    }
+    if (key.upArrow || input === 'k') {
+      cursor = moveCursor(items, cursor, -1);
+      this.setDashboardCursor(cursor);
+      return;
+    }
+    const item = items[cursor];
+    if (item === undefined) {
+      // No active cursor yet — the first navigation key seeds it above.
+      return;
+    }
+    if (key.rightArrow) {
+      if (item.type === 'rule' && item.navigable && !item.expanded) {
+        this.toggleRule(item.ruleId);
+      }
+      return;
+    }
+    if (key.leftArrow) {
+      if (item.type === 'rule' && item.navigable && item.expanded) {
+        this.toggleRule(item.ruleId);
+      }
+      return;
+    }
+    if (key.return) {
+      this.activateDashboardItem(item);
+    }
+  }
+
+  private setDashboardCursor(cursor: number): void {
+    const scrollOffset = ensureVisible(
+      cursor,
+      this.health.scrollOffset,
+      this.dashboardViewport(),
+    );
+    this.health = { ...this.health, cursor, scrollOffset };
+    this.bump();
+  }
+
+  private activateDashboardItem(item: DashboardItem): void {
+    switch (item.type) {
+      case 'rule':
+        this.toggleRule(item.ruleId);
+        return;
+      case 'offender':
+        this.navigateToOffender(item.offender);
+        return;
+      case 'more':
+        this.showAllOffenders(item.ruleId);
+        return;
+      case 'passingToggle':
+        this.toggleShowPassing();
+        return;
+      case 'passingRule':
+        return;
+    }
+  }
 
   confirmCancel = (): void => {
     this.confirm = null;
@@ -2408,6 +3007,7 @@ export class LiveController {
       return;
     }
     this.streams?.stop();
+    this.crdWatch?.close();
     this.switchStatus = beginSwitch(target);
     this.app = {
       ...this.app,
@@ -2492,6 +3092,11 @@ export class LiveController {
         labels.push(leaf.label);
       }
     }
+    for (const group of this.app.crdGroups) {
+      for (const entry of group.kinds) {
+        labels.push(`${entry.kind}s`);
+      }
+    }
     if (this.kafkaDetected.deploymentType !== 'none') {
       labels.push('Kafka', 'KafkaTopic');
     }
@@ -2503,6 +3108,7 @@ export class LiveController {
     this.persistContextMemory(this.app.context);
 
     this.streams?.stop();
+    this.crdWatch?.close();
     this.kc.setCurrentContext(ctx);
     this.client = new KubeClientAdapter(this.kc);
     this.store = new StateStore((event) => normalize(event.object));
@@ -2540,7 +3146,7 @@ export class LiveController {
     this.detail = null;
     this.stopLogs();
     this.table = null;
-    this.health = { summary: emptySummary(), rules: [], showPassing: false };
+    this.health = emptyHealth();
     if (restored.activeKind === 'Overview') {
       this.columns = [];
     } else {
@@ -2590,19 +3196,30 @@ export class LiveController {
   // Detail pane
   // -------------------------------------------------------------------------
 
-  private openDetail(resource: ResourceObject, tab: TabId): void {
+  private openDetail(
+    resource: ResourceObject,
+    tab: TabId,
+    options?: { editYaml?: boolean },
+  ): void {
     // Re-open on the kind's last-used tab when entering via plain Enter.
     const remembered =
       tab === 'overview' ? this.tabByKind.get(resource.kind) : undefined;
     const effectiveTab = remembered ?? tab;
+    const editYaml = tab === 'yaml' && options?.editYaml === true;
+    const crDescriptor = descriptorsForGroups(this.app.crdGroups).get(
+      resource.kind,
+    );
     this.detail = {
       uid: resource.uid,
       resource,
+      ...(crDescriptor !== undefined ? { crDescriptor } : {}),
       tab: effectiveTab,
       events: [],
       warningCount: 0,
+      totalEventCount: 0,
       showAllEvents: false,
-      yamlMode: 'read',
+      yamlMode: editYaml ? 'edit' : 'read',
+      managedVisible: false,
     };
     if (tab === 'logs' && resource.kind === 'Pod') {
       this.initLogs(resource);
@@ -2612,10 +3229,36 @@ export class LiveController {
     if (tab === 'metrics') {
       void this.fetchCharts();
     }
+    if (resource.kind === 'CustomResourceDefinition') {
+      // Instance count for this CRD's own Overview (ticket P9R-0018 story
+      // 4): the sidebar's lazy per-group fetch (fetchCrGroupCounts) only
+      // runs on subtree expand, so a CRD opened without ever expanding its
+      // group's sidebar entry needs its own on-demand fetch.
+      const crd = crdFromObject(resource.raw);
+      if (crd !== undefined) {
+        void this.fetchCrdInstanceCount(crd);
+      }
+    }
     this.charts = null;
     // Spec 03: a freshly-opened resource starts at its tab's top.
     this.resetDetailOffset();
-    this.app = { ...this.app, showDetail: true, focus: 'detail' };
+    this.app = {
+      ...this.app,
+      showDetail: true,
+      focus: 'detail',
+      mode: editYaml ? 'edit' : this.app.mode,
+    };
+    if (editYaml) {
+      // P9R-0016: list-level `e` opens the detail directly in YAML edit
+      // mode, matching the keymap text "Open the YAML editor" (a second `e`
+      // was previously required). Reuse the `$EDITOR` reentry seam — YamlTab
+      // already boots straight into edit mode and reports it back via
+      // `onModeChange` when `reentryContent` is set.
+      this.yamlEditReentry = this.yamlForDetail();
+    }
+    if (effectiveTab === 'yaml') {
+      this.fetchFullYamlForDetail(resource);
+    }
     void this.fetchDetailEvents();
     this.bump();
   }
@@ -2633,18 +3276,24 @@ export class LiveController {
       showAll: showAllEvents,
       nowMs: this.clock.now(),
     });
-    this.applyDetailEvents(resource.uid, result.events, result.warningCount);
+    this.applyDetailEvents(
+      resource.uid,
+      result.events,
+      result.warningCount,
+      result.totalCount,
+    );
   }
 
   private applyDetailEvents(
     uid: string,
     events: EventRow[],
     warningCount: number,
+    totalEventCount: number,
   ): void {
     if (this.detail?.uid !== uid) {
       return;
     }
-    this.detail = { ...this.detail, events, warningCount };
+    this.detail = { ...this.detail, events, warningCount, totalEventCount };
     this.bump();
   }
 
@@ -2667,7 +3316,7 @@ export class LiveController {
           .delete(resource.kind, resource.name, resource.namespace)
           .then((result) => {
             if (!result.ok) {
-              this.setHints([`✗ Delete failed: ${result.error.message}`]);
+              this.showToast(`✗ Delete failed: ${result.error.message}`);
             }
           });
       },
@@ -2686,7 +3335,7 @@ export class LiveController {
         const b64 = Buffer.from(resource.name).toString('base64');
         process.stdout.write(`\x1b]52;c;${b64}\x07`);
       }
-      this.setHints([`✓ Copied ${resource.name}`]);
+      this.showToast(`✓ Copied ${resource.name}`);
     } catch {
       // Clipboard unavailable — non-fatal.
     }
@@ -2695,6 +3344,67 @@ export class LiveController {
   private setHints(hints: string[]): void {
     this.app = { ...this.app, hints };
     this.bump();
+  }
+
+  /**
+   * Show a transient status-bar toast (✓ Copied…, ✗ Invalid ports…). Unlike
+   * {@link setHints}, this starts a TTL that reverts to {@link DEFAULT_HINTS}
+   * (P9R-0010) — either after {@link TOAST_TTL_MS} or on the next
+   * state-changing interaction via {@link clearToast}.
+   */
+  private showToast(message: string): void {
+    this.toastTimer?.();
+    this.setHints([message]);
+    this.toastTimer = this.clock.setTimeout(() => {
+      this.toastTimer = null;
+      this.setHints([...DEFAULT_HINTS]);
+    }, TOAST_TTL_MS);
+  }
+
+  /** Clear a pending toast (if any) back to the default hint line. */
+  private clearToast(): void {
+    if (this.toastTimer === null) {
+      return;
+    }
+    this.toastTimer();
+    this.toastTimer = null;
+    this.setHints([...DEFAULT_HINTS]);
+  }
+
+  /**
+   * Show a transient confirmation in the Logs tab footer (✓ Saved to…). Same
+   * TTL/clear-on-interaction contract as {@link showToast} (P9R-0010).
+   */
+  private showLogsConfirmation(message: string): void {
+    this.logsConfirmTimer?.();
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.confirmation = message;
+    this.logsConfirmTimer = this.clock.setTimeout(() => {
+      this.logsConfirmTimer = null;
+      const l2 = this.logs;
+      if (l2 !== null) {
+        l2.confirmation = undefined;
+        this.bump();
+      }
+    }, TOAST_TTL_MS);
+    this.bump();
+  }
+
+  /** Clear a pending Logs confirmation (if any). */
+  private clearLogsConfirmation(): void {
+    if (this.logsConfirmTimer === null) {
+      return;
+    }
+    this.logsConfirmTimer();
+    this.logsConfirmTimer = null;
+    const l = this.logs;
+    if (l?.confirmation !== undefined) {
+      l.confirmation = undefined;
+      this.bump();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -2739,7 +3449,7 @@ export class LiveController {
         this.applyAgentAction(bang.action);
         break;
       case 'unknown':
-        this.setHints([`✗ Unknown command: ${bang.raw}`]);
+        this.showToast(`✗ Unknown command: ${bang.raw}`);
         break;
     }
     this.bump();
@@ -2991,7 +3701,7 @@ export class LiveController {
           }
         : exchange,
     );
-    this.setHints(['Space agent', '/ search', '? help', 'q quit']);
+    this.setHints([...DEFAULT_HINTS]);
     if (action === null || action.action === 'answer') {
       this.openAgentTab();
     }
@@ -3093,7 +3803,7 @@ export class LiveController {
     this.stopLogs();
     const picker = buildContainerPicker(resource.raw);
     if (picker.options.length === 0) {
-      this.setHints(['✗ No containers found']);
+      this.showToast('✗ No containers found');
       return;
     }
     const hasDefault = picker.defaultIndex >= 0;
@@ -3143,6 +3853,12 @@ export class LiveController {
     // A restarted stream tails the newest lines again.
     l.live = true;
     l.offset = 0;
+    // Search state resets on container switch (and any other stream restart,
+    // since the ring buffer it searched is gone) but survives wrap/timestamps
+    // toggles, which never call this.
+    l.searchQuery = '';
+    l.searchCurrent = 0;
+    l.searchFocused = false;
     const adapter = new LogStreamAdapter(this.kc);
     const params = streamParamsFor(l.limit);
     l.stop = adapter.tail(
@@ -3215,31 +3931,47 @@ export class LiveController {
       return false;
     }
 
-    if (l.searchFocused) {
-      if (key.escape) {
+    // Exclusive-capture routing for the inline search bar (P9R-0004): while
+    // focused every keystroke is decided by the pure router below, which
+    // never returns `pass-through` — this is what stops typed characters
+    // (e.g. the `P` in "PASS") from being reinterpreted as Logs hotkeys.
+    const searchRoute = routeLogsSearchKey(input, key, {
+      focused: l.searchFocused,
+      query: l.searchQuery,
+    });
+    switch (searchRoute.kind) {
+      case 'close':
         l.searchQuery = '';
+        l.searchCurrent = 0;
         l.searchFocused = false;
         this.bump();
         return true;
-      }
-      if (key.return) {
-        l.searchFocused = false;
-        this.bump();
+      case 'commit':
+        this.commitLogsSearch();
         return true;
-      }
-      if (key.backspace || key.delete) {
-        l.searchQuery = l.searchQuery.slice(0, -1);
+      case 'append':
+        l.searchQuery = searchRoute.query;
         l.searchCurrent = 0;
         this.bump();
         return true;
-      }
-      if (input.length >= 1 && !key.ctrl && !key.meta) {
-        l.searchQuery += input;
+      case 'backspace':
+        l.searchQuery = searchRoute.query;
         l.searchCurrent = 0;
         this.bump();
         return true;
-      }
-      return true;
+      case 'ignored':
+        return true;
+      case 'clear-active':
+        l.searchQuery = '';
+        l.searchCurrent = 0;
+        this.bump();
+        return true;
+      case 'open':
+        l.searchFocused = true;
+        this.bump();
+        return true;
+      case 'pass-through':
+        break;
     }
 
     // An open inline dropdown (B06) captures navigation keys before scrolling:
@@ -3257,11 +3989,6 @@ export class LiveController {
       return true;
     }
 
-    if (input === '/') {
-      l.searchFocused = true;
-      this.bump();
-      return true;
-    }
     if (input === 'n' && l.searchQuery !== '') {
       this.jumpLogsSearch('next');
       return true;
@@ -3608,6 +4335,18 @@ export class LiveController {
     if (view === null) {
       return;
     }
+    // A wrap happens stepping past either end of the match list; flag it with
+    // a transient confirmation (cleared on the next keypress like any other).
+    const wrapped =
+      view.search.matches.length > 1 &&
+      ((dir === 'next' &&
+        view.search.current === view.search.matches.length - 1) ||
+        (dir === 'prev' && view.search.current === 0));
+    if (wrapped) {
+      this.showLogsConfirmation(
+        dir === 'next' ? '↻ wrapped to first match' : '↻ wrapped to last match',
+      );
+    }
     const stepped =
       dir === 'next' ? nextMatch(view.search) : prevMatch(view.search);
     l.searchCurrent = stepped.current;
@@ -3631,6 +4370,59 @@ export class LiveController {
     this.applyLogsOffset({ offset: next });
   }
 
+  /**
+   * Commit the in-progress search (Enter): drop focus but keep the query
+   * active for highlighting and `n`/`N`, jump to the match nearest the
+   * current viewport, and pause live tail while the search stays active
+   * (Spec: "live tail pauses while a search is active").
+   */
+  private commitLogsSearch(): void {
+    const l = this.logs;
+    if (l === null) {
+      return;
+    }
+    l.searchFocused = false;
+    if (l.searchQuery === '') {
+      this.bump();
+      return;
+    }
+    const display = projectLogsView({
+      raw: l.ring.toArray(),
+      offset: l.offset,
+      viewportHeight: this.logsViewportHeight(),
+      timestamps: l.timestamps,
+      live: false,
+    }).display;
+    const matches = runSearch(display, l.searchQuery).matches;
+    if (matches.length === 0) {
+      l.searchCurrent = 0;
+      this.bump();
+      return;
+    }
+    // "jumps to the nearest match" — nearest to the currently visible offset,
+    // not necessarily the first match in the buffer.
+    let nearestIdx = 0;
+    let bestDistance = Infinity;
+    matches.forEach((line, idx) => {
+      const distance = Math.abs(line - l.offset);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        nearestIdx = idx;
+      }
+    });
+    l.searchCurrent = nearestIdx;
+    const matchLine = matches[nearestIdx] ?? -1;
+    const next = offsetForMatch(
+      l.offset,
+      matchLine,
+      display.length,
+      this.logsViewportHeight(),
+    );
+    l.offset = clampOffset(next, display.length, this.logsViewportHeight());
+    l.live = false;
+    this.bump();
+  }
+
   private async downloadCurrentLogs(): Promise<void> {
     const l = this.logs;
     if (l === null) {
@@ -3644,14 +4436,14 @@ export class LiveController {
       l.ring.toArray(),
       this.clock.now(),
     );
-    const l2 = this.logs;
-    if (l2 === null) {
+    if (this.logs === null) {
       return;
     }
-    l2.confirmation = result.ok
-      ? `✓ Saved to ${result.value.displayPath}`
-      : `✗ ${result.error.kind}`;
-    this.bump();
+    this.showLogsConfirmation(
+      result.ok
+        ? `✓ Saved to ${result.value.displayPath}`
+        : `✗ ${result.error.kind}`,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -3667,12 +4459,15 @@ export class LiveController {
   private async openExecPrompt(
     resource: ResourceObject,
     container: string,
+    prefill = '',
+    error: string | null = null,
   ): Promise<void> {
     const history = await loadHistory(this.fileSink);
     this.execPrompt = {
       resource,
       container,
-      input: new CommandInput(history, ''),
+      input: new CommandInput(history, prefill),
+      error,
     };
     this.app = { ...this.app, focus: 'commandbar', mode: 'command' };
     this.bump();
@@ -3719,40 +4514,83 @@ export class LiveController {
     }
   }
 
+  /**
+   * Run `kubectl exec` via the suspend-and-handover runner (Spec 05 §4.3,
+   * P9R-0005). The default shell is retried once with {@link FALLBACK_SHELL}
+   * before any failure is reported. Local kubectl stderr (its own
+   * diagnostics — RBAC denial, pod gone, missing binary — never the remote
+   * shell's own output, which is multiplexed onto stdout by the pty) is
+   * captured rather than inherited so it can be journaled and surfaced in
+   * the UI instead of leaking to the real terminal.
+   */
   private execInto(
     resource: ResourceObject,
     container: string,
     command: string = DEFAULT_COMMAND,
+    isFallbackRetry = false,
   ): void {
     const namespace = resource.namespace ?? 'default';
     const podName = resource.name;
+    const isDefaultShell =
+      command === DEFAULT_COMMAND || command === FALLBACK_SHELL;
     this.suspendRunner(
       () =>
         new Promise<void>((resolve) => {
-          const child = spawn(
-            'kubectl',
-            [
-              'exec',
-              '-it',
-              '-n',
-              namespace,
-              podName,
-              '-c',
-              container,
-              '--',
-              'sh',
-              '-c',
-              command === DEFAULT_COMMAND
-                ? 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'
-                : command,
-            ],
-            { stdio: 'inherit' },
+          const args = buildKubectlExecArgs(
+            namespace,
+            podName,
+            container,
+            command,
+            isDefaultShell,
           );
-          child.on('exit', () => {
-            resolve();
+          let stderr = '';
+          const child = spawn('kubectl', args, {
+            stdio: ['inherit', 'inherit', 'pipe'],
           });
-          child.on('error', () => {
+          child.stderr.on('data', (chunk: Buffer) => {
+            stderr += chunk.toString();
+          });
+          const finish = (spawnError?: unknown): void => {
             resolve();
+            const errText =
+              spawnError instanceof Error ? spawnError.message : stderr.trim();
+            if (errText.length === 0) {
+              // Clean exit (or a nonzero exit from the remote shell itself,
+              // e.g. `exit 1`) — nothing kubectl-level went wrong.
+              return;
+            }
+            if (
+              command === DEFAULT_COMMAND &&
+              !isFallbackRetry &&
+              isCommandNotFoundError(errText)
+            ) {
+              log.warn(
+                { namespace, podName, container, stderr: errText },
+                'exec: default shell not found, retrying with fallback',
+              );
+              this.execInto(resource, container, FALLBACK_SHELL, true);
+              return;
+            }
+            const message = describeExecFailure(errText);
+            log.warn(
+              { namespace, podName, container, command, stderr: errText },
+              'exec failed',
+            );
+            // Fold the failure into the reopened prompt's own render
+            // (P9R-0005 follow-up) instead of a toast — the reopened
+            // prompt occludes the toast's line before the user can read it.
+            void this.openExecPrompt(
+              resource,
+              container,
+              command === DEFAULT_COMMAND ? '' : command,
+              message,
+            );
+          };
+          child.on('exit', () => {
+            finish();
+          });
+          child.on('error', (err) => {
+            finish(err);
           });
         }),
     );
@@ -3805,11 +4643,10 @@ export class LiveController {
           remotePort: remote,
           localPort: local,
         });
-        this.setHints([
-          `⇄ Forwarding localhost:${String(local)} → ${prompt.podName}:${String(remote)}`,
-        ]);
+        // The "⇄ Forwarding …" segment is derived live from the forward
+        // registry in appWithIndicators() — nothing to set here (P9R-0010).
       } else {
-        this.setHints(['✗ Invalid ports — expected remote:local']);
+        this.showToast('✗ Invalid ports — expected remote:local');
       }
       this.bump();
       return;
@@ -3936,13 +4773,13 @@ export class LiveController {
     clippedTop: boolean;
   } {
     const entries = flattenSidebarNav(
-      SIDEBAR_CATEGORIES,
+      sidebarCategoriesWithCr(this.app.crdGroups),
       this.app.collapsedCategories,
     );
     const keys = entries.map((e) =>
       e.type === 'overview'
         ? 'Overview'
-        : e.type === 'category'
+        : e.type === 'category' || e.type === 'subgroup'
           ? e.id
           : e.resourceKind,
     );
@@ -4149,6 +4986,9 @@ export class LiveController {
    * {@link dispatchMouse} reducer decides the action and we execute it.
    */
   handleMouseEvent(event: MouseEvent): void {
+    // A click is a state-changing interaction too (P9R-0010).
+    this.clearToast();
+    this.clearLogsConfirmation();
     // The port-forward manager's [✕]/[retry]/[New]/[Close] are clickable; any
     // click outside them is swallowed so it can't act on the list behind.
     if (this.pfManagerOpen) {
@@ -4242,7 +5082,10 @@ export class LiveController {
     this.setFocus('sidebar');
     if (key === 'Overview') {
       this.selectKind('Overview');
-    } else if (SIDEBAR_CATEGORIES.some((cat) => cat.id === key)) {
+    } else if (
+      SIDEBAR_CATEGORIES.some((cat) => cat.id === key) ||
+      key.startsWith(CR_GROUP_ID_PREFIX)
+    ) {
       this.toggleCategory(key);
     } else {
       this.selectKind(key);
@@ -4472,7 +5315,7 @@ export class LiveController {
   ): void {
     const picker = buildContainerPicker(resource.raw);
     if (picker.options.length === 0) {
-      this.setHints(['✗ No containers found']);
+      this.showToast('✗ No containers found');
       return;
     }
     if (picker.autoOpen && picker.defaultIndex >= 0) {
@@ -4499,6 +5342,10 @@ export class LiveController {
     if (isLeakedMouseInput(input)) {
       return;
     }
+    // Any real keypress is a state-changing interaction (P9R-0010): clear
+    // whichever transient toasts are pending before routing the key.
+    this.clearToast();
+    this.clearLogsConfirmation();
     // Terminals can deliver rapid keystrokes as one chunk ("jj"); split so
     // navigation handlers see single keypresses. Text-entry handlers append
     // per character, which is equivalent to appending the chunk.
@@ -4819,14 +5666,12 @@ export class LiveController {
   }
 
   private handleSidebarInput(input: string, key: InkKey): void {
-    const entries = flattenSidebarNav(
-      SIDEBAR_CATEGORIES,
-      this.app.collapsedCategories,
-    );
+    const categories = sidebarCategoriesWithCr(this.app.crdGroups);
+    const entries = flattenSidebarNav(categories, this.app.collapsedCategories);
     const keys = entries.map((e) =>
       e.type === 'overview'
         ? 'Overview'
-        : e.type === 'category'
+        : e.type === 'category' || e.type === 'subgroup'
           ? e.id
           : e.resourceKind,
     );
@@ -4852,7 +5697,7 @@ export class LiveController {
       return;
     }
     if (key.return || key.rightArrow) {
-      if (entry.type === 'category') {
+      if (entry.type === 'category' || entry.type === 'subgroup') {
         if (key.return) {
           this.toggleCategory(entry.id);
         } else if (this.app.collapsedCategories.has(entry.id)) {
@@ -4869,35 +5714,68 @@ export class LiveController {
     }
     if (key.leftArrow) {
       if (
-        entry.type === 'category' &&
+        (entry.type === 'category' || entry.type === 'subgroup') &&
         !this.app.collapsedCategories.has(entry.id)
       ) {
         this.toggleCategory(entry.id);
       } else if (entry.type === 'leaf') {
-        const parent = SIDEBAR_CATEGORIES.find((cat) =>
-          cat.children.some((leaf) => leaf.resourceKind === entry.resourceKind),
-        );
-        if (parent !== undefined) {
-          this.cursorKind = parent.id;
+        let parentId: string | undefined;
+        for (const cat of categories) {
+          for (const child of cat.children) {
+            if (
+              child.kind === 'leaf' &&
+              child.resourceKind === entry.resourceKind
+            ) {
+              parentId = cat.id;
+            } else if (
+              child.kind === 'subgroup' &&
+              child.children.some(
+                (leaf) => leaf.resourceKind === entry.resourceKind,
+              )
+            ) {
+              parentId = child.id;
+            }
+          }
+        }
+        if (parentId !== undefined) {
+          this.cursorKind = parentId;
           this.bump();
         }
       }
       return;
     }
     if (input === 'h') {
-      const all = new Set(SIDEBAR_CATEGORIES.map((c) => c.id));
+      const all = new Set<string>();
+      for (const cat of categories) {
+        all.add(cat.id);
+        for (const child of cat.children) {
+          if (child.kind === 'subgroup') {
+            all.add(child.id);
+          }
+        }
+      }
       this.app = { ...this.app, collapsedCategories: all };
       this.bump();
       return;
     }
     if (input === 'l') {
-      this.app = { ...this.app, collapsedCategories: new Set() };
+      // Expand-all clears the static categories but leaves CR subgroups as
+      // they were — expanding one is a lazy-fetch trigger, and "l" must not
+      // become a way to eagerly fetch counts for every CR group at once
+      // (Spec 03 §7).
+      const preserved = new Set(
+        [...this.app.collapsedCategories].filter((id) =>
+          id.startsWith(CR_GROUP_ID_PREFIX),
+        ),
+      );
+      this.app = { ...this.app, collapsedCategories: preserved };
       this.bump();
     }
   }
 
   private handleListInput(input: string, key: InkKey): void {
     if (this.app.activeKind === 'Overview') {
+      this.handleDashboardInput(input, key);
       return;
     }
     if (this.table === null) {
@@ -4973,7 +5851,7 @@ export class LiveController {
       return;
     }
     if (input === 'e') {
-      this.openDetail(resource, 'yaml');
+      this.openDetail(resource, 'yaml', { editYaml: true });
       return;
     }
     if (input === 'y') {
@@ -5069,6 +5947,26 @@ export class LiveController {
       this.setDetailTab(jumped);
       return;
     }
+    // Enter on a CRD's own Overview follows the "→ view instances" link
+    // (ticket P9R-0018 story 4) to that kind's instance list — the same
+    // action the click on the toolbar link fires.
+    if (
+      key.return &&
+      this.detail.tab === 'overview' &&
+      this.detail.resource.kind === 'CustomResourceDefinition'
+    ) {
+      this.navigateToCrInstances();
+      return;
+    }
+    // `f` cycles the Events tab's Warning/All filter (P9R-0003); only while
+    // that tab is active, so it never shadows a future `f` binding elsewhere.
+    if (
+      this.detail.tab === 'events' &&
+      input === EVENTS_TOOLBAR_ACCELERATORS['events.filter']
+    ) {
+      this.toggleShowAllEvents();
+      return;
+    }
     // `↑/↓`, PageUp/PageDown, `g`/`G` scroll the active non-Logs tab's content
     // through the chunk-03 viewport (Logs has its own scroll path). Metrics
     // `[`/`]` range keys win over `g`/`G` only by falling through below.
@@ -5097,6 +5995,20 @@ function emptySummary(): ClusterSummary {
     pending: 0,
     nodesReady: 0,
     nodesTotal: 0,
+    nodesUnderPressure: 0,
     namespaceCount: 0,
+  };
+}
+
+/** A fresh HealthState with an empty drill-down (P9R-0017 reset). */
+function emptyHealth(): HealthState {
+  return {
+    summary: emptySummary(),
+    rules: [],
+    showPassing: false,
+    expandedRuleIds: new Set(),
+    showAllRuleIds: new Set(),
+    cursor: -1,
+    scrollOffset: 0,
   };
 }

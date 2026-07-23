@@ -136,10 +136,18 @@ function buildXAxisRow(
   // Build a blank row, then place time labels at 3 positions
   const row = Array<string>(yLabelWidth + plotWidth).fill(' ');
 
+  // The end label right-aligns to the last column (its start col is pulled
+  // left by its own length) so it renders in full instead of being clipped to
+  // a single character at the pane's edge — the last-label truncation
+  // (P9R-0006) previously left only e.g. `1` of `14:32` visible.
+  const endLabel = formatTime(endMs);
   const labelPositions = [
     { col: yLabelWidth + 0, ts: startMs },
     { col: yLabelWidth + Math.floor(plotWidth / 2), ts: midMs },
-    { col: yLabelWidth + plotWidth - 1, ts: endMs },
+    {
+      col: Math.max(yLabelWidth, yLabelWidth + plotWidth - endLabel.length),
+      ts: endMs,
+    },
   ];
 
   for (const { col: startCol, ts } of labelPositions) {
@@ -147,7 +155,7 @@ function buildXAxisRow(
       .split('')
       .forEach((ch, j) => {
         const col = startCol + j;
-        if (col < row.length) {
+        if (col >= 0 && col < row.length) {
           row[col] = ch;
         }
       });

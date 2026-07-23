@@ -20,6 +20,7 @@ import type {
   ListPage,
   EventSelector,
   CrdDefinition,
+  CrdPrinterColumn,
   KubeError,
 } from '../boundaries/kube-client.js';
 import type { KubernetesObject } from '../core/types.js';
@@ -41,6 +42,12 @@ function mapError(e: unknown): KubeError {
     }
     if (status === 409) {
       return { kind: 'conflict', message, statusCode: status };
+    }
+    if (
+      status === 410 ||
+      message.toLowerCase().includes('too old resource version')
+    ) {
+      return { kind: 'expired', message, statusCode: status };
     }
     return { kind: 'unknown', message, statusCode: status };
   }
@@ -441,7 +448,33 @@ export class KubeClientAdapter implements KubeClient {
         const served = crd.spec.versions.filter((v) => v.served);
         served.sort((a, b) => Number(b.storage) - Number(a.storage));
         const versions = served.map((v) => v.name);
-        return { group, kind, plural, namespaced, versions };
+        const established =
+          crd.status?.conditions?.some(
+            (c) => c.type === 'Established' && c.status === 'True',
+          ) ?? false;
+        // additionalPrinterColumns from the storage/served version, priority
+        // 0 first (Spec 03 §7, ticket P9R-0018 story 2).
+        const printerColumns: CrdPrinterColumn[] = (
+          served[0]?.additionalPrinterColumns ?? []
+        )
+          .filter(
+            (c) => typeof c.name === 'string' && typeof c.jsonPath === 'string',
+          )
+          .map((c) => ({
+            name: c.name,
+            jsonPath: c.jsonPath,
+            priority: c.priority ?? 0,
+          }))
+          .sort((a, b) => a.priority - b.priority);
+        return {
+          group,
+          kind,
+          plural,
+          namespaced,
+          versions,
+          established,
+          printerColumns,
+        };
       });
       return ok(crds);
     } catch (e) {

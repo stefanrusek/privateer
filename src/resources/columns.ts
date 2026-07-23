@@ -7,7 +7,10 @@
  */
 
 import type { KubernetesObject } from '../core/types.js';
+import type { CrdPrinterColumn } from '../boundaries/kube-client.js';
 import { formatAge } from './age.js';
+import { formatCpuQuantity, formatMemoryQuantity } from './quantity.js';
+import { evalPrinterColumnPath } from './jsonpath.js';
 
 export type ColumnAlign = 'left' | 'right' | 'center';
 
@@ -668,8 +671,30 @@ const NODE_COLS: ColumnDef[] = [
       return typeof v === 'string' ? v : '';
     },
   },
-  { header: 'CPU', width: 10, accessor: () => '' },
-  { header: 'Memory', width: 10, accessor: () => '' },
+  {
+    header: 'CPU',
+    width: 10,
+    accessor: (raw) => {
+      const capacity = raw.status?.capacity;
+      if (capacity === null || typeof capacity !== 'object') {
+        return '';
+      }
+      const cpu = (capacity as Record<string, unknown>).cpu;
+      return typeof cpu === 'string' ? formatCpuQuantity(cpu) : '';
+    },
+  },
+  {
+    header: 'Memory',
+    width: 10,
+    accessor: (raw) => {
+      const capacity = raw.status?.capacity;
+      if (capacity === null || typeof capacity !== 'object') {
+        return '';
+      }
+      const memory = (capacity as Record<string, unknown>).memory;
+      return typeof memory === 'string' ? formatMemoryQuantity(memory) : '';
+    },
+  },
   AGE_COL,
 ];
 
@@ -1017,4 +1042,36 @@ const columnRegistry: ReadonlyMap<string, ColumnDef[]> = new Map<
 
 export function getColumns(kind: string): ColumnDef[] {
   return columnRegistry.get(kind) ?? GENERIC_COLS;
+}
+
+// ---------------------------------------------------------------------------
+// Custom resource instance lists (Spec 03 §7, ticket P9R-0018 story 2)
+// ---------------------------------------------------------------------------
+
+const PRINTER_COL_WIDTH = 15;
+
+/**
+ * Build columns for a CR instance list: Name, Namespace (when namespaced),
+ * the CRD's `additionalPrinterColumns` (already priority-0-first, per
+ * `crdFromObject`/`discoverCrds`) rendered via best-effort Kubernetes-
+ * JSONPath — a failing path renders "—", never throws — and Age. Falls back
+ * to Name/Namespace/Age when the CRD declares no printer columns.
+ */
+export function getCrColumns(
+  namespaced: boolean,
+  printerColumns: readonly CrdPrinterColumn[],
+): ColumnDef[] {
+  const cols: ColumnDef[] = [NAME_COL];
+  if (namespaced) {
+    cols.push(NAMESPACE_COL);
+  }
+  for (const col of printerColumns) {
+    cols.push({
+      header: col.name,
+      width: PRINTER_COL_WIDTH,
+      accessor: (raw) => evalPrinterColumnPath(col.jsonPath, raw) ?? '—',
+    });
+  }
+  cols.push(AGE_COL);
+  return cols;
 }

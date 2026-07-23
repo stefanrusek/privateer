@@ -31,6 +31,7 @@ export type Scope =
   | 'detail.logs'
   | 'detail.yaml'
   | 'detail.metrics'
+  | 'detail.events'
   | 'commandBar'
   | 'overlay';
 
@@ -160,6 +161,7 @@ export const KEYMAP: readonly KeyGroup[] = [
     bindings: [
       { keys: 'e', description: 'Edit the YAML' },
       { keys: 'v', description: 'Reveal (Secrets)' },
+      { keys: 'm', description: 'Toggle managedFields visibility' },
       { keys: 'Ctrl+S', description: 'Save — review the diff (editing)' },
       { keys: 'Ctrl+E', description: 'Open in $EDITOR (editing)' },
       { keys: 'Esc', description: 'Cancel the edit (editing)' },
@@ -169,6 +171,17 @@ export const KEYMAP: readonly KeyGroup[] = [
     scope: 'detail.metrics',
     title: 'Detail · Metrics',
     bindings: [{ keys: '[ / ]', description: 'Change the time range' }],
+  },
+  {
+    scope: 'detail.events',
+    title: 'Detail · Events',
+    bindings: [
+      {
+        keys: 'f',
+        description: 'Toggle the Warning / All events filter',
+        accelerator: 'f',
+      },
+    ],
   },
   {
     scope: 'commandBar',
@@ -219,6 +232,9 @@ export function scopeForFocus(
     }
     if (tab === 'metrics') {
       return 'detail.metrics';
+    }
+    if (tab === 'events') {
+      return 'detail.events';
     }
     return 'detail';
   }

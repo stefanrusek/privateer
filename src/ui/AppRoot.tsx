@@ -12,7 +12,7 @@ import { Header } from './components/Header.js';
 import { CommandBar } from './components/CommandBar.js';
 import { ContextSwitcher } from './components/ContextSwitcher.js';
 import { HelpOverlay } from './components/HelpOverlay.js';
-import { SIDEBAR_CATEGORIES } from './sidebar-data.js';
+import { sidebarCategoriesWithCr } from './sidebar-data.js';
 import { computeFrame } from './layout-geometry.js';
 import { computeBorderGrid, focusedRegion } from './frame.js';
 import { FrameChrome } from './components/FrameChrome.js';
@@ -156,7 +156,7 @@ export function AppRoot({
         }
         renderSidebar={() => (
           <Sidebar
-            items={SIDEBAR_CATEGORIES}
+            items={sidebarCategoriesWithCr(state.crdGroups)}
             activeKind={state.activeKind}
             badgeCounts={state.badgeCounts}
             dimmedKinds={state.dimmedKinds}

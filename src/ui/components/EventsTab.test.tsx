@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
+import { Text } from 'ink';
 import React from 'react';
 import { EventsTab, useEventsFetcher } from './EventsTab.js';
 import type { EventRow } from './EventsTab.js';
@@ -86,6 +87,7 @@ describe('useEventsFetcher', () => {
     expect(result.events).toHaveLength(1);
     expect(result.events[0]?.type).toBe('Warning');
     expect(result.warningCount).toBe(1);
+    expect(result.totalCount).toBe(2);
   });
 
   it('returns all events when showAll=true', async () => {
@@ -104,6 +106,38 @@ describe('useEventsFetcher', () => {
       nowMs: NOW_MS,
     });
     expect(result.events).toHaveLength(2);
+    expect(result.warningCount).toBe(1);
+    expect(result.totalCount).toBe(2);
+  });
+
+  it('does not pre-filter the fetch to Warning — all events come back regardless of showAll', async () => {
+    // P9R-0003: the fetch/watch must never pre-filter to type=Warning;
+    // filtering is a view concern applied client-side after the fact.
+    const client = new FakeKubeClient({
+      events: [
+        makeRawEvent('Warning', 'BackOff', 'crash', '2026-06-10T12:00:00Z'),
+        makeRawEvent('Normal', 'Pulled', 'pulled', '2026-06-10T11:55:00Z'),
+        makeRawEvent(
+          'Normal',
+          'Scheduled',
+          'scheduled',
+          '2026-06-10T11:50:00Z',
+        ),
+        makeRawEvent('Normal', 'Created', 'created', '2026-06-10T11:45:00Z'),
+        makeRawEvent('Normal', 'Started', 'started', '2026-06-10T11:40:00Z'),
+        makeRawEvent('Normal', 'Pulling', 'pulling', '2026-06-10T11:35:00Z'),
+      ],
+    });
+    const result = await useEventsFetcher({
+      kubeClient: client,
+      resourceName: 'order-api',
+      resourceKind: 'Pod',
+      namespace: 'default',
+      showAll: true,
+      nowMs: NOW_MS,
+    });
+    expect(result.totalCount).toBe(6);
+    expect(result.events).toHaveLength(6);
     expect(result.warningCount).toBe(1);
   });
 
@@ -138,6 +172,7 @@ describe('useEventsFetcher', () => {
     });
     expect(result.events).toHaveLength(0);
     expect(result.warningCount).toBe(0);
+    expect(result.totalCount).toBe(0);
   });
 
   it('counts warnings correctly even in showAll mode', async () => {
@@ -160,7 +195,7 @@ describe('useEventsFetcher', () => {
     expect(result.events).toHaveLength(3);
   });
 
-  it('handles events with missing fields gracefully', async () => {
+  it('handles events with missing fields gracefully — count falls back to 1, never 0', async () => {
     const client = new FakeKubeClient({
       events: [
         {
@@ -189,7 +224,8 @@ describe('useEventsFetcher', () => {
     expect(result.warningCount).toBe(0);
     expect(result.events[0]?.type).toBe('');
     expect(result.events[0]?.reason).toBe('');
-    expect(result.events[0]?.count).toBe(0);
+    // An event that exists happened at least once — count is never 0.
+    expect(result.events[0]?.count).toBe(1);
   });
 
   it('returns empty on client error', async () => {
@@ -206,6 +242,7 @@ describe('useEventsFetcher', () => {
     });
     expect(result.events).toHaveLength(0);
     expect(result.warningCount).toBe(0);
+    expect(result.totalCount).toBe(0);
   });
 
   it('sorts events with empty lastTimestamp as epoch (0) — b has empty ts', async () => {
@@ -274,6 +311,188 @@ describe('useEventsFetcher', () => {
     expect(result.events[0]?.reason).toBe('HasTimestamp');
     expect(result.events[1]?.reason).toBe('NoTimestamp');
   });
+
+  it('falls back to series.count when count is missing', async () => {
+    const client = new FakeKubeClient({
+      events: [
+        {
+          apiVersion: 'v1',
+          kind: 'Event',
+          metadata: { name: 'e1', namespace: 'default' },
+          type: 'Warning',
+          reason: 'FailedScheduling',
+          message: 'no nodes available',
+          series: { count: 7, lastObservedTime: '2026-06-10T12:30:00Z' },
+          involvedObject: {
+            name: 'order-api',
+            kind: 'Pod',
+            namespace: 'default',
+          },
+        },
+      ],
+    });
+    const result = await useEventsFetcher({
+      kubeClient: client,
+      resourceName: 'order-api',
+      resourceKind: 'Pod',
+      namespace: 'default',
+      showAll: true,
+      nowMs: NOW_MS,
+    });
+    expect(result.events[0]?.count).toBe(7);
+  });
+
+  it('falls back to 1 when both count and series.count are missing', async () => {
+    const client = new FakeKubeClient({
+      events: [
+        {
+          apiVersion: 'v1',
+          kind: 'Event',
+          metadata: { name: 'e1', namespace: 'default' },
+          type: 'Warning',
+          reason: 'FailedScheduling',
+          message: 'no nodes available',
+          series: { lastObservedTime: '2026-06-10T12:30:00Z' },
+          involvedObject: {
+            name: 'order-api',
+            kind: 'Pod',
+            namespace: 'default',
+          },
+        },
+      ],
+    });
+    const result = await useEventsFetcher({
+      kubeClient: client,
+      resourceName: 'order-api',
+      resourceKind: 'Pod',
+      namespace: 'default',
+      showAll: true,
+      nowMs: NOW_MS,
+    });
+    expect(result.events[0]?.count).toBe(1);
+  });
+
+  it('falls back to series.lastObservedTime when lastTimestamp is missing', async () => {
+    const client = new FakeKubeClient({
+      events: [
+        {
+          apiVersion: 'v1',
+          kind: 'Event',
+          metadata: { name: 'e1', namespace: 'default' },
+          type: 'Warning',
+          reason: 'FailedScheduling',
+          message: 'no nodes available',
+          series: { count: 3, lastObservedTime: '2026-06-10T12:30:00Z' },
+          involvedObject: {
+            name: 'order-api',
+            kind: 'Pod',
+            namespace: 'default',
+          },
+        },
+      ],
+    });
+    const result = await useEventsFetcher({
+      kubeClient: client,
+      resourceName: 'order-api',
+      resourceKind: 'Pod',
+      namespace: 'default',
+      showAll: true,
+      nowMs: NOW_MS,
+    });
+    expect(result.events[0]?.lastTimestamp).toBe('2026-06-10T12:30:00Z');
+  });
+
+  it('falls back to eventTime when lastTimestamp and series are missing', async () => {
+    const client = new FakeKubeClient({
+      events: [
+        {
+          apiVersion: 'v1',
+          kind: 'Event',
+          metadata: { name: 'e1', namespace: 'default' },
+          type: 'Normal',
+          reason: 'Created',
+          message: 'created',
+          eventTime: '2026-06-10T12:20:00Z',
+          involvedObject: {
+            name: 'order-api',
+            kind: 'Pod',
+            namespace: 'default',
+          },
+        },
+      ],
+    });
+    const result = await useEventsFetcher({
+      kubeClient: client,
+      resourceName: 'order-api',
+      resourceKind: 'Pod',
+      namespace: 'default',
+      showAll: true,
+      nowMs: NOW_MS,
+    });
+    expect(result.events[0]?.lastTimestamp).toBe('2026-06-10T12:20:00Z');
+  });
+
+  it('falls back to metadata.creationTimestamp when nothing else is present', async () => {
+    const client = new FakeKubeClient({
+      events: [
+        {
+          apiVersion: 'v1',
+          kind: 'Event',
+          metadata: {
+            name: 'e1',
+            namespace: 'default',
+            creationTimestamp: '2026-06-10T12:10:00Z',
+          },
+          type: 'Normal',
+          reason: 'Created',
+          message: 'created',
+          involvedObject: {
+            name: 'order-api',
+            kind: 'Pod',
+            namespace: 'default',
+          },
+        },
+      ],
+    });
+    const result = await useEventsFetcher({
+      kubeClient: client,
+      resourceName: 'order-api',
+      resourceKind: 'Pod',
+      namespace: 'default',
+      showAll: true,
+      nowMs: NOW_MS,
+    });
+    expect(result.events[0]?.lastTimestamp).toBe('2026-06-10T12:10:00Z');
+  });
+
+  it('leaves lastTimestamp blank when every fallback is absent', async () => {
+    const client = new FakeKubeClient({
+      events: [
+        {
+          apiVersion: 'v1',
+          kind: 'Event',
+          metadata: { name: 'e1', namespace: 'default' },
+          type: 'Normal',
+          reason: 'Created',
+          message: 'created',
+          involvedObject: {
+            name: 'order-api',
+            kind: 'Pod',
+            namespace: 'default',
+          },
+        },
+      ],
+    });
+    const result = await useEventsFetcher({
+      kubeClient: client,
+      resourceName: 'order-api',
+      resourceKind: 'Pod',
+      namespace: 'default',
+      showAll: true,
+      nowMs: NOW_MS,
+    });
+    expect(result.events[0]?.lastTimestamp).toBe('');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -286,6 +505,7 @@ describe('EventsTab', () => {
       React.createElement(EventsTab, {
         events: [makeRow('Warning', 'BackOff')],
         warningCount: 1,
+        totalCount: 6,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -293,6 +513,7 @@ describe('EventsTab', () => {
     );
     expect(lastFrame()).toContain('[Warning ✓]');
     expect(lastFrame()).toContain('[All]');
+    expect(lastFrame()).toContain('1 of 6 events');
   });
 
   it('renders All toggle label when showAll=true', () => {
@@ -300,6 +521,7 @@ describe('EventsTab', () => {
       React.createElement(EventsTab, {
         events: [makeRow('Warning', 'BackOff')],
         warningCount: 1,
+        totalCount: 1,
         showAll: true,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -314,6 +536,7 @@ describe('EventsTab', () => {
       React.createElement(EventsTab, {
         events: [makeRow('Warning', 'BackOff')],
         warningCount: 1,
+        totalCount: 1,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -340,6 +563,7 @@ describe('EventsTab', () => {
           ),
         ],
         warningCount: 1,
+        totalCount: 1,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -357,6 +581,7 @@ describe('EventsTab', () => {
       React.createElement(EventsTab, {
         events: [],
         warningCount: 0,
+        totalCount: 5,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -372,6 +597,7 @@ describe('EventsTab', () => {
       React.createElement(EventsTab, {
         events: [],
         warningCount: 0,
+        totalCount: 0,
         showAll: true,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -382,7 +608,7 @@ describe('EventsTab', () => {
     expect(frame).not.toContain('No warning events');
   });
 
-  it('shows warning count in toggle area', () => {
+  it('shows "N of M events" in the Warning-filtered toggle area', () => {
     const { lastFrame } = render(
       React.createElement(EventsTab, {
         events: [
@@ -391,13 +617,14 @@ describe('EventsTab', () => {
           makeRow('Warning', 'FailedScheduling'),
         ],
         warningCount: 3,
+        totalCount: 9,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
       }),
     );
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('3');
+    expect(frame).toContain('3 of 9 events');
   });
 
   it('renders multiple events', () => {
@@ -408,6 +635,7 @@ describe('EventsTab', () => {
           makeRow('Normal', 'Pulled', 'pulled', '2026-06-10T11:00:00Z'),
         ],
         warningCount: 1,
+        totalCount: 2,
         showAll: true,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -423,6 +651,7 @@ describe('EventsTab', () => {
       React.createElement(EventsTab, {
         events: [makeRow('Warning', 'BackOff')],
         warningCount: 1,
+        totalCount: 1,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -439,6 +668,7 @@ describe('EventsTab', () => {
           makeRow('Warning', 'OlderEvent', 'old', '2026-06-10T10:00:00Z'),
         ],
         warningCount: 2,
+        totalCount: 2,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -457,6 +687,7 @@ describe('EventsTab', () => {
       React.createElement(EventsTab, {
         events: [makeRow('Warning', 'BackOff'), makeRow('Normal', 'Pulled')],
         warningCount: 1,
+        totalCount: 2,
         showAll: true,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -471,6 +702,7 @@ describe('EventsTab', () => {
       React.createElement(EventsTab, {
         events: [makeRow('Normal', 'Pulled')],
         warningCount: 0,
+        totalCount: 1,
         showAll: true,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -487,6 +719,7 @@ describe('EventsTab', () => {
       React.createElement(EventsTab, {
         events: [makeRow('Warning', longReason)],
         warningCount: 1,
+        totalCount: 1,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -511,6 +744,7 @@ describe('EventsTab', () => {
           },
         ],
         warningCount: 1,
+        totalCount: 1,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -534,6 +768,7 @@ describe('EventsTab', () => {
           ),
         ],
         warningCount: 1,
+        totalCount: 1,
         showAll: false,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -541,6 +776,22 @@ describe('EventsTab', () => {
     );
     // The first 6 chars of "9999999" appear
     expect(lastFrame()).toContain('999999');
+  });
+
+  it('renders a real toolbar when supplied instead of the default chips', () => {
+    const { lastFrame } = render(
+      React.createElement(EventsTab, {
+        events: [makeRow('Warning', 'BackOff')],
+        warningCount: 1,
+        totalCount: 1,
+        showAll: false,
+        onToggleShowAll: noop,
+        nowMs: NOW_MS,
+        toolbar: React.createElement(Text, null, '[custom toolbar]'),
+      }),
+    );
+    // The custom toolbar renders in place of the default `[Warning ✓]` chips.
+    expect(lastFrame()).not.toContain('[Warning ✓]');
   });
 });
 
@@ -553,6 +804,7 @@ describe('EventsTab scroll viewport (chunk 03)', () => {
       React.createElement(EventsTab, {
         events,
         warningCount: 0,
+        totalCount: 30,
         showAll: true,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -570,6 +822,7 @@ describe('EventsTab scroll viewport (chunk 03)', () => {
       React.createElement(EventsTab, {
         events,
         warningCount: 0,
+        totalCount: 30,
         showAll: true,
         onToggleShowAll: noop,
         nowMs: NOW_MS,
@@ -580,5 +833,25 @@ describe('EventsTab scroll viewport (chunk 03)', () => {
     );
     const scrolledOut = scrolled.lastFrame() ?? '';
     expect(scrolledOut).toContain('message-25');
+  });
+
+  it('renders the toggle bar and summary above the scrolled content', () => {
+    const events = [makeRow('Warning', 'BackOff')];
+    const { lastFrame } = render(
+      React.createElement(EventsTab, {
+        events,
+        warningCount: 1,
+        totalCount: 4,
+        showAll: false,
+        onToggleShowAll: noop,
+        nowMs: NOW_MS,
+        width: 120,
+        offset: 0,
+        viewportHeight: 6,
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[Warning ✓]');
+    expect(frame).toContain('1 of 4 events');
   });
 });

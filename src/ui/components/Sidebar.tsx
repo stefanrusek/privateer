@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { Box, Text } from 'ink';
-import type { SidebarCategory } from '../types.js';
+import type { SidebarCategory, SidebarLeaf } from '../types.js';
 
 export interface SidebarProps {
   items: readonly SidebarCategory[];
@@ -32,6 +32,59 @@ export interface SidebarProps {
 interface SidebarRow {
   key: string;
   node: React.ReactElement;
+}
+
+interface LeafRowContext {
+  activeKind: string;
+  badgeCounts: ReadonlyMap<string, number>;
+  dimmedKinds: ReadonlySet<string>;
+  forbiddenKinds: ReadonlySet<string>;
+  focusActive: boolean;
+  cursorKind: string | null | undefined;
+}
+
+/** Renders one leaf row (built-in kind or a CR kind nested in a subgroup),
+ * indented by `indent`. */
+function sidebarLeafRow(
+  leaf: SidebarLeaf,
+  indent: string,
+  ctx: LeafRowContext,
+): SidebarRow {
+  const isActive = leaf.resourceKind === ctx.activeKind;
+  const count = ctx.badgeCounts.get(leaf.resourceKind);
+  const isDimmed = ctx.dimmedKinds.has(leaf.resourceKind);
+  const isForbidden = ctx.forbiddenKinds.has(leaf.resourceKind);
+  const isCursor = ctx.cursorKind === leaf.resourceKind;
+  return {
+    key: leaf.resourceKind,
+    node: (
+      <Box key={leaf.resourceKind} flexDirection="row">
+        {isActive ? (
+          <Text
+            color="green"
+            inverse={isCursor && ctx.focusActive}
+            bold={isCursor && !ctx.focusActive}
+          >
+            {indent.slice(0, -2)}
+            {'> '}
+            {leaf.label}
+          </Text>
+        ) : (
+          <Text
+            inverse={isCursor && ctx.focusActive}
+            bold={isCursor && !ctx.focusActive}
+          >
+            {indent}
+            {leaf.label}
+          </Text>
+        )}
+        {isForbidden && <Text color="red"> [!]</Text>}
+        {!isForbidden && count !== undefined && (
+          <Text color={isDimmed ? 'gray' : 'white'}> {count}</Text>
+        )}
+      </Box>
+    ),
+  };
 }
 
 export function Sidebar({
@@ -78,41 +131,46 @@ export function Sidebar({
       ),
     });
     if (!collapsed) {
-      for (const leaf of cat.children) {
-        const isActive = leaf.resourceKind === activeKind;
-        const count = badgeCounts.get(leaf.resourceKind);
-        const isDimmed = dimmedKinds.has(leaf.resourceKind);
-        const isForbidden = forbiddenKinds.has(leaf.resourceKind);
-        const isCursor = cursorKind === leaf.resourceKind;
-        rows.push({
-          key: leaf.resourceKind,
-          node: (
-            <Box key={leaf.resourceKind} flexDirection="row">
-              {isActive ? (
-                <Text
-                  color="green"
-                  inverse={isCursor && focusActive}
-                  bold={isCursor && !focusActive}
-                >
-                  {'> '}
-                  {leaf.label}
-                </Text>
-              ) : (
-                <Text
-                  inverse={isCursor && focusActive}
-                  bold={isCursor && !focusActive}
-                >
-                  {'  '}
-                  {leaf.label}
-                </Text>
-              )}
-              {isForbidden && <Text color="red"> [!]</Text>}
-              {!isForbidden && count !== undefined && (
-                <Text color={isDimmed ? 'gray' : 'white'}> {count}</Text>
-              )}
-            </Box>
-          ),
-        });
+      for (const child of cat.children) {
+        if (child.kind === 'subgroup') {
+          const subCollapsed = collapsedCategories.has(child.id);
+          const subIndicator = subCollapsed ? '▶' : '▼';
+          const subIsCursor = cursorKind === child.id;
+          rows.push({
+            key: child.id,
+            node: (
+              <Text key={child.id} inverse={subIsCursor && focusActive}>
+                {'  '}
+                {subIndicator} {child.label}
+              </Text>
+            ),
+          });
+          if (!subCollapsed) {
+            for (const leaf of child.children) {
+              rows.push(
+                sidebarLeafRow(leaf, '    ', {
+                  activeKind,
+                  badgeCounts,
+                  dimmedKinds,
+                  forbiddenKinds,
+                  focusActive,
+                  cursorKind,
+                }),
+              );
+            }
+          }
+        } else {
+          rows.push(
+            sidebarLeafRow(child, '  ', {
+              activeKind,
+              badgeCounts,
+              dimmedKinds,
+              forbiddenKinds,
+              focusActive,
+              cursorKind,
+            }),
+          );
+        }
       }
     }
   }

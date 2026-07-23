@@ -22,7 +22,11 @@ import { Box, Text, useInput } from 'ink';
 import type { Key as InkKey } from 'ink';
 import { tokenizeLine } from '../../yaml/highlight.js';
 import type { Token } from '../../yaml/highlight.js';
-import { redactSecret } from '../../yaml/redact.js';
+import { maskSecret, revealSecret } from '../../yaml/redact.js';
+import {
+  hasManagedFields,
+  hideManagedFields,
+} from '../../yaml/managed-fields.js';
 import { validateYaml } from '../../yaml/validate.js';
 import type { YamlValidationError } from '../../yaml/validate.js';
 import {
@@ -94,6 +98,17 @@ export interface YamlTabProps {
    */
   onOpenInEditor: (yaml: string) => Promise<string>;
   onSave?: () => void;
+  /** Ctrl+S with an unmodified buffer: notify the caller instead of opening the diff (P9R-0016). */
+  onNoChanges?: () => void;
+  /**
+   * Whether `metadata.managedFields` is currently shown in read mode
+   * (P9R-0016). Controlled by the caller (not local state) — toggling it
+   * changes the read-mode line count, and the controller's viewport extent
+   * must stay in sync with what's rendered. Defaults to hidden.
+   */
+  managedVisible?: boolean;
+  /** Toggle managedFields visibility (`m` in read mode). */
+  onToggleManagedFields?: () => void;
   /** Called on every mode transition with the new mode's kind. */
   onModeChange?: (mode: 'read' | 'edit' | 'discard-confirm' | 'diff') => void;
   /**
@@ -217,6 +232,11 @@ export function YamlTab({
   onReload,
   onOpenInEditor,
   onSave,
+  onNoChanges,
+  managedVisible = false,
+  onToggleManagedFields = () => {
+    /* no-op default for callers that don't own managedFields visibility */
+  },
   onModeChange,
   reentryContent,
   onReentryConsumed,
@@ -234,7 +254,14 @@ export function YamlTab({
       ? {
           kind: 'edit',
           edit: editStateFromContent(reentryContent),
-          baseYaml: yaml,
+          // Normalize through the editor's own splitter so a dirty check
+          // compares like-for-like (jsYaml dumps a trailing newline that
+          // `contentOf` drops) — mirrors `enterEditMode`. Without this, the
+          // list-level `e` reentry (P9R-0016) seeded `baseYaml` from the raw
+          // `yaml` prop, which still had the trailing newline, so an
+          // unmodified buffer compared unequal to its own base and Ctrl+S /
+          // Escape wrongly treated it as dirty.
+          baseYaml: contentOf(editStateFromContent(yaml)),
           validationError: validateYaml(reentryContent),
         }
       : null;
@@ -286,8 +313,10 @@ export function YamlTab({
     if (mode.kind === 'read') {
       if (input === 'e') {
         enterEditMode();
-      } else if (input === 'v' && kind === 'Secret' && !mode.revealed) {
-        transition({ kind: 'read', revealed: true });
+      } else if (input === 'v' && kind === 'Secret') {
+        transition({ kind: 'read', revealed: !mode.revealed });
+      } else if (input === 'm' && hasManagedFields(yaml)) {
+        onToggleManagedFields();
       }
     } else if (mode.kind === 'edit') {
       if (key.ctrl && input === 's') {
@@ -319,6 +348,12 @@ export function YamlTab({
 
   function handleCtrlS(current: EditModeState): void {
     const content = contentOf(current.edit);
+    if (content === current.baseYaml) {
+      // P9R-0016: an unmodified buffer is a no-op save — a transient notice,
+      // never the Review Changes dialog.
+      onNoChanges?.();
+      return;
+    }
     const error = validateYaml(content);
     if (error !== null) {
       transition({ ...current, validationError: error });
@@ -491,24 +526,42 @@ export function YamlTab({
     if (viewportHeight !== undefined) {
       return (
         <ScrollableLines
-          lines={projectYamlReadLines(yaml, kind, mode.revealed, width)}
+          lines={projectYamlReadLines(
+            yaml,
+            kind,
+            mode.revealed,
+            width,
+            managedVisible,
+          )}
           offset={offset}
           viewportHeight={viewportHeight}
+          width={width}
         />
       );
     }
-    const displayYaml = mode.revealed ? yaml : redactSecret(yaml);
-    const lines = displayYaml.split('\n');
     const isSecret = kind === 'Secret';
+    const managed = hasManagedFields(yaml);
+    const withManaged = managedVisible ? yaml : hideManagedFields(yaml);
+    const displayYaml = isSecret
+      ? mode.revealed
+        ? revealSecret(withManaged)
+        : maskSecret(withManaged)
+      : withManaged;
+    const lines = displayYaml.split('\n');
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" gap={2}>
           <Text color="cyan" underline>
             [Edit]
           </Text>
-          {isSecret && !mode.revealed && (
+          {isSecret && (
             <Text color="yellow" underline>
-              [reveal]
+              {mode.revealed ? '[hide]' : '[reveal]'}
+            </Text>
+          )}
+          {managed && (
+            <Text color="yellow" underline>
+              {managedVisible ? '[hide managed]' : '[managed]'}
             </Text>
           )}
         </Box>

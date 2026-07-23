@@ -19,6 +19,23 @@ import type { ResourceEvent } from '../core/types.js';
 export type StreamEventHandler = (event: ResourceEvent) => void;
 export type StreamErrorHandler = (kind: string, error: KubeError) => void;
 export type BadgeCountHandler = (kind: string, count: number) => void;
+/**
+ * Fired when a kind's relist-recovery outcome changes: `true` when a re-list
+ * attempt fails (stream is stale/degraded until recovery succeeds), `false`
+ * when recovery succeeds. The caller surfaces this as a degraded-stream
+ * indicator for that kind (Spec 01 §3.1).
+ */
+export type StreamDegradedHandler = (kind: string, degraded: boolean) => void;
+/**
+ * Fired after a successful relist for `kind` with the set of
+ * `${namespace ?? '~'}/${name}` identities the fresh LIST returned, so the
+ * caller can reconcile its store (drop resources missing from the list —
+ * DELETED events that were missed while the watch was down).
+ */
+export type StreamRelistHandler = (
+  kind: string,
+  present: ReadonlySet<string>,
+) => void;
 
 export interface StreamManagerOptions {
   /** Idle timeout in seconds before closing an on-demand stream. Default: 300. */
@@ -29,6 +46,19 @@ export interface StreamManagerOptions {
   backoffBaseMs?: number;
   /** Max backoff delay in ms. Default: 30000. */
   backoffMaxMs?: number;
+  /**
+   * Max backoff delay in ms for relist retries after a 410/expired watch
+   * error (Spec/ticket P9R-0009). Default: 120000 (2 min).
+   */
+  relistBackoffMaxMs?: number;
+  /**
+   * Max number of on-demand streams kept open at once, beyond the fixed
+   * core set (ticket P9R-0018 story 2 risk: watch fan-out from opening many
+   * CR kinds in one session). When activating a new on-demand stream would
+   * exceed the cap, the least-recently-activated on-demand stream is
+   * evicted. Default: 8.
+   */
+  maxOnDemandStreams?: number;
 }
 
 /** The fixed core set of kinds always watched at startup. */
@@ -61,6 +91,12 @@ interface ManagedStream {
   idleCancel: (() => void) | null;
   /** For on-demand: cancel handle for the periodic list interval. */
   listCancel: (() => void) | null;
+  /** True once a 410/expired error has triggered relist recovery, until it succeeds. */
+  recoveringFromExpired: boolean;
+  /** True while relist recovery is failing (degraded-stream indicator is active). */
+  degraded: boolean;
+  /** Backoff for relist retries after a 410/expired error, capped at relistBackoffMaxMs. */
+  relistBackoffMs: number;
 }
 
 export class StreamManager {
@@ -69,10 +105,14 @@ export class StreamManager {
   private readonly onEvent: StreamEventHandler;
   private readonly onError: StreamErrorHandler;
   private readonly onBadgeCount: BadgeCountHandler;
+  private readonly onDegraded: StreamDegradedHandler;
+  private readonly onRelist: StreamRelistHandler;
   private readonly idleTimeoutMs: number;
   private readonly listIntervalMs: number;
   private readonly backoffBaseMs: number;
   private readonly backoffMaxMs: number;
+  private readonly relistBackoffMaxMs: number;
+  private readonly maxOnDemandStreams: number;
 
   private streams = new Map<string, ManagedStream>();
   private started = false;
@@ -84,6 +124,8 @@ export class StreamManager {
     onEvent: StreamEventHandler,
     onError: StreamErrorHandler,
     onBadgeCount: BadgeCountHandler,
+    onDegraded: StreamDegradedHandler,
+    onRelist: StreamRelistHandler,
     options: StreamManagerOptions = {},
   ) {
     this.client = client;
@@ -91,10 +133,14 @@ export class StreamManager {
     this.onEvent = onEvent;
     this.onError = onError;
     this.onBadgeCount = onBadgeCount;
+    this.onDegraded = onDegraded;
+    this.onRelist = onRelist;
     this.idleTimeoutMs = (options.idleTimeoutSeconds ?? 300) * 1000;
     this.listIntervalMs = (options.listIntervalSeconds ?? 60) * 1000;
     this.backoffBaseMs = options.backoffBaseMs ?? 1000;
     this.backoffMaxMs = options.backoffMaxMs ?? 30_000;
+    this.relistBackoffMaxMs = options.relistBackoffMaxMs ?? 120_000;
+    this.maxOnDemandStreams = options.maxOnDemandStreams ?? 8;
   }
 
   /**
@@ -158,9 +204,42 @@ export class StreamManager {
       lastAccessedAt: this.clock.now(),
       idleCancel: null,
       listCancel: null,
+      recoveringFromExpired: false,
+      degraded: false,
+      relistBackoffMs: this.backoffBaseMs,
     };
     this.streams.set(kind, stream);
     this.openOnDemandStream(stream);
+    this.evictOverCap(kind);
+  }
+
+  /**
+   * Enforce `maxOnDemandStreams`: when the on-demand set exceeds the cap,
+   * tear down and forget the least-recently-activated on-demand stream
+   * other than the one just opened. Core streams (lastAccessedAt === null)
+   * are never eligible.
+   */
+  private evictOverCap(justActivatedKey: string): void {
+    const onDemand = [...this.streams.values()].filter(
+      (s): s is ManagedStream & { lastAccessedAt: number } =>
+        s.lastAccessedAt !== null,
+    );
+    if (onDemand.length <= this.maxOnDemandStreams) {
+      return;
+    }
+    let oldest: (ManagedStream & { lastAccessedAt: number }) | undefined;
+    for (const s of onDemand) {
+      if (s.key === justActivatedKey) {
+        continue;
+      }
+      if (oldest === undefined || s.lastAccessedAt < oldest.lastAccessedAt) {
+        oldest = s;
+      }
+    }
+    if (oldest !== undefined) {
+      this.teardownStream(oldest);
+      this.streams.delete(oldest.key);
+    }
   }
 
   /** Stop all streams and release all resources. */
@@ -212,6 +291,9 @@ export class StreamManager {
       lastAccessedAt: null,
       idleCancel: null,
       listCancel: null,
+      recoveringFromExpired: false,
+      degraded: false,
+      relistBackoffMs: this.backoffBaseMs,
     };
     this.streams.set(key, stream);
     this.connectStream(stream);
@@ -278,6 +360,23 @@ export class StreamManager {
       // Close the subscription to clean up server-side resources.
       subscription.close();
       stream.subscription = null;
+
+      if (error.kind === 'expired') {
+        // 410/"too old resource version": the stale resourceVersion we hold
+        // can never resume — retrying the same watch would loop forever
+        // (P9R-0009). Recover via list-then-watch instead.
+        stream.resourceVersion = undefined;
+        if (!stream.recoveringFromExpired) {
+          // Log/report exactly once on entry into recovery, not on every
+          // relist retry, so debug.log gets one line instead of an
+          // unbounded identical-error stream.
+          stream.recoveringFromExpired = true;
+          this.onError(stream.key, error);
+        }
+        this.relist(stream);
+        return;
+      }
+
       this.onError(stream.key, error);
       // Schedule reconnect with current backoff
       const delayMs = stream.backoffMs;
@@ -290,6 +389,67 @@ export class StreamManager {
     });
 
     stream.subscription = subscription;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Relist recovery (410 / "too old resource version" — P9R-0009)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Recover a stream from a 410/expired watch error: fresh LIST, replay the
+   * items as ADDED events (upserts the store), reconcile removals via
+   * `onRelist`, then resume watching from the list's resourceVersion. On
+   * failure, retries with exponential backoff capped at `relistBackoffMaxMs`
+   * and surfaces a degraded-stream indicator via `onDegraded` until it
+   * succeeds.
+   */
+  private relist(stream: ManagedStream): void {
+    void this.client.list(stream.watchKind, {}).then((result) => {
+      if (!result.ok) {
+        if (!stream.degraded) {
+          stream.degraded = true;
+          this.onDegraded(stream.key, true);
+        }
+        const delayMs = stream.relistBackoffMs;
+        stream.relistBackoffMs = Math.min(
+          stream.relistBackoffMs * 2,
+          this.relistBackoffMaxMs,
+        );
+        stream.reconnectCancel = this.clock.setTimeout(() => {
+          stream.reconnectCancel = null;
+          this.relist(stream);
+        }, delayMs);
+        return;
+      }
+
+      const now = this.clock.now();
+      const present = new Set<string>();
+      for (const item of result.value.items) {
+        const namespace = item.metadata?.namespace ?? null;
+        const name = item.metadata?.name ?? '';
+        present.add(`${namespace ?? '~'}/${name}`);
+        this.onEvent({
+          type: 'ADDED',
+          apiVersion: item.apiVersion ?? '',
+          kind: stream.watchKind,
+          namespace,
+          name,
+          object: { ...item, kind: stream.watchKind },
+          receivedAt: now,
+        });
+      }
+      this.onRelist(stream.key, present);
+
+      stream.resourceVersion = result.value.resourceVersion;
+      stream.backoffMs = this.backoffBaseMs;
+      stream.relistBackoffMs = this.backoffBaseMs;
+      stream.recoveringFromExpired = false;
+      if (stream.degraded) {
+        stream.degraded = false;
+        this.onDegraded(stream.key, false);
+      }
+      this.connectStream(stream);
+    });
   }
 
   private teardownStream(stream: ManagedStream): void {

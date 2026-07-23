@@ -15,6 +15,8 @@ import {
   resolvePVCStatus,
   resolvePVStatus,
   resolveNodeStatus,
+  isNodeReady,
+  isNodeUnderPressure,
   resolveNamespaceStatus,
   resolveStrimziStatus,
   resolveDopplerSecretStatus,
@@ -707,6 +709,75 @@ describe('resolveNodeStatus', () => {
     const result = resolveNodeStatus(raw);
     expect(result.color).toBe(color);
     expect(result.label).toBe(label);
+  });
+});
+
+describe('isNodeReady', () => {
+  it.each([
+    [
+      'true: Ready=True with pressure (P9R-0001)',
+      withSpec(
+        {},
+        { conditions: [cond('Ready', 'True'), cond('DiskPressure', 'True')] },
+      ),
+      true,
+    ],
+    [
+      'true: Ready=True, no pressure',
+      withSpec({}, { conditions: [cond('Ready', 'True')] }),
+      true,
+    ],
+    [
+      'false: Ready=False',
+      withSpec({}, { conditions: [cond('Ready', 'False')] }),
+      false,
+    ],
+    [
+      'false: Ready=Unknown',
+      withSpec({}, { conditions: [cond('Ready', 'Unknown')] }),
+      false,
+    ],
+    ['false: no conditions', withSpec({}, { conditions: [] }), false],
+    ['false: no status', withSpec({}), false],
+  ])('%s', (_name, raw, expected) => {
+    expect(isNodeReady(raw)).toBe(expected);
+  });
+});
+
+describe('isNodeUnderPressure', () => {
+  it.each([
+    [
+      'true: MemoryPressure',
+      withSpec(
+        {},
+        { conditions: [cond('Ready', 'True'), cond('MemoryPressure', 'True')] },
+      ),
+      true,
+    ],
+    [
+      'true: DiskPressure',
+      withSpec(
+        {},
+        { conditions: [cond('Ready', 'True'), cond('DiskPressure', 'True')] },
+      ),
+      true,
+    ],
+    [
+      'true: PIDPressure',
+      withSpec(
+        {},
+        { conditions: [cond('Ready', 'True'), cond('PIDPressure', 'True')] },
+      ),
+      true,
+    ],
+    [
+      'false: Ready=True, no pressure',
+      withSpec({}, { conditions: [cond('Ready', 'True')] }),
+      false,
+    ],
+    ['false: no conditions', withSpec({}, { conditions: [] }), false],
+  ])('%s', (_name, raw, expected) => {
+    expect(isNodeUnderPressure(raw)).toBe(expected);
   });
 });
 

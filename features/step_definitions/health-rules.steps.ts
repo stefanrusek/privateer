@@ -151,6 +151,10 @@ Given(
   },
 );
 
+Given('Prometheus is connected', function (this: PrivateerWorld) {
+  this.hrCaps = { ...this.hrCaps, prometheusConnected: true };
+});
+
 // ---------------------------------------------------------------------------
 // Given steps — Pod
 // ---------------------------------------------------------------------------

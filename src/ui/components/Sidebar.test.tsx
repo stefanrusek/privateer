@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { Sidebar } from './Sidebar.js';
-import { SIDEBAR_CATEGORIES } from '../sidebar-data.js';
+import {
+  SIDEBAR_CATEGORIES,
+  sidebarCategoriesWithCr,
+} from '../sidebar-data.js';
+import type { CrdGroup } from '../../k8s/crd-grouping.js';
 
 function noop(): void {
   return;
@@ -284,5 +288,90 @@ describe('Sidebar viewport windowing', () => {
     expect(frame).toContain('↑ …');
     expect(frame).toContain('↓ …');
     expect(frameLines(frame).length).toBeLessThanOrEqual(7);
+  });
+
+  describe('Custom Resources subgroups', () => {
+    const crdGroups: CrdGroup[] = [
+      {
+        group: 'doppler.com',
+        kinds: [
+          {
+            kind: 'DopplerSecret',
+            plural: 'dopplersecrets',
+            namespaced: true,
+            versions: ['v1'],
+            printerColumns: [],
+          },
+        ],
+      },
+    ];
+    const items = sidebarCategoriesWithCr(crdGroups);
+
+    it('renders the group name as a subgroup header while collapsed', () => {
+      const props = {
+        ...defaultProps,
+        items,
+        collapsedCategories: new Set(['cr-group:doppler.com']),
+      };
+      const { lastFrame } = render(React.createElement(Sidebar, props));
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('doppler.com');
+      expect(frame).not.toContain('DopplerSecrets');
+    });
+
+    it('renders the group kinds when its subgroup is expanded', () => {
+      const props = {
+        ...defaultProps,
+        items,
+        collapsedCategories: new Set<string>(),
+      };
+      const { lastFrame } = render(React.createElement(Sidebar, props));
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('doppler.com');
+      expect(frame).toContain('DopplerSecrets');
+    });
+
+    it('shows a badge count on the CR kind leaf like any other kind', () => {
+      const props = {
+        ...defaultProps,
+        items,
+        collapsedCategories: new Set<string>(),
+        badgeCounts: new Map([['DopplerSecrets', 3]]),
+      };
+      const { lastFrame } = render(React.createElement(Sidebar, props));
+      expect(lastFrame()).toContain('3');
+    });
+
+    it('marks the active CR kind leaf with the ">" indicator', () => {
+      const props = {
+        ...defaultProps,
+        items,
+        collapsedCategories: new Set<string>(),
+        activeKind: 'DopplerSecrets',
+      };
+      const { lastFrame } = render(React.createElement(Sidebar, props));
+      expect(lastFrame()).toContain('> DopplerSecrets');
+    });
+
+    it('marks a forbidden CR kind leaf with [!]', () => {
+      const props = {
+        ...defaultProps,
+        items,
+        collapsedCategories: new Set<string>(),
+        forbiddenKinds: new Set(['DopplerSecrets']),
+      };
+      const { lastFrame } = render(React.createElement(Sidebar, props));
+      expect(lastFrame()).toContain('[!]');
+    });
+
+    it('highlights the cursor row when it sits on a collapsed subgroup header', () => {
+      const props = {
+        ...defaultProps,
+        items,
+        cursorKind: 'cr-group:doppler.com',
+      };
+      const { lastFrame } = render(React.createElement(Sidebar, props));
+      expect(lastFrame()).toContain('doppler.com');
+    });
   });
 });

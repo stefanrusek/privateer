@@ -10,6 +10,7 @@ import {
   helpLines,
 } from './keymap.js';
 import { LOGS_TOOLBAR_ACCELERATORS } from './logs-toolbar.js';
+import { EVENTS_TOOLBAR_ACCELERATORS } from './events-toolbar.js';
 
 const ALL_SCOPES: readonly Scope[] = [
   'global',
@@ -19,6 +20,7 @@ const ALL_SCOPES: readonly Scope[] = [
   'detail.logs',
   'detail.yaml',
   'detail.metrics',
+  'detail.events',
   'commandBar',
   'overlay',
 ];
@@ -126,6 +128,7 @@ describe('drift guard: every button accelerator is in KEYMAP', () => {
   // this test. (`header.namespace`/`header.search` declare no accelerator.)
   const BUTTON_ACCELERATORS: readonly string[] = [
     ...Object.values(LOGS_TOOLBAR_ACCELERATORS),
+    ...Object.values(EVENTS_TOOLBAR_ACCELERATORS),
     'c', // header.context button
     'r', // context.retry banner button
     'c', // context.switch banner button
@@ -183,6 +186,7 @@ describe('scopeForFocus', () => {
     expect(scopeForFocus('detail', 'logs')).toBe('detail.logs');
     expect(scopeForFocus('detail', 'yaml')).toBe('detail.yaml');
     expect(scopeForFocus('detail', 'metrics')).toBe('detail.metrics');
+    expect(scopeForFocus('detail', 'events')).toBe('detail.events');
     expect(scopeForFocus('detail', 'overview')).toBe('detail');
   });
 

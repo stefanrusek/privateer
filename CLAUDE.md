@@ -12,6 +12,18 @@ question, the spec wins.
   in the message body.
 
 
+## Issue tracking (Spile)
+
+Tickets live in `tracking/` as markdown files (`P9R-NNNN-slug.md`) following
+the [Spile spec](tracking/spile-spec.md) — the ticket **is** the spec the SDD
+process consumes. `tracking/README.md` is the root doc (its `counter` front
+matter allocates IDs); `tracking/views/p9r-view.md` is the generated
+dashboard — never hand-edit it. Use the `spile-ops` skill
+(`.claude/skills/spile-ops/`) for all ticket operations: minting, status
+transitions, renames, and view regeneration (every ticket change must
+regenerate the view in the same change). When skill and spec disagree, the
+spec wins.
+
 ## Commands
 
 ```sh

@@ -412,13 +412,31 @@ export function resolvePVStatus(raw: KubernetesObject): ResourceStatus {
 // Nodes
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether a node is ready, per the Ready condition alone (Spec: dashboard
+ * node counts must not be reduced by pressure conditions — P9R-0001).
+ */
+export function isNodeReady(raw: KubernetesObject): boolean {
+  const conditions = getConditions(raw);
+  return findCondition(conditions, 'Ready')?.status === 'True';
+}
+
+/** Whether a node has any pressure condition (Memory/Disk/PID) set True. */
+export function isNodeUnderPressure(raw: KubernetesObject): boolean {
+  const conditions = getConditions(raw);
+  return (
+    conditionTrue(conditions, 'MemoryPressure') ||
+    conditionTrue(conditions, 'DiskPressure') ||
+    conditionTrue(conditions, 'PIDPressure')
+  );
+}
+
 export function resolveNodeStatus(raw: KubernetesObject): ResourceStatus {
   const unschedulable = raw.spec?.unschedulable;
   const conditions = getConditions(raw);
 
   // Pressure conditions checked before cordoned to give accurate status
-  const ready = findCondition(conditions, 'Ready');
-  const isReady = ready?.status === 'True';
+  const isReady = isNodeReady(raw);
 
   if (isReady) {
     if (conditionTrue(conditions, 'MemoryPressure')) {

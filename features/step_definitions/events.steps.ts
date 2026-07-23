@@ -180,6 +180,7 @@ When('the EventsTab loads', async function (this: PrivateerWorld) {
     React.createElement(EventsTab, {
       events: result.events,
       warningCount: result.warningCount,
+      totalCount: result.totalCount,
       showAll: this.eventsShowAll,
       onToggleShowAll: () => {
         this.eventsShowAll = !this.eventsShowAll;
@@ -206,6 +207,7 @@ When('I toggle to show all events', async function (this: PrivateerWorld) {
     React.createElement(EventsTab, {
       events: result.events,
       warningCount: result.warningCount,
+      totalCount: result.totalCount,
       showAll: this.eventsShowAll,
       onToggleShowAll: () => {
         this.eventsShowAll = !this.eventsShowAll;

@@ -101,6 +101,23 @@ export interface CrdDefinition {
   /** true if namespaced, false if cluster-scoped. */
   namespaced: boolean;
   versions: string[];
+  /** True when the CRD's `Established` condition is `status: "True"`. */
+  established: boolean;
+  /**
+   * `additionalPrinterColumns` from the served/storage version (Spec 03 §7,
+   * ticket P9R-0018 story 2), sorted priority 0 first. Empty when the CRD
+   * declares none — callers fall back to Name/Namespace/Age.
+   */
+  printerColumns: CrdPrinterColumn[];
+}
+
+/** One `additionalPrinterColumns` entry (`spec.versions[].additionalPrinterColumns`). */
+export interface CrdPrinterColumn {
+  name: string;
+  /** Kubernetes-JSONPath expression (not RFC 9535 — see src/resources/jsonpath.ts). */
+  jsonPath: string;
+  /** 0 = shown by default; kubectl hides non-zero priority columns unless `-o wide`. */
+  priority: number;
 }
 
 export type WatchHandler = (event: ResourceEvent) => void;
@@ -124,6 +141,7 @@ export type KubeErrorKind =
   | 'forbidden' // 401/403
   | 'notFound' // 404
   | 'conflict' // 409 (stale resourceVersion)
+  | 'expired' // 410 / "too old resource version" — watch must re-list
   | 'streamDropped'
   | 'network'
   | 'unknown';

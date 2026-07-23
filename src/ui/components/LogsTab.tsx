@@ -101,18 +101,28 @@ function Toolbar(props: {
 function LogLine(props: {
   line: string;
   isCurrentMatch: boolean;
+  isMatch: boolean;
   wrap: boolean;
 }): React.ReactElement {
-  const { line, isCurrentMatch, wrap } = props;
+  const { line, isCurrentMatch, isMatch, wrap } = props;
   const color = INK_COLOR[colorizeLine(line)];
   // With wrap off (the default), each line must occupy exactly one row, or a
   // wrapped long line overflows the fixed-height pane and Yoga squeezes the
   // chrome — collapsing the toolbar onto the status row (B2). `truncate-end`
   // keeps it a single row; `wrap` honours the toggle.
   const wrapMode = wrap ? 'wrap' : 'truncate-end';
+  // Every search match is highlighted (bold+underline); the current match
+  // additionally gets `inverse` so the jump target is unmistakable.
   if (isCurrentMatch) {
     return (
       <Text color={color} inverse wrap={wrapMode}>
+        {line}
+      </Text>
+    );
+  }
+  if (isMatch) {
+    return (
+      <Text color={color} bold underline wrap={wrapMode}>
         {line}
       </Text>
     );
@@ -146,6 +156,7 @@ export function LogsTab(props: LogsTabProps): React.ReactElement {
   } = props;
 
   const matchLine = currentMatchLine(search);
+  const matchLines = new Set(search.matches);
   const title = `Logs — ${podName} / ${container}`;
 
   // A subtle reminder of the toggle states, so persisted on/off is visible.
@@ -185,6 +196,7 @@ export function LogsTab(props: LogsTabProps): React.ReactElement {
               key={i}
               line={line}
               isCurrentMatch={i === matchLine}
+              isMatch={matchLines.has(i)}
               wrap={wrap}
             />
           ))
@@ -199,11 +211,11 @@ export function LogsTab(props: LogsTabProps): React.ReactElement {
         {searchFocused ? (
           <Text>
             [Search logs: /{search.query}
-            {search.matches.length > 0
-              ? `  ${String(search.current + 1)}/${String(search.matches.length)}`
-              : search.query === ''
-                ? ''
-                : '  no matches'}
+            <Text inverse> </Text>
+            {search.query !== '' &&
+              (search.matches.length > 0
+                ? `  ${String(search.current + 1)}/${String(search.matches.length)}`
+                : '  0/0 — no matches')}
             ]
           </Text>
         ) : (
@@ -212,7 +224,7 @@ export function LogsTab(props: LogsTabProps): React.ReactElement {
               /{search.query}{' '}
               {search.matches.length > 0
                 ? `${String(search.current + 1)}/${String(search.matches.length)}`
-                : 'no matches'}
+                : '0/0 — no matches'}
             </Text>
           )
         )}

@@ -28,7 +28,10 @@ import {
   type DropdownItem,
 } from './measured-widgets.js';
 import { LOGS_TOOLBAR_ACCELERATORS } from '../../ui/logs-toolbar.js';
+import { EVENTS_TOOLBAR_ACCELERATORS } from '../../ui/events-toolbar.js';
 import type { TabDef } from '../../ui/components/DetailPane.js';
+import { AGENT_TAB } from '../../ui/detail-tabs.js';
+import { crKindLabel } from '../../k8s/crd-grouping.js';
 
 /**
  * The single mouse path: one `process.stdin` listener feeds every raw read to
@@ -117,6 +120,12 @@ export function LiveApp({
           summary={health.summary}
           rules={health.rules}
           showPassing={health.showPassing}
+          expandedRuleIds={health.expandedRuleIds}
+          showAllRuleIds={health.showAllRuleIds}
+          cursor={health.cursor}
+          focused={app.focus === 'list'}
+          bestPracticesViewport={controller.dashboardViewport()}
+          bestPracticesScroll={health.scrollOffset}
           metrics={controller.metricsOverview()}
           kafka={controller.kafkaSection()}
           onNavigateWarnings={() => {
@@ -125,9 +134,20 @@ export function LiveApp({
           onNavigateErrors={() => {
             controller.navigateToPodsWithStatus('error');
           }}
-          onShowRule={() => undefined}
+          onToggleRule={controller.toggleRule}
+          onShowAllOffenders={controller.showAllOffenders}
+          onNavigateOffender={controller.navigateToOffender}
           onToggleShowPassing={controller.toggleShowPassing}
           onNavigateKafkaTopic={() => undefined}
+          renderButton={({ id, label, onClick, active, remeasureKey }) => (
+            <Button
+              id={id}
+              label={label}
+              active={active}
+              onClick={onClick}
+              remeasureKey={remeasureKey}
+            />
+          )}
         />
       );
     }
@@ -159,7 +179,27 @@ export function LiveApp({
       return null;
     }
     switch (tab) {
-      case 'overview':
+      case 'overview': {
+        // CRD's own Overview links to its kind's instance list (ticket
+        // P9R-0018 story 4). The count comes from the same `badgeCounts` map
+        // the sidebar badges use, keyed by the CR kind's sidebar label —
+        // populated on open by the controller's `fetchCrdInstanceCount`
+        // (and kept fresh by the sidebar's per-group fetch if that group is
+        // later expanded/re-expanded).
+        const isCrd = detail.resource.kind === 'CustomResourceDefinition';
+        const crdKind = isCrd
+          ? (
+              detail.resource.raw.spec as
+                | { names?: { kind?: unknown } }
+                | undefined
+            )?.names?.kind
+          : undefined;
+        const crdInstanceLabel =
+          typeof crdKind === 'string' ? crKindLabel(crdKind) : undefined;
+        const crdInstanceCount =
+          crdInstanceLabel !== undefined
+            ? app.badgeCounts.get(crdInstanceLabel)
+            : undefined;
         return (
           <OverviewTab
             resource={detail.resource}
@@ -167,12 +207,36 @@ export function LiveApp({
             width={controller.detailScrollWidth()}
             offset={controller.detailScrollOffset()}
             viewportHeight={controller.detailScrollViewportHeight()}
+            {...(detail.crDescriptor !== undefined
+              ? { crDescriptor: detail.crDescriptor }
+              : {})}
+            {...(crdInstanceCount !== undefined ? { crdInstanceCount } : {})}
+            {...(isCrd
+              ? {
+                  instancesLink: (
+                    <Button
+                      id="overview.crd.instances"
+                      onClick={controller.navigateToCrInstances}
+                    >
+                      <Text color="cyan" underline>
+                        →{' '}
+                        {crdInstanceCount === undefined
+                          ? '…'
+                          : String(crdInstanceCount)}{' '}
+                        instances
+                      </Text>
+                    </Button>
+                  ),
+                }
+              : {})}
           />
         );
+      }
       case 'yaml': {
         const reentry = controller.peekYamlEditReentry();
         return (
           <YamlTab
+            key={detail.resource.uid}
             yaml={controller.yamlForDetail()}
             kind={detail.resource.kind}
             title={controller.yamlTitle()}
@@ -180,6 +244,9 @@ export function LiveApp({
             onReload={controller.yamlReload}
             onOpenInEditor={controller.yamlOpenInEditor}
             onModeChange={controller.yamlModeChanged}
+            onNoChanges={controller.showYamlNoChangesToast}
+            managedVisible={detail.managedVisible}
+            onToggleManagedFields={controller.toggleManagedFieldsVisible}
             {...(reentry !== null ? { reentryContent: reentry } : {})}
             onReentryConsumed={controller.clearYamlEditReentry}
             width={controller.detailScrollWidth()}
@@ -203,19 +270,55 @@ export function LiveApp({
           />
         );
       }
-      case 'events':
+      case 'events': {
+        // B04b/P9R-0003: the `[Warning]`/`[All]` chips are real measured
+        // `<Button>`s (accelerator `f`, shared by both — either chip toggles
+        // the same boolean) so clicks land and `f` documents in `?` help.
+        const eventsToolbar = (
+          <>
+            <Button
+              id="events.warning"
+              accelerator={EVENTS_TOOLBAR_ACCELERATORS['events.filter']}
+              active={!detail.showAllEvents}
+              onClick={controller.toggleShowAllEvents}
+            >
+              <Text
+                bold={!detail.showAllEvents}
+                dimColor={detail.showAllEvents}
+              >
+                {detail.showAllEvents ? '[Warning]' : '[Warning ✓]'}
+              </Text>
+            </Button>
+            <Button
+              id="events.all"
+              accelerator={EVENTS_TOOLBAR_ACCELERATORS['events.filter']}
+              active={detail.showAllEvents}
+              onClick={controller.toggleShowAllEvents}
+            >
+              <Text
+                bold={detail.showAllEvents}
+                dimColor={!detail.showAllEvents}
+              >
+                {detail.showAllEvents ? '[All ✓]' : '[All]'}
+              </Text>
+            </Button>
+          </>
+        );
         return (
           <EventsTab
             events={detail.events}
             warningCount={detail.warningCount}
+            totalCount={detail.totalEventCount}
             showAll={detail.showAllEvents}
             onToggleShowAll={controller.toggleShowAllEvents}
             nowMs={snapshot.nowMs}
             width={controller.detailScrollWidth()}
             offset={controller.detailScrollOffset()}
             viewportHeight={controller.detailScrollViewportHeight()}
+            toolbar={eventsToolbar}
           />
         );
+      }
       case 'logs': {
         const logs = snapshot.logs;
         if (logs === null) {
@@ -363,7 +466,7 @@ export function LiveApp({
       if (snapshot.agentPaneOpen) {
         return (
           <Box flexDirection="column">
-            <Text bold>Agent</Text>
+            {renderTabBar([AGENT_TAB], 'agent')}
             <AgentTab
               exchanges={snapshot.agentExchanges}
               onClearHistory={controller.clearAgentHistory}

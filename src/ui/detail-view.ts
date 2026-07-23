@@ -21,11 +21,16 @@ import type { ExporterCapabilities } from '../metrics/exporters.js';
 import type { MetricsTier } from '../metrics/discovery.js';
 import type { ViewLine } from './scroll-viewport.js';
 import type { EventRow } from './components/EventsTab.js';
+import type { CrKindDescriptor } from '../k8s/crd-grouping.js';
+import { crdFromObject, crKindLabel } from '../k8s/crd-grouping.js';
 import { formatAge } from '../resources/age.js';
+import { formatMemoryQuantity } from '../resources/quantity.js';
 import { tokenizeLine } from '../yaml/highlight.js';
-import { redactSecret } from '../yaml/redact.js';
+import { maskSecret, revealSecret } from '../yaml/redact.js';
+import { hasManagedFields, hideManagedFields } from '../yaml/managed-fields.js';
 import { renderTimeseriesChart } from '../charts/timeseries.js';
 import { computeTrendIndicator } from '../charts/timeseries.js';
+import { evalPrinterColumnPath } from '../resources/jsonpath.js';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -272,10 +277,15 @@ function buildNodeSections(
   const readyCond = conditions.find(
     (c) => (c as Record<string, unknown>).type === 'Ready',
   ) as Record<string, unknown> | undefined;
-  const condRows: KvRow[] = conditions.map((c) => {
-    const co = c as Record<string, unknown>;
-    return { key: str(co.type ?? ''), value: str(co.status ?? '') };
-  });
+  // Ready is rendered first, explicitly, then every other (pressure)
+  // condition once each — the raw conditions array already includes Ready,
+  // so it must be excluded here to avoid a duplicate "Ready" row.
+  const condRows: KvRow[] = conditions
+    .filter((c) => (c as Record<string, unknown>).type !== 'Ready')
+    .map((c) => {
+      const co = c as Record<string, unknown>;
+      return { key: str(co.type ?? ''), value: str(co.status ?? '') };
+    });
   const statusSec: OverviewSection = {
     title: 'STATUS',
     rows: [
@@ -299,7 +309,7 @@ function buildNodeSections(
       },
       {
         key: 'Memory',
-        value: `${str(allocatable.memory ?? '')} allocatable / ${str(capacity.memory ?? '')} capacity`,
+        value: `${formatMemoryQuantity(str(allocatable.memory ?? ''))} allocatable / ${formatMemoryQuantity(str(capacity.memory ?? ''))} capacity`,
       },
       {
         key: 'Pods',
@@ -465,10 +475,109 @@ function buildGenericSections(
   return [metaSec, statusSec].filter((s) => s.rows.length > 0);
 }
 
+/**
+ * Rows for a `.status.conditions` array (present on most CRs and many
+ * built-ins): one row per condition, `Type` as key, `Status` as value.
+ * Malformed/non-object entries are skipped rather than crashing the row.
+ */
+function conditionRows(status: Record<string, unknown>): KvRow[] {
+  const conditions = status.conditions;
+  if (!Array.isArray(conditions)) {
+    return [];
+  }
+  return conditions
+    .filter(
+      (c): c is Record<string, unknown> => typeof c === 'object' && c !== null,
+    )
+    .map((c) => ({ key: str(c.type ?? ''), value: str(c.status ?? '') }))
+    .filter((r) => r.key !== '');
+}
+
+/**
+ * Rows for a CR kind's declared `additionalPrinterColumns`, JSONPath-evaluated
+ * against the raw object (ticket P9R-0018 story 3). A path that fails to
+ * resolve renders `—` rather than being omitted, so the column is still
+ * visible as "not populated" instead of silently vanishing.
+ */
+function printerColumnRows(
+  raw: Record<string, unknown>,
+  printerColumns: CrKindDescriptor['printerColumns'],
+): KvRow[] {
+  return printerColumns.map((col) => ({
+    key: col.name,
+    value: evalPrinterColumnPath(col.jsonPath, raw) ?? '—',
+  }));
+}
+
+/**
+ * Overview sections for a custom-resource instance (ticket P9R-0018 story
+ * 3): metadata, the CRD's declared printer-column values, and
+ * `.status.conditions` when present.
+ */
+function buildCrSections(
+  resource: ResourceObject,
+  nowMs: number,
+  crDescriptor: CrKindDescriptor,
+): OverviewSection[] {
+  const raw = resource.raw;
+  const status: Record<string, unknown> = raw.status ?? {};
+
+  const metaSec = metadataSection(resource, nowMs);
+
+  const columnsSec: OverviewSection = {
+    title: 'PRINTER COLUMNS',
+    rows: printerColumnRows(raw, crDescriptor.printerColumns),
+  };
+
+  const conditionsSec: OverviewSection = {
+    title: 'CONDITIONS',
+    rows: conditionRows(status),
+  };
+
+  return [metaSec, columnsSec, conditionsSec].filter((s) => s.rows.length > 0);
+}
+
+/**
+ * Overview sections for a CustomResourceDefinition object itself (ticket
+ * P9R-0018 story 4): metadata, then a SPEC section listing the group, kind,
+ * scope (Namespaced/Cluster), served versions, and an "Instances" row
+ * fronting the link to that kind's instance list. `instanceCount` is
+ * `undefined` while the controller's on-demand count fetch is still in
+ * flight — rendered as `…` rather than `0` so it never misreports "no
+ * instances" before the fetch resolves.
+ */
+function buildCrdSections(
+  resource: ResourceObject,
+  nowMs: number,
+  instanceCount?: number,
+): OverviewSection[] {
+  const metaSec = metadataSection(resource, nowMs);
+  const crd = crdFromObject(resource.raw);
+  if (crd === undefined) {
+    return [metaSec];
+  }
+  const specSec: OverviewSection = {
+    title: 'SPEC',
+    rows: [
+      { key: 'Group', value: crd.group },
+      { key: 'Kind', value: crd.kind },
+      { key: 'Scope', value: crd.namespaced ? 'Namespaced' : 'Cluster' },
+      { key: 'Versions', value: crd.versions.join(', ') },
+      {
+        key: 'Instances',
+        value: `${instanceCount === undefined ? '…' : String(instanceCount)} → view ${crKindLabel(crd.kind)}`,
+      },
+    ],
+  };
+  return [metaSec, specSec];
+}
+
 /** Build the per-kind overview sections (Spec 04 §5.2). */
 export function buildOverviewSections(
   resource: ResourceObject,
   nowMs: number,
+  crDescriptor?: CrKindDescriptor,
+  crdInstanceCount?: number,
 ): OverviewSection[] {
   switch (resource.kind) {
     case 'Pod':
@@ -481,8 +590,12 @@ export function buildOverviewSections(
       return buildKafkaTopicSections(resource, nowMs);
     case 'DopplerSecret':
       return buildDopplerSecretSections(resource, nowMs);
+    case 'CustomResourceDefinition':
+      return buildCrdSections(resource, nowMs, crdInstanceCount);
     default:
-      return buildGenericSections(resource, nowMs);
+      return crDescriptor !== undefined
+        ? buildCrSections(resource, nowMs, crDescriptor)
+        : buildGenericSections(resource, nowMs);
   }
 }
 
@@ -504,8 +617,15 @@ export function projectOverviewLines(
   resource: ResourceObject,
   nowMs: number,
   width: number,
+  crDescriptor?: CrKindDescriptor,
+  crdInstanceCount?: number,
 ): ViewLine[] {
-  const sections = buildOverviewSections(resource, nowMs);
+  const sections = buildOverviewSections(
+    resource,
+    nowMs,
+    crDescriptor,
+    crdInstanceCount,
+  );
   const lines: ViewLine[] = [];
   sections.forEach((section, i) => {
     if (i > 0) {
@@ -537,22 +657,20 @@ function padLeft(s: string, w: number): string {
 }
 
 /**
- * Project the events table into `ViewLine[]`: the toggle bar, header, divider,
- * then one row per event (Warning rows coloured yellow). Empty states collapse
- * to a short message. Long lines clip to `width`.
+ * Project the events rows into `ViewLine[]`: header, divider, then one row
+ * per event (Warning rows coloured yellow). Empty states collapse to a short
+ * message. Long lines clip to `width`. The `[Warning]`/`[All]` toggle and the
+ * count summary are **not** part of this projection — they render in a fixed
+ * toolbar row above the scroll viewport (P9R-0003) so they stay real,
+ * clickable measured targets instead of scrolling out of reach.
  */
 export function projectEventsLines(
   events: readonly EventRow[],
-  warningCount: number,
   showAll: boolean,
   nowMs: number,
   width: number,
 ): ViewLine[] {
   const lines: ViewLine[] = [];
-  const toggle = showAll
-    ? `[Warning]  [All ✓]${warningCount > 0 ? `  ${String(warningCount)} warnings` : ''}`
-    : `[Warning ✓]  [All]  ${String(events.length)} events (${String(warningCount)} warnings)`;
-  lines.push(plain(toggle, width));
 
   if (events.length === 0) {
     lines.push(plain(showAll ? 'No events' : 'No warning events', width));
@@ -602,7 +720,8 @@ export function projectEventsLines(
 
 /**
  * Project read-mode YAML into `ViewLine[]`: an action bar, then one
- * line-numbered line per source line (redacted unless `revealed` for Secrets).
+ * line-numbered line per source line (redacted unless `revealed` for Secrets;
+ * `metadata.managedFields` dropped unless `managedVisible`, P9R-0016).
  * Highlighting collapses to a single colour per line (the dominant token kind is
  * not preserved through the flat slice; the line text is line-numbered and
  * clipped to `width`, never wrapped).
@@ -612,15 +731,26 @@ export function projectYamlReadLines(
   kind: string,
   revealed: boolean,
   width: number,
+  managedVisible = false,
 ): ViewLine[] {
-  const display = revealed ? yaml : redactSecret(yaml);
+  const managed = hasManagedFields(yaml);
+  const withManaged = managedVisible ? yaml : hideManagedFields(yaml);
   const isSecret = kind === 'Secret';
+  const display = isSecret
+    ? revealed
+      ? revealSecret(withManaged)
+      : maskSecret(withManaged)
+    : withManaged;
   const lines: ViewLine[] = [];
+  const chips = ['[Edit]'];
+  if (isSecret) {
+    chips.push(revealed ? '[hide]' : '[reveal]');
+  }
+  if (managed) {
+    chips.push(managedVisible ? '[hide managed]' : '[managed]');
+  }
   lines.push({
-    text: clipLine(
-      isSecret && !revealed ? '[Edit]  [reveal]' : '[Edit]',
-      width,
-    ),
+    text: clipLine(chips.join('  '), width),
     color: 'cyan',
   });
   display.split('\n').forEach((line, i) => {

@@ -35,7 +35,8 @@ export interface MetricsTabProps {
   readonly resourceName: string;
   /**
    * Inner width of the detail pane (from the layout-geometry frame). Charts
-   * render at `min(paneWidth, MAX_CHART_WIDTH)` so they never wrap; defaults to
+   * render at exactly `paneWidth` so they span the full measured pane and the
+   * x-axis time labels aren't clipped (P9R-0006); defaults to
    * `MAX_CHART_WIDTH` when the pane width is not supplied (Spec 02
    * §"Content fits its pane").
    */
@@ -120,9 +121,11 @@ interface ChartPlaceholderProps {
 }
 
 /**
- * Upper bound on chart width (Spec 02 §"Content fits its pane"). The effective
- * width is `min(paneWidth, MAX_CHART_WIDTH)`, threaded via context so charts
- * never wrap when the detail pane is narrow.
+ * Fallback chart width used only when the host doesn't supply a measured
+ * `paneWidth` (Spec 02 §"Content fits its pane") — e.g. non-measured
+ * component tests. Measured hosts render charts at the full `paneWidth`
+ * (P9R-0006): capping at a fixed width regardless of the pane left the chart
+ * — and its x-axis labels — stranded well short of a wide detail pane.
  */
 export const MAX_CHART_WIDTH = 64;
 
@@ -486,10 +489,12 @@ export function MetricsTab({
 }: MetricsTabProps): React.ReactElement {
   const effectiveRange = rangeModel ?? createRangeSelector();
 
-  const chartWidth =
-    paneWidth !== undefined && paneWidth > 0
-      ? Math.min(paneWidth, MAX_CHART_WIDTH)
-      : MAX_CHART_WIDTH;
+  const effectiveWidth =
+    paneWidth !== undefined && paneWidth > 0 ? paneWidth : MAX_CHART_WIDTH;
+  // Charts render at the full measured pane width — no artificial cap — so
+  // they share the same single width source of truth as the surrounding
+  // `ScrollableLines` viewport and never fall short of the pane (P9R-0006).
+  const chartWidth = effectiveWidth;
 
   // Measured host: project to ViewLine[] and scroll via the chunk-03 viewport.
   if (viewportHeight !== undefined) {
@@ -512,12 +517,11 @@ export function MetricsTab({
             rangeOptions: effectiveRange.options,
             rangeSelected: effectiveRange.selected,
           },
-          paneWidth !== undefined && paneWidth > 0
-            ? paneWidth
-            : MAX_CHART_WIDTH,
+          effectiveWidth,
         )}
         offset={offset}
         viewportHeight={viewportHeight}
+        width={effectiveWidth}
       />
     );
   }

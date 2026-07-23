@@ -22,6 +22,7 @@ const defaultState: AppState = {
   badgeCounts: new Map(),
   dimmedKinds: new Set(),
   forbiddenKinds: new Set(),
+  crdGroups: [],
   showDetail: false,
   contextSwitcherOpen: false,
   switchStatus: null,

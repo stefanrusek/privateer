@@ -111,10 +111,10 @@ describe('YamlTab read mode', () => {
 });
 
 describe('YamlTab secret redaction', () => {
-  it('redacts Secret data by default and shows [reveal]', () => {
+  it('masks Secret data by default (fixed-width mask) and shows [reveal]', () => {
     const { lastFrame } = renderTab(makeSecret({ password: 'c2VjcmV0' }));
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('[redacted]');
+    expect(frame).toContain('••••••••');
     expect(frame).not.toContain('c2VjcmV0');
     expect(frame).toContain('[reveal]');
   });
@@ -125,17 +125,164 @@ describe('YamlTab secret redaction', () => {
     );
   });
 
-  it('reveals secret values when v is pressed (accelerator = v)', async () => {
+  it('reveals decoded secret plaintext when v is pressed (accelerator = v)', async () => {
     const { lastFrame, stdin } = renderTab(
       makeSecret({ password: 'c2VjcmV0' }),
     );
     await tick();
-    expect(lastFrame()).toContain('[redacted]');
+    expect(lastFrame()).toContain('••••••••');
     await safeWrite(stdin, 'v');
     await ticks();
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('c2VjcmV0');
+    // c2VjcmV0 base64-decodes to "secret" — reveal shows the plaintext, not
+    // the raw base64.
+    expect(frame).toContain('secret');
+    expect(frame).not.toContain('c2VjcmV0');
     expect(frame).not.toContain('[reveal]');
+    expect(frame).toContain('[hide]');
+  });
+
+  it('re-masks when v is pressed again', async () => {
+    const { lastFrame, stdin } = renderTab(
+      makeSecret({ password: 'c2VjcmV0' }),
+    );
+    await tick();
+    await safeWrite(stdin, 'v');
+    await ticks();
+    expect(lastFrame()).toContain('secret');
+    await safeWrite(stdin, 'v');
+    await ticks();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('••••••••');
+    expect(frame).not.toContain('secret');
+    expect(frame).toContain('[reveal]');
+  });
+
+  it('edit-mode buffer contains the real base64 even while masked', async () => {
+    const { lastFrame, stdin } = renderTab(
+      makeSecret({ password: 'c2VjcmV0' }),
+    );
+    await tick();
+    expect(lastFrame()).toContain('••••••••');
+    await safeWrite(stdin, 'e');
+    await ticks();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('c2VjcmV0');
+    expect(frame).not.toContain('••••••••');
+  });
+
+  it('reveal state resets when navigating to a different Secret resource (P9R-0012)', async () => {
+    // Test the behavior with a keyed wrapper: when the key changes (simulating
+    // navigation to a different resource), the component remounts and the reveal
+    // state resets to masked.
+    function SecretTabWithKey({
+      secret,
+      resourceId,
+    }: {
+      secret: KubernetesObject;
+      resourceId: string;
+    }): React.ReactElement {
+      return React.createElement(YamlTab, {
+        key: resourceId,
+        ...makeProps(secret),
+      });
+    }
+
+    const secret1 = makeSecret({ password: 'c2VjcmV0' }); // base64 for "secret"
+    secret1.metadata!.name = 'db-creds-1';
+    const secret2 = makeSecret({ apiKey: 'dGVzdHRva2VuYWJj' }); // base64 for "testtokenabc"
+    secret2.metadata!.name = 'api-token-2';
+
+    const { lastFrame, stdin, rerender } = render(
+      React.createElement(SecretTabWithKey, {
+        secret: secret1,
+        resourceId: 'res-1',
+      }),
+    );
+
+    // Verify secret-1 is rendered and masked
+    await tick();
+    let frame = lastFrame() ?? '';
+    expect(frame).toContain('••••••••');
+    expect(frame).toContain('[reveal]');
+
+    // Reveal secret-1
+    await safeWrite(stdin, 'v');
+    await ticks();
+    frame = lastFrame() ?? '';
+    // c2VjcmV0 decodes to "secret"
+    expect(frame).toContain('secret');
+    expect(frame).toContain('[hide]');
+
+    // Navigate to secret-2 by re-rendering with a different key and resource
+    rerender(
+      React.createElement(SecretTabWithKey, {
+        secret: secret2,
+        resourceId: 'res-2',
+      }),
+    );
+    await ticks();
+
+    // Verify secret-2 is masked (reveal state was reset on remount)
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('••••••••');
+    expect(frame).toContain('[reveal]');
+    // Verify it's not showing the decoded value from secret-1
+    expect(frame).not.toContain('secret');
+    expect(frame).not.toContain('testtokenabc');
+  });
+});
+
+describe('YamlTab managedFields toggle (P9R-0016)', () => {
+  function makeConfigMapWithManagedFields(): KubernetesObject {
+    return {
+      apiVersion: 'v1',
+      kind: 'ConfigMap',
+      metadata: {
+        name: 'my-cfg',
+        namespace: 'default',
+        resourceVersion: '1',
+        managedFields: [{ manager: 'kubectl', operation: 'Update' }],
+      },
+      data: { key: 'value' },
+    };
+  }
+
+  it('hides managedFields by default, shows a [managed] chip, and calls onToggleManagedFields on m', async () => {
+    const onToggleManagedFields = vi.fn();
+    const { lastFrame, stdin } = renderTab(makeConfigMapWithManagedFields(), {
+      onToggleManagedFields,
+    });
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[managed]');
+    expect(frame).not.toContain('managedFields');
+    await safeWrite(stdin, 'm');
+    expect(onToggleManagedFields).toHaveBeenCalledOnce();
+  });
+
+  it('shows managedFields and a [hide managed] chip when managedVisible is true', () => {
+    const { lastFrame } = renderTab(makeConfigMapWithManagedFields(), {
+      managedVisible: true,
+    });
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[hide managed]');
+    expect(frame).toContain('managedFields');
+  });
+
+  it('m with no onToggleManagedFields wired is a harmless no-op', async () => {
+    const { lastFrame, stdin } = renderTab(makeConfigMapWithManagedFields());
+    await safeWrite(stdin, 'm');
+    expect(lastFrame()).toContain('[managed]');
+  });
+
+  it('does not show a [managed] chip or respond to m for resources without managedFields', async () => {
+    const onToggleManagedFields = vi.fn();
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ key: 'v' }), {
+      onToggleManagedFields,
+    });
+    expect(lastFrame()).not.toContain('[managed]');
+    await safeWrite(stdin, 'm');
+    expect(onToggleManagedFields).not.toHaveBeenCalled();
   });
 });
 
@@ -164,10 +311,23 @@ describe('YamlTab edit mode', () => {
   it('Ctrl+S with valid YAML opens the diff', async () => {
     const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }));
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     const frame = lastFrame() ?? '';
     expect(frame).toContain('[Apply]');
     expect(frame).toContain('[Cancel]');
+  });
+
+  it('Ctrl+S with an unmodified buffer is a no-op (P9R-0016)', async () => {
+    const onNoChanges = vi.fn();
+    const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }), {
+      onNoChanges,
+    });
+    await safeWrite(stdin, 'e');
+    await safeWrite(stdin, '\x13');
+    expect(onNoChanges).toHaveBeenCalledOnce();
+    expect(lastFrame()).toContain('EDITING');
+    expect(lastFrame()).not.toContain('[Apply]');
   });
 
   it('Ctrl+S / Escape in read mode are no-ops', async () => {
@@ -190,6 +350,7 @@ describe('YamlTab diff + apply flow', () => {
       onSave,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13'); // → diff
     await safeWrite(stdin, '\r'); // → apply
     await ticks();
@@ -200,6 +361,7 @@ describe('YamlTab diff + apply flow', () => {
   it('cancel in diff returns to edit mode', async () => {
     const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }));
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13'); // → diff
     await safeWrite(stdin, '\x1B'); // cancel → edit
     await ticks();
@@ -221,6 +383,7 @@ describe('YamlTab diff + apply flow', () => {
       onReload,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13'); // → diff
     await safeWrite(stdin, '\r'); // → apply → 409
     await ticks();
@@ -240,6 +403,7 @@ describe('YamlTab diff + apply flow', () => {
       onReplace,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     await safeWrite(stdin, '\r');
     await ticks();
@@ -258,6 +422,7 @@ describe('YamlTab diff + apply flow', () => {
       onReload,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     await safeWrite(stdin, '\r');
     await ticks();
@@ -274,6 +439,7 @@ describe('YamlTab diff + apply flow', () => {
       onReplace,
     });
     await safeWrite(stdin, 'e');
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     await safeWrite(stdin, '\r');
     await ticks();
@@ -362,6 +528,41 @@ describe('YamlTab $EDITOR reentry seed', () => {
     await ticks();
     expect(lastFrame()).toContain('[Edit]');
     expect(onReentryConsumed).not.toHaveBeenCalled();
+  });
+
+  // The list-level `e` shortcut reuses this same reentry seam (controller's
+  // `openDetail` sets `yamlEditReentry` to the canonical serialization,
+  // identical to the `yaml` prop) rather than going through `enterEditMode`.
+  // Regression for P9R-0016: an unmodified buffer entered this way must be a
+  // true no-op — Ctrl+S shows the no-op notice (never the diff) and Escape
+  // returns straight to read mode (never the discard prompt).
+  it('list-e entry: an unmodified reentry buffer is a no-op on Ctrl+S', async () => {
+    const resource = makeConfigMap({ env: 'staging' });
+    const canonical = dump(resource);
+    const onNoChanges = vi.fn();
+    const { lastFrame, stdin } = renderTab(resource, {
+      reentryContent: canonical,
+      onReentryConsumed: vi.fn(),
+      onNoChanges,
+    });
+    await ticks();
+    expect(lastFrame()).toContain('EDITING');
+    await safeWrite(stdin, '\x13'); // Ctrl+S
+    expect(onNoChanges).toHaveBeenCalledOnce();
+    expect(lastFrame()).not.toContain('[Apply]');
+  });
+
+  it('list-e entry: Escape on an unmodified reentry buffer skips the discard prompt', async () => {
+    const resource = makeConfigMap({ env: 'staging' });
+    const canonical = dump(resource);
+    const { lastFrame, stdin } = renderTab(resource, {
+      reentryContent: canonical,
+      onReentryConsumed: vi.fn(),
+    });
+    await ticks();
+    await safeWrite(stdin, '\x1B'); // Escape
+    expect(lastFrame()).not.toContain('Discard changes?');
+    expect(lastFrame()).toContain('[Edit]');
   });
 });
 
@@ -681,7 +882,10 @@ describe('YamlTab cursor editing', () => {
   it('preserves the cursor when cancelling the diff', async () => {
     const { lastFrame, stdin } = renderTab(makeConfigMap({ env: 'staging' }));
     await tick();
-    await press(stdin, 'e', RIGHT, '\x13'); // edit → right → Ctrl+S → diff
+    // Dirty a different line (so line 0 stays untouched for the assertions
+    // below) then move back to line 0, col 1, before Ctrl+S — an unmodified
+    // buffer is now a no-op save (P9R-0016) and never reaches the diff.
+    await press(stdin, 'e', DOWN, 'Z', UP, LEFT, RIGHT, '\x13');
     expect(lastFrame()).toContain('[Cancel]');
     await press(stdin, '\x1B'); // cancel → edit, cursor at col 1
     await press(stdin, 'X');
@@ -706,6 +910,7 @@ describe('YamlTab onModeChange', () => {
     };
     await safeWrite(stdin, 'e');
     await waitFor(1);
+    await safeWrite(stdin, 'x'); // dirty the buffer — a no-op save skips the diff
     await safeWrite(stdin, '\x13');
     await waitFor(2);
     await safeWrite(stdin, '\r');

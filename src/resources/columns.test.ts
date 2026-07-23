@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { KubernetesObject } from '../core/types.js';
-import { getColumns, GENERIC_COLS } from './columns.js';
+import { getColumns, getCrColumns, GENERIC_COLS } from './columns.js';
 
 const NOW = 1_000_000_000_000;
 const CREATED = new Date(NOW - 3600_000).toISOString(); // 1h ago
@@ -773,11 +773,37 @@ describe('getColumns', () => {
       expect(col?.accessor(r, NOW)).toBe('');
     });
 
-    it('CPU and Memory accessors return empty (no metrics integration)', () => {
+    it('CPU and Memory accessors render humanized capacity', () => {
+      const cpuCol = getColumns('Node')[4];
+      const memCol = getColumns('Node')[5];
+      const r = raw({
+        status: { capacity: { cpu: '72', memory: '264006104Ki' } },
+      });
+      expect(cpuCol?.accessor(r, NOW)).toBe('72');
+      expect(memCol?.accessor(r, NOW)).toBe('251.8Gi');
+    });
+
+    it('CPU and Memory accessors — no status.capacity return empty', () => {
       const cpuCol = getColumns('Node')[4];
       const memCol = getColumns('Node')[5];
       expect(cpuCol?.accessor(raw(), NOW)).toBe('');
       expect(memCol?.accessor(raw(), NOW)).toBe('');
+    });
+
+    it('CPU and Memory accessors — null capacity returns empty', () => {
+      const cpuCol = getColumns('Node')[4];
+      const memCol = getColumns('Node')[5];
+      const r = raw({ status: { capacity: null } });
+      expect(cpuCol?.accessor(r, NOW)).toBe('');
+      expect(memCol?.accessor(r, NOW)).toBe('');
+    });
+
+    it('CPU and Memory accessors — non-string values return empty', () => {
+      const cpuCol = getColumns('Node')[4];
+      const memCol = getColumns('Node')[5];
+      const r = raw({ status: { capacity: { cpu: 72, memory: 1234 } } });
+      expect(cpuCol?.accessor(r, NOW)).toBe('');
+      expect(memCol?.accessor(r, NOW)).toBe('');
     });
   });
 
@@ -1232,5 +1258,49 @@ describe('getColumns', () => {
         expect(typeof result).toBe('string');
       }
     });
+  });
+});
+
+describe('getCrColumns', () => {
+  it('returns Name/Namespace/Age when there are no printer columns and the kind is namespaced', () => {
+    const cols = getCrColumns(true, []);
+    expect(cols.map((c) => c.header)).toEqual(['Name', 'Namespace', 'Age']);
+  });
+
+  it('omits Namespace for a cluster-scoped kind', () => {
+    const cols = getCrColumns(false, []);
+    expect(cols.map((c) => c.header)).toEqual(['Name', 'Age']);
+  });
+
+  it('inserts printer columns between Namespace and Age, in the given order', () => {
+    const cols = getCrColumns(true, [
+      { name: 'Project', jsonPath: '.spec.project', priority: 0 },
+      { name: 'Config', jsonPath: '.spec.config', priority: 1 },
+    ]);
+    expect(cols.map((c) => c.header)).toEqual([
+      'Name',
+      'Namespace',
+      'Project',
+      'Config',
+      'Age',
+    ]);
+  });
+
+  it('renders a printer column value via its JSONPath', () => {
+    const cols = getCrColumns(true, [
+      { name: 'Project', jsonPath: '.spec.project', priority: 0 },
+    ]);
+    const projectCol = cols.find((c) => c.header === 'Project');
+    const r = raw({ spec: { project: 'prod' } });
+    expect(projectCol?.accessor(r, NOW)).toBe('prod');
+  });
+
+  it('renders "—" when the JSONPath fails to resolve', () => {
+    const cols = getCrColumns(true, [
+      { name: 'Missing', jsonPath: '.spec.nope', priority: 0 },
+    ]);
+    const col = cols.find((c) => c.header === 'Missing');
+    const r = raw({ spec: {} });
+    expect(col?.accessor(r, NOW)).toBe('—');
   });
 });

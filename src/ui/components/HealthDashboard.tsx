@@ -13,10 +13,16 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type {
+  AffectedResource,
   EvaluatedRule,
   RuleResult,
   RuleStatus,
 } from '../../health/types.js';
+import {
+  buildDashboardItems,
+  issueCount as computeIssueCount,
+  type DashboardItem,
+} from '../dashboard-nav.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,6 +35,8 @@ export interface ClusterSummary {
   pending: number;
   nodesReady: number;
   nodesTotal: number;
+  /** Nodes with any pressure condition (Memory/Disk/PID) True; informational only — never subtracted from nodesReady. */
+  nodesUnderPressure: number;
   namespaceCount: number;
 }
 
@@ -63,38 +71,80 @@ export interface KafkaSectionData {
   topics: KafkaTopicSummary[];
 }
 
+/**
+ * A measured, clickable affordance the adapter injects (a `<Button>`); when
+ * omitted (unit tests) the section falls back to plain underlined text.
+ */
+export interface DashboardButtonSpec {
+  /** Unique measured-registry id. */
+  id: string;
+  /** Visible label (e.g. `[show]`, an offender line). */
+  label: string;
+  /** Fired on click. */
+  onClick: () => void;
+  /** Cursor highlight (bold). */
+  active: boolean;
+  /**
+   * Forces a remeasure even though id/label/layer are unchanged. The
+   * best-practices list is windowed (`BestPracticesSection`'s `scroll`):
+   * scrolling shifts every still-mounted row's screen position without
+   * changing its React key, id, or label, so a measured Button would
+   * otherwise keep its stale pre-scroll rect and silently miss clicks (the
+   * same class of bug `PortForwardManager` hit — see its `remeasureKey`).
+   * Callers pass the current scroll offset here.
+   */
+  remeasureKey: number;
+}
+
 export interface HealthDashboardProps {
   clusterName: string;
   summary: ClusterSummary;
   rules: EvaluatedRule[];
   /** Whether the OK rules section is expanded. */
   showPassing: boolean;
+  /** Rule ids currently expanded to their offender list. */
+  expandedRuleIds: ReadonlySet<string>;
+  /** Rule ids whose offender list is fully expanded (past the cap). */
+  showAllRuleIds: ReadonlySet<string>;
+  /** Item-index cursor into the best-practices rows; -1 when none. */
+  cursor: number;
+  /** Whether the dashboard (list region) is focused — drives the cursor. */
+  focused: boolean;
+  /** Rows the best-practices list shows before scrolling. */
+  bestPracticesViewport: number;
+  /** Scroll offset (item index) for the best-practices list. */
+  bestPracticesScroll: number;
   metrics: MetricsOverviewData | null;
   kafka: KafkaSectionData;
 
   // Interaction callbacks
   onNavigateWarnings: () => void;
   onNavigateErrors: () => void;
-  onShowRule: (ruleId: string) => void;
+  onToggleRule: (ruleId: string) => void;
+  onShowAllOffenders: (ruleId: string) => void;
+  onNavigateOffender: (offender: AffectedResource) => void;
   onToggleShowPassing: () => void;
   onNavigateKafkaTopic: (topicName: string) => void;
+  /** Adapter-injected measured button renderer; text fallback when absent. */
+  renderButton?: (spec: DashboardButtonSpec) => React.ReactNode;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Visible status icons for each rule status. */
-type NonSkippableStatus = Exclude<RuleStatus, 'skipped'>;
+/**
+ * Statuses that render as an issue row (error → warn → suppressed). OK rules
+ * render as a dimmed `✓ title` line and never reach these helpers.
+ */
+type IssueStatus = Exclude<RuleStatus, 'skipped' | 'ok'>;
 
-function statusIcon(status: NonSkippableStatus): string {
+function statusIcon(status: IssueStatus): string {
   switch (status) {
     case 'error':
       return '✕';
     case 'warn':
       return '⚠';
-    case 'ok':
-      return '✓';
     case 'suppressed':
       return '○';
   }
@@ -102,27 +152,23 @@ function statusIcon(status: NonSkippableStatus): string {
 
 type InkColor = 'red' | 'yellow' | 'green' | 'grey' | 'cyan' | 'white';
 
-function statusColor(status: NonSkippableStatus): InkColor {
+function statusColor(status: IssueStatus): InkColor {
   switch (status) {
     case 'error':
       return 'red';
     case 'warn':
       return 'yellow';
-    case 'ok':
-      return 'green';
     case 'suppressed':
       return 'grey';
   }
 }
 
-function severityLabel(status: NonSkippableStatus): string {
+function severityLabel(status: IssueStatus): string {
   switch (status) {
     case 'error':
       return 'ERROR';
     case 'warn':
       return 'WARN ';
-    case 'ok':
-      return 'OK   ';
     case 'suppressed':
       return 'SUPR ';
   }
@@ -177,6 +223,12 @@ function SummarySection({
         Nodes: {String(summary.nodesReady)}/{String(summary.nodesTotal)} ready
         {'   '}Namespaces: {String(summary.namespaceCount)}
       </Text>
+      {summary.nodesUnderPressure > 0 && (
+        <Text color="yellow">
+          ⚠ {String(summary.nodesUnderPressure)}{' '}
+          {summary.nodesUnderPressure === 1 ? 'node' : 'nodes'} under pressure
+        </Text>
+      )}
     </Box>
   );
 }
@@ -188,94 +240,209 @@ function SummarySection({
 interface BestPracticesSectionProps {
   rules: EvaluatedRule[];
   showPassing: boolean;
-  onShowRule: (ruleId: string) => void;
+  expandedRuleIds: ReadonlySet<string>;
+  showAllRuleIds: ReadonlySet<string>;
+  cursor: number;
+  focused: boolean;
+  viewport: number;
+  scroll: number;
+  onToggleRule: (ruleId: string) => void;
+  onShowAllOffenders: (ruleId: string) => void;
+  onNavigateOffender: (offender: AffectedResource) => void;
   onToggleShowPassing: () => void;
+  renderButton: ((spec: DashboardButtonSpec) => React.ReactNode) | undefined;
 }
 
-function RuleRow({
-  evaluated,
-  onShowRule: _onShowRule,
-}: {
-  evaluated: EvaluatedRule;
-  onShowRule: (ruleId: string) => void;
-}): React.ReactElement {
-  const { rule, result } = evaluated;
-  // Rules with 'skipped' status are filtered out before display; cast is safe.
-  const displayStatus = result.status as NonSkippableStatus;
-  const icon = statusIcon(displayStatus);
-  const color = statusColor(displayStatus);
-  const label = severityLabel(displayStatus);
-  const title = rule.title(result);
-  const showable = result.status === 'error' || result.status === 'warn';
-
+/** Render an affordance as a measured button, or plain underlined text. */
+function affordance(
+  spec: DashboardButtonSpec,
+  renderButton: ((spec: DashboardButtonSpec) => React.ReactNode) | undefined,
+): React.ReactNode {
+  if (renderButton !== undefined) {
+    return renderButton(spec);
+  }
   return (
-    <Box flexDirection="row">
-      <Text color={color}>{icon} </Text>
-      <Text color={color}>{label} </Text>
-      <Text>{title}</Text>
-      {showable && (
-        <>
-          <Text> </Text>
-          <Text color="cyan" underline>
-            [show]
-          </Text>
-        </>
-      )}
-    </Box>
+    <Text color="cyan" underline bold={spec.active}>
+      {spec.label}
+    </Text>
   );
+}
+
+/** The 1-char cursor gutter, only visible when the region is focused. */
+function gutter(active: boolean): React.ReactElement {
+  return <Text color="cyan">{active ? '›' : ' '}</Text>;
+}
+
+function DashboardRow({
+  item,
+  active,
+  scroll,
+  onToggleRule,
+  onShowAllOffenders,
+  onNavigateOffender,
+  onToggleShowPassing,
+  renderButton,
+}: {
+  item: DashboardItem;
+  active: boolean;
+  /** Current best-practices scroll offset — see `DashboardButtonSpec.remeasureKey`. */
+  scroll: number;
+  onToggleRule: (ruleId: string) => void;
+  onShowAllOffenders: (ruleId: string) => void;
+  onNavigateOffender: (offender: AffectedResource) => void;
+  onToggleShowPassing: () => void;
+  renderButton: ((spec: DashboardButtonSpec) => React.ReactNode) | undefined;
+}): React.ReactElement {
+  switch (item.type) {
+    case 'rule': {
+      const { rule, result } = item.evaluated;
+      const status = result.status as IssueStatus;
+      return (
+        <Box flexDirection="row">
+          {gutter(active)}
+          <Text color={statusColor(status)}>{statusIcon(status)} </Text>
+          <Text color={statusColor(status)}>{severityLabel(status)} </Text>
+          <Text>{rule.title(result)}</Text>
+          {item.navigable && (
+            <>
+              <Text> </Text>
+              {affordance(
+                {
+                  id: `dashboard.rule.${item.ruleId}`,
+                  label: item.expanded ? '[hide]' : '[show]',
+                  active,
+                  remeasureKey: scroll,
+                  onClick: () => {
+                    onToggleRule(item.ruleId);
+                  },
+                },
+                renderButton,
+              )}
+            </>
+          )}
+        </Box>
+      );
+    }
+    case 'offender':
+      return (
+        <Box flexDirection="row" marginLeft={2}>
+          {gutter(active)}
+          {affordance(
+            {
+              id: `dashboard.offender.${item.ruleId}.${item.offender.kind}.${item.offender.namespace}.${item.offender.name}`,
+              label: item.text,
+              active,
+              remeasureKey: scroll,
+              onClick: () => {
+                onNavigateOffender(item.offender);
+              },
+            },
+            renderButton,
+          )}
+        </Box>
+      );
+    case 'more':
+      return (
+        <Box flexDirection="row" marginLeft={2}>
+          {gutter(active)}
+          <Text dimColor>… and {String(item.remaining)} more </Text>
+          {affordance(
+            {
+              id: `dashboard.more.${item.ruleId}`,
+              label: '[all]',
+              active,
+              remeasureKey: scroll,
+              onClick: () => {
+                onShowAllOffenders(item.ruleId);
+              },
+            },
+            renderButton,
+          )}
+        </Box>
+      );
+    case 'passingToggle':
+      return (
+        <Box flexDirection="row">
+          {gutter(active)}
+          {!item.showPassing && (
+            <Text dimColor>{String(item.count)} passing rules </Text>
+          )}
+          {affordance(
+            {
+              id: 'dashboard.passing',
+              label: item.showPassing ? '[hide passing]' : '[show passing]',
+              active,
+              remeasureKey: scroll,
+              onClick: onToggleShowPassing,
+            },
+            renderButton,
+          )}
+        </Box>
+      );
+    case 'passingRule': {
+      const { rule, result } = item.evaluated;
+      return (
+        <Box flexDirection="row">
+          {gutter(false)}
+          <Text dimColor>✓ {rule.title(result)}</Text>
+        </Box>
+      );
+    }
+  }
 }
 
 function BestPracticesSection({
   rules,
   showPassing,
-  onShowRule,
-  onToggleShowPassing: _onToggleShowPassing,
+  expandedRuleIds,
+  showAllRuleIds,
+  cursor,
+  focused,
+  viewport,
+  scroll,
+  onToggleRule,
+  onShowAllOffenders,
+  onNavigateOffender,
+  onToggleShowPassing,
+  renderButton,
 }: BestPracticesSectionProps): React.ReactElement {
-  const issueCount = rules.filter(
-    (e) => e.result.status === 'error' || e.result.status === 'warn',
-  ).length;
-
-  const nonOkRules = rules.filter(
-    (e) =>
-      e.result.status === 'error' ||
-      e.result.status === 'warn' ||
-      e.result.status === 'suppressed',
-  );
-  const okRules = rules.filter((e) => e.result.status === 'ok');
+  const issues = computeIssueCount(rules);
+  const items = buildDashboardItems({
+    rules,
+    expandedRuleIds,
+    showAllRuleIds,
+    showPassing,
+  });
+  const start = Math.max(0, scroll);
+  const end = start + Math.max(1, viewport);
+  const windowed = items.slice(start, end);
 
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Box flexDirection="row">
         <Text bold>BEST PRACTICES</Text>
         <Text>{'  '}</Text>
-        {issueCount > 0 && (
-          <Text color="yellow">{String(issueCount)} issues</Text>
-        )}
+        {issues > 0 && <Text color="yellow">{String(issues)} issues</Text>}
       </Box>
       <Text dimColor>{'─'.repeat(65)}</Text>
-      {nonOkRules.map((e) => (
-        <RuleRow key={e.rule.id} evaluated={e} onShowRule={onShowRule} />
-      ))}
-      {okRules.length > 0 &&
-        (showPassing ? (
-          <>
-            {okRules.map((e) => (
-              <RuleRow key={e.rule.id} evaluated={e} onShowRule={onShowRule} />
-            ))}
-            <Box>
-              <Text color="cyan" underline>
-                [hide passing]
-              </Text>
-            </Box>
-          </>
-        ) : (
-          <Box flexDirection="row">
-            <Text dimColor>{String(okRules.length)} passing rules </Text>
-            <Text color="cyan" underline>
-              [show passing]
-            </Text>
-          </Box>
-        ))}
+      {start > 0 && <Text dimColor>{'  ⋯ more above'}</Text>}
+      {windowed.map((item, i) => {
+        const absoluteIndex = start + i;
+        return (
+          <DashboardRow
+            key={absoluteIndex}
+            item={item}
+            active={focused && absoluteIndex === cursor}
+            scroll={scroll}
+            onToggleRule={onToggleRule}
+            onShowAllOffenders={onShowAllOffenders}
+            onNavigateOffender={onNavigateOffender}
+            onToggleShowPassing={onToggleShowPassing}
+            renderButton={renderButton}
+          />
+        );
+      })}
+      {end < items.length && <Text dimColor>{'  ⋯ more below'}</Text>}
     </Box>
   );
 }
@@ -394,13 +561,22 @@ export function HealthDashboard({
   summary,
   rules,
   showPassing,
+  expandedRuleIds,
+  showAllRuleIds,
+  cursor,
+  focused,
+  bestPracticesViewport,
+  bestPracticesScroll,
   metrics,
   kafka,
   onNavigateWarnings,
   onNavigateErrors,
-  onShowRule,
+  onToggleRule,
+  onShowAllOffenders,
+  onNavigateOffender,
   onToggleShowPassing,
   onNavigateKafkaTopic,
+  renderButton,
 }: HealthDashboardProps): React.ReactElement {
   return (
     <Box flexDirection="column">
@@ -421,8 +597,17 @@ export function HealthDashboard({
       <BestPracticesSection
         rules={rules}
         showPassing={showPassing}
-        onShowRule={onShowRule}
+        expandedRuleIds={expandedRuleIds}
+        showAllRuleIds={showAllRuleIds}
+        cursor={cursor}
+        focused={focused}
+        viewport={bestPracticesViewport}
+        scroll={bestPracticesScroll}
+        onToggleRule={onToggleRule}
+        onShowAllOffenders={onShowAllOffenders}
+        onNavigateOffender={onNavigateOffender}
         onToggleShowPassing={onToggleShowPassing}
+        renderButton={renderButton}
       />
 
       <MetricsOverviewSection metrics={metrics} />

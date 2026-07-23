@@ -385,6 +385,67 @@ describe('buildOverviewSections', () => {
     expect(dsTitles).not.toContain('SPEC');
   });
 
+  it('CustomResourceDefinition lists group/kind/scope/versions and an instance count link', () => {
+    const r = makeResource({
+      kind: 'CustomResourceDefinition',
+      name: 'dopplersecrets.doppler.com',
+      namespace: null,
+      raw: {
+        apiVersion: 'apiextensions.k8s.io/v1',
+        kind: 'CustomResourceDefinition',
+        metadata: { name: 'dopplersecrets.doppler.com' },
+        spec: {
+          group: 'doppler.com',
+          names: { kind: 'DopplerSecret', plural: 'dopplersecrets' },
+          scope: 'Namespaced',
+          versions: [
+            { name: 'v1alpha1', served: true, storage: true },
+            { name: 'v1beta1', served: true, storage: false },
+            { name: 'v1old', served: false, storage: false },
+          ],
+        },
+        status: { conditions: [{ type: 'Established', status: 'True' }] },
+      },
+    });
+    const sections = buildOverviewSections(r, NOW_MS, undefined, 3);
+    const spec = sections.find((s) => s.title === 'SPEC');
+    expect(spec).toBeDefined();
+    const rows = new Map(spec?.rows.map((row) => [row.key, row.value]));
+    expect(rows.get('Group')).toBe('doppler.com');
+    expect(rows.get('Kind')).toBe('DopplerSecret');
+    expect(rows.get('Scope')).toBe('Namespaced');
+    expect(rows.get('Versions')).toBe('v1alpha1, v1beta1');
+    expect(rows.get('Instances')).toBe('3 → view DopplerSecrets');
+  });
+
+  it('CustomResourceDefinition renders "…" for an in-flight instance count', () => {
+    const r = makeResource({
+      kind: 'CustomResourceDefinition',
+      raw: {
+        spec: {
+          group: 'doppler.com',
+          names: { kind: 'DopplerSecret', plural: 'dopplersecrets' },
+          scope: 'Cluster',
+          versions: [{ name: 'v1', served: true, storage: true }],
+        },
+      },
+    });
+    const sections = buildOverviewSections(r, NOW_MS);
+    const spec = sections.find((s) => s.title === 'SPEC');
+    const rows = new Map(spec?.rows.map((row) => [row.key, row.value]));
+    expect(rows.get('Scope')).toBe('Cluster');
+    expect(rows.get('Instances')).toBe('… → view DopplerSecrets');
+  });
+
+  it('CustomResourceDefinition with an unparseable raw object falls back to METADATA only', () => {
+    const r = makeResource({
+      kind: 'CustomResourceDefinition',
+      raw: { metadata: {} },
+    });
+    const titles = buildOverviewSections(r, NOW_MS).map((s) => s.title);
+    expect(titles).toEqual(['METADATA']);
+  });
+
   it('tolerates raw with no specs/001-initial-features/status object at all', () => {
     for (const kind of ['Deployment', 'Node', 'KafkaTopic', 'DopplerSecret']) {
       const r = makeResource({
@@ -474,6 +535,104 @@ describe('buildOverviewSections', () => {
     expect(meta?.rows.find((row) => row.key === 'Annotations')?.value).toBe(
       '2 annotations',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CR overview sections (ticket P9R-0018 story 3)
+// ---------------------------------------------------------------------------
+
+describe('buildOverviewSections — custom resources', () => {
+  const CR_DESCRIPTOR = {
+    kind: 'CustomKind',
+    group: 'example.io',
+    version: 'v1alpha1',
+    plural: 'customkinds',
+    namespaced: true,
+    printerColumns: [
+      { name: 'Project', jsonPath: '.spec.project', priority: 0 },
+      { name: 'Config', jsonPath: '.spec.config', priority: 0 },
+      { name: 'Missing', jsonPath: '.spec.nope', priority: 0 },
+    ],
+  };
+
+  it('falls back to generic sections when no descriptor is supplied', () => {
+    const r = makeResource({
+      kind: 'CustomKind',
+      raw: { metadata: {}, spec: { project: 'p' }, status: { phase: 'Ready' } },
+    });
+    const titles = buildOverviewSections(r, NOW_MS).map((s) => s.title);
+    expect(titles).toEqual(['METADATA', 'STATUS']);
+  });
+
+  it('renders printer-column values and conditions when a descriptor is given', () => {
+    const r = makeResource({
+      kind: 'CustomKind',
+      raw: {
+        metadata: {},
+        spec: { project: 'proj-1', config: 'prd' },
+        status: {
+          conditions: [
+            { type: 'Ready', status: 'True' },
+            { type: 'Synced', status: 'False' },
+          ],
+        },
+      },
+    });
+    const sections = buildOverviewSections(r, NOW_MS, CR_DESCRIPTOR);
+    const titles = sections.map((s) => s.title);
+    expect(titles).toEqual(['METADATA', 'PRINTER COLUMNS', 'CONDITIONS']);
+
+    const columns = sections.find((s) => s.title === 'PRINTER COLUMNS');
+    expect(columns?.rows).toEqual([
+      { key: 'Project', value: 'proj-1' },
+      { key: 'Config', value: 'prd' },
+      { key: 'Missing', value: '—' },
+    ]);
+
+    const conditions = sections.find((s) => s.title === 'CONDITIONS');
+    expect(conditions?.rows).toEqual([
+      { key: 'Ready', value: 'True' },
+      { key: 'Synced', value: 'False' },
+    ]);
+  });
+
+  it('omits the CONDITIONS section when status.conditions is absent', () => {
+    const r = makeResource({
+      kind: 'CustomKind',
+      raw: { metadata: {}, spec: {} },
+    });
+    const descriptor = { ...CR_DESCRIPTOR, printerColumns: [] };
+    const titles = buildOverviewSections(r, NOW_MS, descriptor).map(
+      (s) => s.title,
+    );
+    expect(titles).toEqual(['METADATA']);
+  });
+
+  it('skips malformed condition entries without crashing', () => {
+    const r = makeResource({
+      kind: 'CustomKind',
+      raw: {
+        metadata: {},
+        status: {
+          conditions: [
+            null,
+            'oops',
+            { status: 'True' },
+            { type: 'Synced' },
+            { type: 'Ready', status: 'True' },
+          ],
+        },
+      },
+    });
+    const descriptor = { ...CR_DESCRIPTOR, printerColumns: [] };
+    const conditions = buildOverviewSections(r, NOW_MS, descriptor).find(
+      (s) => s.title === 'CONDITIONS',
+    );
+    expect(conditions?.rows).toEqual([
+      { key: 'Synced', value: '' },
+      { key: 'Ready', value: 'True' },
+    ]);
   });
 });
 
@@ -570,19 +729,18 @@ function evt(over: Partial<EventRow>): EventRow {
 
 describe('projectEventsLines', () => {
   it('empty + warnings filter shows "No warning events"', () => {
-    const lines = projectEventsLines([], 0, false, NOW_MS, 80);
+    const lines = projectEventsLines([], false, NOW_MS, 80);
     expect(lines.map((l) => l.text).join('\n')).toContain('No warning events');
   });
 
   it('empty + showAll shows "No events"', () => {
-    const lines = projectEventsLines([], 0, true, NOW_MS, 80);
+    const lines = projectEventsLines([], true, NOW_MS, 80);
     expect(lines.map((l) => l.text).join('\n')).toContain('No events');
   });
 
   it('renders header, divider, and warning rows in yellow', () => {
     const lines = projectEventsLines(
       [evt({ type: 'Warning', reason: 'BackOff', count: 5 }), evt({})],
-      1,
       false,
       NOW_MS,
       120,
@@ -597,15 +755,9 @@ describe('projectEventsLines', () => {
     expect(normalRow?.color).toBeUndefined();
   });
 
-  it('showAll toggle bar reports the warning count', () => {
-    const lines = projectEventsLines([evt({})], 3, true, NOW_MS, 120);
-    expect(lines[0]?.text).toContain('3 warnings');
-  });
-
   it('handles events with no timestamp (empty age)', () => {
     const lines = projectEventsLines(
       [evt({ lastTimestamp: '' })],
-      0,
       true,
       NOW_MS,
       120,
@@ -622,17 +774,11 @@ describe('projectEventsLines', () => {
           count: 99999999,
         }),
       ],
-      0,
       true,
       NOW_MS,
       200,
     );
     expect(lines.length).toBeGreaterThan(2);
-  });
-
-  it('showAll with no warnings omits the warnings suffix', () => {
-    const lines = projectEventsLines([evt({})], 0, true, NOW_MS, 120);
-    expect(lines[0]?.text).not.toContain('warnings');
   });
 });
 
@@ -641,17 +787,42 @@ describe('projectEventsLines', () => {
 // ---------------------------------------------------------------------------
 
 describe('projectYamlReadLines', () => {
-  it('shows [Edit]/[reveal] for unrevealed Secrets and redacts values', () => {
-    const yaml = 'apiVersion: v1\ndata:\n  password: c2VjcmV0';
+  it('shows [Edit]/[reveal] for unrevealed Secrets and masks values', () => {
+    const yaml = 'apiVersion: v1\nkind: Secret\ndata:\n  password: c2VjcmV0';
     const lines = projectYamlReadLines(yaml, 'Secret', false, 80);
     expect(lines[0]?.text).toContain('[reveal]');
     // line-numbered body
     expect(lines[1]?.text).toContain('1 ');
+    const body = lines.map((l) => l.text).join('\n');
+    expect(body).toContain('••••••••');
+    expect(body).not.toContain('c2VjcmV0');
   });
 
-  it('reveals Secret values when revealed and drops [reveal]', () => {
-    const yaml = 'data:\n  k: v';
+  it('reveals decoded Secret plaintext when revealed and swaps [reveal] for [hide]', () => {
+    const yaml = 'kind: Secret\ndata:\n  k: dGVzdA==';
     const lines = projectYamlReadLines(yaml, 'Secret', true, 80);
+    expect(lines[0]?.text).toBe('[Edit]  [hide]');
+    const body = lines.map((l) => l.text).join('\n');
+    // dGVzdA== base64-decodes to "test".
+    expect(body).toContain('test');
+  });
+
+  it('hides managedFields by default with a [managed] chip, and shows them when managedVisible', () => {
+    const yaml =
+      'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cfg\n  managedFields:\n    - manager: kubectl\ndata:\n  key: value';
+    const hidden = projectYamlReadLines(yaml, 'ConfigMap', false, 80, false);
+    expect(hidden[0]?.text).toBe('[Edit]  [managed]');
+    expect(hidden.map((l) => l.text).join('\n')).not.toContain('managedFields');
+
+    const shown = projectYamlReadLines(yaml, 'ConfigMap', false, 80, true);
+    expect(shown[0]?.text).toBe('[Edit]  [hide managed]');
+    expect(shown.map((l) => l.text).join('\n')).toContain('managedFields');
+  });
+
+  it('omits the [managed] chip when the resource has no managedFields', () => {
+    const yaml =
+      'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cfg\ndata:\n  key: value';
+    const lines = projectYamlReadLines(yaml, 'ConfigMap', false, 80);
     expect(lines[0]?.text).toBe('[Edit]');
   });
 

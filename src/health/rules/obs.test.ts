@@ -17,6 +17,11 @@ const WITH_METRICS: RuleCaps = {
   kafkaExporter: true,
 };
 
+const WITH_PROMETHEUS: RuleCaps = {
+  ...EMPTY_CAPS,
+  prometheusConnected: true,
+};
+
 // ---------------------------------------------------------------------------
 // OBS-001: Pod has no liveness probe
 // ---------------------------------------------------------------------------
@@ -244,19 +249,24 @@ describe('OBS-003 — Pod has no startup probe', () => {
 // ---------------------------------------------------------------------------
 
 describe('OBS-010 — No Prometheus found', () => {
-  it('warn — no metrics capabilities present', () => {
+  it('warn — prometheus not connected', () => {
     const result = OBS_010.evaluate(makeStore(), TEST_CONTEXT, EMPTY_CAPS);
     expect(result.status).toBe('warn');
   });
 
-  it('ok — kafka exporter capability present (Prometheus implied)', () => {
+  it('warn — exporter capabilities present but prometheus not connected (P9R-0008: proxies must not mask a genuine no-discovery outcome)', () => {
     const result = OBS_010.evaluate(makeStore(), TEST_CONTEXT, WITH_METRICS);
-    expect(result.status).toBe('ok');
+    expect(result.status).toBe('warn');
   });
 
-  it('ok — strimziJmx capability present', () => {
+  it('warn — strimziJmx capability present but prometheus not connected', () => {
     const caps: RuleCaps = { ...EMPTY_CAPS, strimziJmx: true };
     const result = OBS_010.evaluate(makeStore(), TEST_CONTEXT, caps);
+    expect(result.status).toBe('warn');
+  });
+
+  it('ok — prometheusConnected is true (real discovery outcome)', () => {
+    const result = OBS_010.evaluate(makeStore(), TEST_CONTEXT, WITH_PROMETHEUS);
     expect(result.status).toBe('ok');
   });
 });
