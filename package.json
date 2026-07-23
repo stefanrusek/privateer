@@ -1,6 +1,6 @@
 {
   "name": "p9r",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Privateer — a single-binary Kubernetes TUI (Bun · Ink · local LLM agent)",
   "type": "module",
   "private": true,
